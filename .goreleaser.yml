@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# JanusFS release configuration. Produces one universal (arm64+amd64) darwin
+# binary per release, a tarball with the binary + docs + license, checksums,
+# a CycloneDX SBOM, a source archive, and Conventional-Commits-grouped
+# release notes. Publishing is manual: releases land as drafts (see the
+# `release:` section) so a human reviews the generated notes.
+
+version: 2
+
+project_name: janusfs
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+
+builds:
+  - id: janusfs
+    main: ./cmd/janusfs
+    binary: janusfs
+    # NFR-7: macOS only (FUSE-T). No CGO in the janusfs binary itself
+    # (SPEC §20.4's dependency policy forbids cgo except the approved
+    # FUSE-T fallback, which isn't in play here).
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+universal_binaries:
+  # NFR-7: "Single static binary per arch (universal binary optional)" —
+  # ship one darwin binary covering both Apple Silicon and Intel.
+  - id: janusfs
+    replace: true
+    name_template: janusfs
+
+archives:
+  - id: janusfs
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - README.md
+      - SPEC.md
+      - PLAN.md
+      - AGENTS.md
+      - docs/**/*
+
+source:
+  # A companion source-code archive per release makes it easy to verify a
+  # binary was built from the tagged tree without cloning the repo.
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  # Software Bill of Materials via syft (CycloneDX JSON). goreleaser skips
+  # SBOM generation when syft isn't installed; users can install it with
+  # `brew install syft` and re-run the release.
+  - id: janusfs-sbom
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.sbom.cyclonedx.json"
+    cmd: syft
+    args:
+      - "$artifact"
+      - --output
+      - cyclonedx-json=$document
+
+snapshot:
+  # `make release-snapshot` produces artifacts named e.g.
+  # janusfs_0.1.0-next+abcdef_darwin_all.tar.gz so it's obvious they aren't a
+  # real release.
+  version_template: "{{ incpatch .Version }}-next+{{ .ShortCommit }}"
+
+changelog:
+  # Conventional Commits grouping, matching AGENTS.md's existing
+  # "Conventional Commits (feat:, fix:, ...) for changelog hygiene" note.
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Security
+      regexp: '^.*?sec(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^style:"
+      - "^refactor(?!:.*breaking)"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+release:
+  # Draft first: nothing in the JanusFS release process should auto-publish
+  # without a human glancing at the generated notes (consistent with SPEC's
+  # general "no silent/automatic irreversible actions" posture).
+  draft: true
+  prerelease: auto
+  name_template: "JanusFS {{ .Version }}"
+  header: |
+    # JanusFS {{ .Version }}
+
+    A sanitized filesystem view for AI agents. See [`README.md`](https://github.com/sarathsp06/janusfs/blob/main/README.md) for the pitch and [`SPEC.md`](https://github.com/sarathsp06/janusfs/blob/main/SPEC.md) for the engineering contract.
+  footer: |
+    ---
+
+    ## Install
+
+    ```bash
+    brew install --cask fuse-t             # macOS FUSE, no kext
+    # then download the darwin_all tarball from the assets below,
+    # or:
+    go install github.com/sarathsp06/janusfs/cmd/janusfs@{{ .Tag }}
+    ```
+
+    ## Verify the download
+
+    ```bash
+    shasum -a 256 -c checksums.txt
+    ```
+
+    Full changelog: {{ .PreviousTag }}...{{ .Tag }}
+
+# Homebrew tap publication is opt-in — the `brews:` block is present but
+# commented so the release doesn't attempt to push to a tap that doesn't
+# exist yet. Uncomment and fill in the tap repo when you're ready.
+#
+# brews:
+#   - name: janusfs
+#     repository:
+#       owner: sarathsp06
+#       name: homebrew-tap
+#     directory: Formula
+#     homepage: https://github.com/sarathsp06/janusfs
+#     description: A sanitized filesystem view for AI agents (macOS, FUSE-T).
+#     license: TBD
+#     dependencies:
+#       - name: fuse-t
+#         type: cask
+#     install: |
+#       bin.install "janusfs"
+#     test: |
+#       system "#{bin}/janusfs", "--version"
