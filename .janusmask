@@ -3,7 +3,7 @@
 #
 # Preview the effect of these rules with: janusfs check
 
-*.env                              : env-value
+.env                                : generic-secret
 **/application*.yml                 : generic-secret, db-uri
 **/application*.yaml                : generic-secret, db-uri
 **/application*.properties          : generic-secret, db-uri
