@@ -51,7 +51,7 @@ help:
 
 .PHONY: build ## Build the janusfs binary into build/ for the host arch
 build: | $(BIN_DIR)/.keep
-	$(GO) build -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/janusfs
+	GOOS=$(GOOS) $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/janusfs
 
 $(BIN_DIR)/.keep:
 	@mkdir -p $(BIN_DIR) && touch $@

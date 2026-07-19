@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
 	"syscall"
+	"time"
 
-	"github.com/sarathsp06/janusfs/internal/mount"
 	"github.com/spf13/cobra"
 )
 
@@ -19,28 +21,74 @@ func newUmountCmd() *cobra.Command {
 	}
 }
 
-// runUmount implements FR-3: unmount at the OS level (via
-// mount.Adapter.Unmount, which uses fuse.Unmount / diskutil fallback), and
-// signal the owning process if discoverable via its pidfile so it can run
-// its own clean-shutdown path (SPEC §15 step 11: flush history, zero
-// caches, remove its own pidfile) rather than leaving that to us.
+// runUmount implements FR-3: unmount at the OS level by running
+// macFUSE's native unmount command first, with fallbacks, and signal
+// the owning process if discoverable via its pidfile.
 func runUmount(mountpoint string) error {
-	adapter := &mount.Adapter{}
-	unmountErr := adapter.Unmount(mountpoint)
+	var errs []string
 
+	// Step 1: Try osxfuse unmount (macFUSE's native tool).
+	if err := tryUnmount("diskutil", []string{"unmount", mountpoint}, 5); err != nil {
+		errs = append(errs, fmt.Sprintf("diskutil unmount failed: %v", err))
+		// Fall back to umount.
+		if err2 := tryUnmount("umount", []string{mountpoint}, 5); err2 != nil {
+			errs = append(errs, fmt.Sprintf("umount failed: %v", err2))
+			// Last resort: force unmount. A held reference (Finder, a shell
+			// cd'd into the mount) makes both prior attempts fail with
+			// "resource busy" every time, so this step actually has to run,
+			// not just be printed as advice.
+			if err3 := tryUnmount("diskutil", []string{"unmount", "force", mountpoint}, 5); err3 != nil {
+				errs = append(errs, fmt.Sprintf("diskutil unmount force failed: %v", err3))
+			} else {
+				errs = nil // force unmount succeeded
+			}
+		} else {
+			errs = nil // umount succeeded
+		}
+	}
+
+	// Step 2: Signal owning process so it can flush history, zero caches, etc.
 	pid, pidErr := readPidfile(mountpoint)
 	if pidErr == nil && pid > 0 {
-		// Best-effort: the owning process may already be gone (e.g. it
-		// exited when the OS-level unmount above completed), in which case
-		// signaling fails harmlessly.
 		_ = syscall.Kill(pid, syscall.SIGTERM)
+		// Give it a moment to clean up.
+		time.Sleep(200 * time.Millisecond)
 	}
-	// Whether or not the owning process is still around to clean up after
-	// itself, don't leave a stale pidfile behind.
+	// Don't leave a stale pidfile behind.
 	_ = removePidfile(mountpoint)
 
-	if unmountErr != nil {
-		return fmt.Errorf("umount: %w", unmountErr)
+	if len(errs) > 0 {
+		return fmt.Errorf("umount %s:\n  %s", mountpoint,
+			strings.Join(errs, "\n  "))
 	}
+	fmt.Printf("Unmounted %s\n", mountpoint)
 	return nil
+}
+
+// tryUnmount runs a command to unmount the given path, with a timeout.
+// Returns nil on success, or an error describing what went wrong.
+func tryUnmount(name string, args []string, timeoutSec int) error {
+	cmd := exec.Command(name, args...)
+	done := make(chan error, 1)
+	go func() {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			msg := strings.TrimSpace(string(out))
+			if msg != "" {
+				done <- fmt.Errorf("%s: %s", err, msg)
+			} else {
+				done <- err
+			}
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("%s timed out after %ds", name, timeoutSec)
+	}
 }

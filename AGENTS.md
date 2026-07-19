@@ -5,18 +5,18 @@
 - `SPEC.md` is the binding engineering contract — requirements (FR/NFR numbers), architecture, phased plan, and **Part IV: operating instructions for the coding agent**. Read it before writing code; every behavior must trace to an FR/NFR.
 - `PLAN.md` is the product-level plan (why, not how) — read it for context, not for requirements.
 - `README.md` explains the name and the pitch, for humans.
-- `docs/THREAT_MODEL.md` (Phase 0 deliverable) and `docs/SPEC_AMENDMENTS.md` (proposed deviations from SPEC.md) — check both before assuming a behavior isn't specified.
+- `docs/THREAT_MODEL.md` is the living threat model — check it before assuming a behavior isn't specified.
 
 ## Quick commands
 
 | Action | Command | Notes |
 |--------|---------|-------|
 | Build | `make build` | Output: `build/janusfs-darwin-$(ARCH)` |
-| Run (dev) | `make run ARGS="mount <src> <mountpoint>"` | Needs FUSE-T installed locally |
+| Run (dev) | `make run ARGS="mount <src> <mountpoint>"` | Needs macFUSE installed locally |
 | Run all tests | `make test` | `go test ./...` |
 | Single package test | `go test -v ./internal/rules/...` | |
 | Race tests | `make test-race` | `go test -race ./...` |
-| Mounted integration tests | `make integration` | `-tags fuseintegration`; needs FUSE-T, mounts for real |
+| Mounted integration tests | `make integration` | `-tags fuseintegration`; needs macFUSE, mounts for real |
 | Leak oracle | `make leak-oracle` | Sentinel-secret scan over every mounted read (Phase 1+) |
 | Benchmarks | `make bench` | Compares against `bench/BASELINE.md`; regressions beyond NFR-3 fail |
 | Lint | `make lint` | `golangci-lint` |
@@ -25,7 +25,7 @@
 ## Architecture (see SPEC.md Part II for full detail)
 
 - **Entrypoint**: `cmd/janusfs/main.go` — manual, explicit dependency injection (SPEC §15), no DI framework.
-- **Mount**: `jacobsa/fuse` over FUSE-T (macOS only, no kext). Fallback: cgo `libfuse-t` bindings if the Phase 0 spike fails — see SPEC §6.
+- **Mount**: `hanwen/go-fuse/v2` over macFUSE (macOS only, requires macFUSE kernel extension).
 - **Core pipeline**: `rules` (compile `.janusignore`/`.janusmask`) → `engine` (resolve Decision) → `provider` (serve redacted bytes) → `mount` (FUSE adapter, thin). `watch` invalidates on change; never authoritative (SPEC §9, FR-21).
 - **Observability**: `obs` (event bus, `JanusMetrics`, ring buffer) feeds both the live dashboard and `internal/history` (SQLite rollups — paths/counts only, never content, SPEC §3.8/§16).
 - **Config**: flags via `internal/config`, single `Config` struct, `Validate()` before anything mounts.
@@ -63,20 +63,20 @@
 - **No logging outside `internal/logging.New(component)`.** Never log file content (byte slices from `redact`/`provider`) — this is a hard review-blocking rule (NFR-1).
 - **Thin transport layers**: `internal/mount` and `internal/api` translate and delegate; they don't decide, redact, or query.
 - **Naming**: packages lowercase single word, files `snake_case.go`, exported symbols reference their FR in a doc comment.
-- **Dependency policy** (SPEC §20.4): `jacobsa/fuse`, `fsnotify`, `modernc.org/sqlite`, `prometheus/client_golang`, one WebSocket lib, one gitignore lib, stdlib — allowed without asking. Anything else needs a `docs/SPEC_AMENDMENTS.md` entry first. Never: cgo (except the approved FUSE fallback), network-calling libs, telemetry SDKs.
+- **Dependency policy** (SPEC §20.4): `hanwen/go-fuse/v2`, `fsnotify`, `modernc.org/sqlite`, `prometheus/client_golang`, one WebSocket lib, stdlib — allowed without asking. Anything else needs a decision record first. Never: cgo (except the approved FUSE fallback), network-calling libs, telemetry SDKs.
 
 ## Test nuances
 
 - Unit tests need no external services — SQLite history uses `:memory:`, the engine/provider/watcher are testable without a mount (NFR-8).
-- Mounted integration tests (`-tags fuseintegration`) need FUSE-T installed and actually mount — not run by default `make test`.
+- Mounted integration tests (`-tags fuseintegration`) need macFUSE installed and actually mount — not run by default `make test`.
 - The **leak oracle** is a standing tripwire from Phase 1 onward: sentinel secrets planted in `testdata/` must never appear in any byte read through the mount, under any test, ever.
 - Benchmarks are compared against `bench/BASELINE.md` (captured in Phase 0); a regression past an NFR-3 budget blocks the task, not just a warning.
 
 ## Working with SPEC.md
 
 - Phase order is strict (SPEC §20.3) — don't start Phase N+1 before Phase N's exit criteria (including its security and UX checklist items) are met.
-- If you need a behavior the spec doesn't define: implement the fail-closed interpretation, add an entry to `docs/SPEC_AMENDMENTS.md`, and flag it — don't invent silently and don't block waiting for a human unless it's one of the stop-conditions in SPEC §23.
-- The interfaces in SPEC §7–§9 (`Engine`, `RedactedContentProvider`, `Watcher`) are normative — change them only via an amendment, not incidentally while implementing something else.
+- If you need a behavior the spec doesn't define: implement the fail-closed interpretation, add a decision record, and flag it — don't invent silently and don't block waiting for a human unless it's one of the stop-conditions in SPEC §23.
+- The interfaces in SPEC §7–§9 (`Engine`, `RedactedContentProvider`, `Watcher`) are normative — change them only via a decision record, not incidentally while implementing something else.
 
 ## Release
 

@@ -19,6 +19,15 @@ import (
 // evaluating one ordered, cross-level pattern list (see resolve.go), so
 // this type only needs to compile and match a single line correctly.
 //
+// docs/SPEC_AMENDMENTS.md (2026-07-18, "Rule precedence") considered and
+// withdrew replacing this matcher with bmatcuk/doublestar + a
+// no-negation model: gitignore's "no-slash pattern matches at every depth"
+// rule is the fail-closed default a secret-hiding tool wants, and a
+// per-level doublestar match would have silently under-matched nested
+// files instead. That amendment kept this matcher and gitignore semantics
+// exactly as documented below, and added one precedence change on top (see
+// resolve.go's global-tier floor) rather than replacing the matcher.
+//
 // Semantics match the gitignore rules summarized in SPEC.md §2.1/FR-12,
 // cross-checked against real `git check-ignore` (see glob_test.go's
 // conformance cases).

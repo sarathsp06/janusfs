@@ -15,6 +15,7 @@ package engine
 import (
 	"sync/atomic"
 
+	"github.com/sarathsp06/janusfs/internal/patterns"
 	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
@@ -38,9 +39,13 @@ type Resolution struct {
 	Decision     Decision
 	RuleRef      string
 	PatternNames []string
-	Poisoned     bool
-	Trace        []rules.TraceEntry
-	Generation   uint64
+	// Patterns is rules.Resolution.Patterns passed through unchanged — the
+	// compiled patterns.Pattern objects internal/provider needs to redact
+	// (see that field's doc for why this isn't derived from PatternNames).
+	Patterns   []*patterns.Pattern
+	Poisoned   bool
+	Trace      []rules.TraceEntry
+	Generation uint64
 }
 
 // Engine implements SPEC §7's Engine interface: Resolve never errors
@@ -75,6 +80,7 @@ func (e *Engine) Resolve(relPath string, isDir bool) Resolution {
 		Decision:     res.Decision,
 		RuleRef:      res.RuleRef,
 		PatternNames: res.PatternNames,
+		Patterns:     res.Patterns,
 		Poisoned:     res.Poisoned,
 		Trace:        res.Trace,
 		Generation:   e.gen.Load(),

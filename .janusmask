@@ -1,0 +1,9 @@
+# JanusFS — <glob> : <pattern>[, <pattern>...] masks matched spans with
+# '*', preserving file size. A glob with no pattern masks the whole file.
+#
+# Preview the effect of these rules with: janusfs check
+
+*.env                              : env-value
+**/application*.yml                 : generic-secret, db-uri
+**/application*.yaml                : generic-secret, db-uri
+**/application*.properties          : generic-secret, db-uri

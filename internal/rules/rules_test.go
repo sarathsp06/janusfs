@@ -77,6 +77,9 @@ func TestResolveHiddenWinsOverMasked(t *testing.T) {
 }
 
 func TestResolveDeeperIgnoreNegatesShallower(t *testing.T) {
+	// Within the in-tree tier, gitignore's deeper-wins/negation precedence
+	// is unchanged (docs/SPEC_AMENDMENTS.md 2026-07-18: only the global
+	// tier is a fail-closed floor).
 	withGlobalDir(t)
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, IgnoreFileName), "*.log\n")
@@ -175,16 +178,47 @@ func TestResolveGlobalLevelLowestPrecedence(t *testing.T) {
 	if res.Decision != Hidden {
 		t.Fatalf("expected global rule to apply, got %v", res.Decision)
 	}
+}
 
-	// A local negation must be able to override the global rule.
+func TestResolveGlobalFloorCannotBeLiftedByInTreeNegation(t *testing.T) {
+	// docs/SPEC_AMENDMENTS.md 2026-07-18 ("Rule precedence"): the global
+	// tier is a fail-closed floor. An in-tree negation cannot override a
+	// global Hidden verdict, even though the same negation syntax freely
+	// overrides shallower *in-tree* rules (see
+	// TestResolveDeeperIgnoreNegatesShallower).
+	globalDir := withGlobalDir(t)
+	writeFile(t, filepath.Join(globalDir, IgnoreFileName), "*.pem\n")
+
+	root := t.TempDir()
 	writeFile(t, filepath.Join(root, IgnoreFileName), "!server.pem\n")
-	rs2, err := Discover(root)
+	writeFile(t, filepath.Join(root, "server.pem"), "x")
+
+	rs, err := Discover(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res2 := rs2.Resolve("server.pem", false)
-	if res2.Decision != Allowed {
-		t.Fatalf("expected local negation to override global rule, got %v", res2.Decision)
+	if got := rs.Resolve("server.pem", false).Decision; got != Hidden {
+		t.Fatalf("expected the global floor to survive an in-tree negation, got %v", got)
+	}
+}
+
+func TestResolveInTreeNegationStillWorksWhenNoGlobalFloorApplies(t *testing.T) {
+	// The floor only blocks negation of a verdict the *global* tier set;
+	// an in-tree rule with no corresponding global rule can still be
+	// negated normally by a deeper in-tree file.
+	globalDir := withGlobalDir(t)
+	writeFile(t, filepath.Join(globalDir, IgnoreFileName), "*.pem\n") // unrelated to *.secret below
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, IgnoreFileName), "*.secret\n!keep.secret\n")
+	writeFile(t, filepath.Join(root, "keep.secret"), "x")
+
+	rs, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.Resolve("keep.secret", false).Decision; got != Allowed {
+		t.Fatalf("expected in-tree negation to re-include a path with no global floor, got %v", got)
 	}
 }
 

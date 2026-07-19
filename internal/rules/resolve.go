@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/sarathsp06/janusfs/internal/patterns"
 )
 
 // TraceEntry records one rule's contribution to a Resolve call, for
@@ -26,8 +28,13 @@ type Resolution struct {
 	Decision     Decision
 	RuleRef      string // "<file>:<line>" of the deciding rule, "" if none matched
 	PatternNames []string
-	Poisoned     bool // true if a config error forced this to Hidden (FR-13)
-	Trace        []TraceEntry
+	// Patterns holds the same deduplicated set as PatternNames, but as the
+	// actual compiled *patterns.Pattern objects (§8.1's CompiledPattern) —
+	// internal/provider needs these to redact, not just their names.
+	// Parallel to PatternNames: Patterns[i].Name == PatternNames[i].
+	Patterns []*patterns.Pattern
+	Poisoned bool // true if a config error forced this to Hidden (FR-13)
+	Trace    []TraceEntry
 }
 
 // Resolve implements FR-5..FR-9's precedence (Hidden > Masked > Allowed) for
@@ -46,23 +53,24 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 	}
 
 	for _, ancestor := range ancestorDirs(relPath) {
-		if hidden, ref, trace := rs.resolveIgnore(ancestor, true); hidden {
-			return Resolution{Decision: Hidden, RuleRef: ref, Trace: trace}
+		if hidden, ref, poisoned, trace := rs.resolveIgnore(ancestor, true); hidden {
+			return Resolution{Decision: Hidden, RuleRef: ref, Poisoned: poisoned, Trace: trace}
 		}
 	}
 
-	hidden, ref, trace := rs.resolveIgnore(relPath, isDir)
+	hidden, ref, poisoned, trace := rs.resolveIgnore(relPath, isDir)
 	if hidden {
-		return Resolution{Decision: Hidden, RuleRef: ref, Trace: trace}
+		return Resolution{Decision: Hidden, RuleRef: ref, Poisoned: poisoned, Trace: trace}
 	}
 
 	if isDir {
 		return Resolution{Decision: Allowed, Trace: trace}
 	}
 
-	poisoned := false
+	poisonedMask := false
 	poisonedRef := ""
 	seenNames := map[string]bool{}
+	patByName := map[string]*patterns.Pattern{}
 	var patternNames []string
 	maskRef := ""
 
@@ -75,7 +83,7 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 			}
 			ref := lvl.File + ":" + strconv.Itoa(entry.LineNo)
 			if entry.CompileErr != nil {
-				poisoned = true
+				poisonedMask = true
 				poisonedRef = ref
 				trace = append(trace, TraceEntry{
 					File: lvl.File, LineNo: entry.LineNo, Kind: "config_error",
@@ -94,50 +102,93 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 				if !seenNames[p.Name] {
 					seenNames[p.Name] = true
 					patternNames = append(patternNames, p.Name)
+					patByName[p.Name] = p
 				}
 			}
 		}
 	}
 
-	if poisoned {
+	if poisonedMask {
 		return Resolution{Decision: Hidden, Poisoned: true, RuleRef: poisonedRef, Trace: trace}
 	}
 
 	if len(patternNames) > 0 {
 		sort.Strings(patternNames)
-		return Resolution{Decision: Masked, RuleRef: maskRef, PatternNames: patternNames, Trace: trace}
+		pats := make([]*patterns.Pattern, len(patternNames))
+		for i, n := range patternNames {
+			pats[i] = patByName[n]
+		}
+		return Resolution{Decision: Masked, RuleRef: maskRef, PatternNames: patternNames, Patterns: pats, Trace: trace}
 	}
 
 	return Resolution{Decision: Allowed, Trace: trace}
 }
 
-// resolveIgnore evaluates only the ignore levels applicable to relPath
-// (global + ancestor-or-self directories), in shallowest-first order so a
-// deeper level's pattern overrides a shallower one's (FR-12: "later match
-// wins"). A poisoned level (a line that failed to compile) forces Hidden
-// for every path it would otherwise cover, per IgnoreLevel.Poisoned's doc.
-func (rs *RuleSet) resolveIgnore(relPath string, isDir bool) (hidden bool, ruleRef string, trace []TraceEntry) {
+// resolveIgnore evaluates the ignore levels applicable to relPath (global +
+// ancestor-or-self directories), in shallowest-first order, applying
+// gitignore's "later match wins" (FR-12) — with one precedence change on
+// top, per docs/SPEC_AMENDMENTS.md (2026-07-18, "Rule precedence"): the
+// global level is a fail-closed floor. Once the global level's own
+// (self-consistent) evaluation decides a path is Hidden, no in-tree level
+// (mount root or any subdirectory) may negate that verdict — negation
+// still works exactly as before *within* the in-tree tier (a deeper
+// in-tree file can still override a shallower in-tree file), and *within*
+// the global level itself (a later global line can still override an
+// earlier one there). Only an in-tree actor lifting a global verdict is
+// blocked — this is the cross-trust-boundary property FR-15's read-only
+// config was already protecting; see the amendment for the full rationale.
+//
+// A poisoned level (a line that failed to compile) forces Hidden for every
+// path it would otherwise cover, per IgnoreLevel.Poisoned's doc; the
+// poisoned return lets Resolve set Resolution.Poisoned (FR-13) regardless
+// of which tier the poisoned level belongs to.
+func (rs *RuleSet) resolveIgnore(relPath string, isDir bool) (hidden bool, ruleRef string, poisoned bool, trace []TraceEntry) {
+	floorHidden := false
+
 	for _, lvl := range rs.applicableIgnoreLevels(relPath) {
+		isGlobalTier := rs.GlobalDir != "" && lvl.Dir == rs.GlobalDir
+
 		if lvl.Poisoned {
 			hidden = true
+			poisoned = true
 			ruleRef = lvl.File
 			trace = append(trace, TraceEntry{File: lvl.File, Kind: "config_error", Matched: true})
+			if isGlobalTier {
+				floorHidden = true
+			}
 			continue
 		}
+
 		relToLevel := relativeToLevel(rs.Root, lvl.Dir, relPath)
 		for _, p := range lvl.Patterns {
 			if !p.matches(relToLevel, isDir) {
 				continue
 			}
-			hidden = !p.negate
+			wantHidden := !p.negate
+			if !isGlobalTier && !wantHidden && floorHidden {
+				// The global tier already decided this path is Hidden; an
+				// in-tree negation cannot lift that floor. Record the
+				// attempt (janusfs check/explain surface it) but don't
+				// apply it.
+				trace = append(trace, TraceEntry{
+					File: lvl.File, LineNo: p.lineNo, Kind: "ignore",
+					Line: p.raw, Matched: false, Negated: true,
+				})
+				continue
+			}
+			hidden = wantHidden
 			ruleRef = lvl.File + ":" + strconv.Itoa(p.lineNo)
 			trace = append(trace, TraceEntry{
 				File: lvl.File, LineNo: p.lineNo, Kind: "ignore",
 				Line: p.raw, Matched: hidden, Negated: p.negate,
 			})
 		}
+
+		if isGlobalTier {
+			floorHidden = hidden
+		}
 	}
-	return hidden, ruleRef, trace
+	return hidden, ruleRef, poisoned, trace
 }
 
 // ancestorDirs returns the relative-path ancestors of relPath, shallowest

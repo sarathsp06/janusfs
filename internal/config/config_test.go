@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,6 +155,118 @@ func TestApplyEnv_DoesNotTouchPositionals(t *testing.T) {
 	}
 	if cfg.Src != "/original" {
 		t.Errorf("Src = %q, want unchanged %q", cfg.Src, "/original")
+	}
+}
+
+func TestResolveMountpoint_NoOpWhenMountpointSet(t *testing.T) {
+	c := Default()
+	c.Src = "/src"
+	c.Mountpoint = "/explicit"
+	c.MountRoot = t.TempDir()
+
+	if err := c.ResolveMountpoint(); err != nil {
+		t.Fatalf("ResolveMountpoint() error = %v", err)
+	}
+	if c.Mountpoint != "/explicit" {
+		t.Errorf("Mountpoint = %q, want unchanged %q (explicit wins)", c.Mountpoint, "/explicit")
+	}
+}
+
+func TestResolveMountpoint_NoOpWhenMountRootUnset(t *testing.T) {
+	c := Default()
+	c.Src = "/src"
+
+	if err := c.ResolveMountpoint(); err != nil {
+		t.Fatalf("ResolveMountpoint() error = %v", err)
+	}
+	if c.Mountpoint != "" {
+		t.Errorf("Mountpoint = %q, want empty (feature off, FR-1 unamended)", c.Mountpoint)
+	}
+}
+
+func TestResolveMountpoint_DerivesFromSrcBasename(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(t.TempDir(), "myproject")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c := Default()
+	c.Src = src
+	c.MountRoot = root
+
+	if err := c.ResolveMountpoint(); err != nil {
+		t.Fatalf("ResolveMountpoint() error = %v", err)
+	}
+	want := filepath.Join(root, "myproject")
+	if c.Mountpoint != want {
+		t.Errorf("Mountpoint = %q, want %q", c.Mountpoint, want)
+	}
+	if info, err := os.Stat(c.Mountpoint); err != nil || !info.IsDir() {
+		t.Errorf("derived mountpoint %q was not created as a directory: %v", c.Mountpoint, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() after derivation = %v, want nil", err)
+	}
+}
+
+func TestResolveMountpoint_NameOverridesLeaf(t *testing.T) {
+	root := t.TempDir()
+	src := t.TempDir()
+
+	c := Default()
+	c.Src = src
+	c.MountRoot = root
+	c.Name = "custom-name"
+
+	if err := c.ResolveMountpoint(); err != nil {
+		t.Fatalf("ResolveMountpoint() error = %v", err)
+	}
+	want := filepath.Join(root, "custom-name")
+	if c.Mountpoint != want {
+		t.Errorf("Mountpoint = %q, want %q", c.Mountpoint, want)
+	}
+}
+
+func TestResolveMountpoint_LeafCollisionFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	srcA := filepath.Join(t.TempDir(), "shared")
+	srcB := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(srcA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(srcB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := Default()
+	a.Src = srcA
+	a.MountRoot = root
+	if err := a.ResolveMountpoint(); err != nil {
+		t.Fatalf("first ResolveMountpoint() error = %v", err)
+	}
+	// Simulate the first mount being live: the derived directory now has
+	// content (a real mount would serve the source's entries the same way).
+	if err := os.WriteFile(filepath.Join(a.Mountpoint, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := Default()
+	b.Src = srcB
+	b.MountRoot = root
+	if err := b.ResolveMountpoint(); err != nil {
+		t.Fatalf("second ResolveMountpoint() error = %v", err)
+	}
+	if b.Mountpoint != a.Mountpoint {
+		t.Fatalf("expected both derivations to collide on the same leaf, got %q and %q", a.Mountpoint, b.Mountpoint)
+	}
+
+	err := b.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error for a leaf collision with a live mount")
+	}
+	if !errors.Is(err, ErrMountpointNotEmpty) {
+		t.Errorf("Validate() error = %v, want wrapping ErrMountpointNotEmpty", err)
 	}
 }
 

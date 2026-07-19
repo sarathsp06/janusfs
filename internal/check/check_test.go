@@ -115,6 +115,24 @@ func TestCheckHiddenDirNegationWarning(t *testing.T) {
 	}
 }
 
+func TestCheckGlobalFloorNegationWarning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(home, ".janusfs", "config", ".janusignore"), "*.pem\n")
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusignore"), "!server.pem\n")
+	writeFile(t, filepath.Join(root, "server.pem"), "x")
+
+	r, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubstr(findMessages(r), "global rule floor") {
+		t.Fatalf("expected a global-floor negation warning, got %v", findMessages(r))
+	}
+}
+
 func TestCheckRedundantDuplicateLine(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()

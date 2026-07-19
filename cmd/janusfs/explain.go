@@ -124,7 +124,7 @@ func printExplain(relPath string, res engine.Resolution) {
 			if t.Negated {
 				verdict = "re-included (negation)"
 				if !t.Matched {
-					verdict = "excluded (negation didn't apply)"
+					verdict = "excluded (negation blocked by a global floor or hidden ancestor)"
 				}
 			} else if t.Matched {
 				verdict = "hidden"

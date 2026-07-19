@@ -1,0 +1,11 @@
+# JanusFS — paths listed here are Hidden: they appear in listings but
+# every read/write is denied (EACCES). Syntax mirrors .gitignore exactly.
+#
+# Preview the effect of these rules with: janusfs check
+
+*.pem
+*.key
+id_rsa*
+*.p12
+.aws/credentials
+*.keychain

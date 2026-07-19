@@ -18,8 +18,9 @@ var errSilentNonZero = errors.New("")
 
 // newCheckCmd implements FR-28: statically lint the config tree rooted at
 // [path] (default cwd) — regex/glob errors, zero-match globs, FR-9
-// directory-mask rewrites, FR-8 hidden-dir negation attempts, and
-// exact-duplicate rules — plus the global rule directory
+// directory-mask rewrites, FR-8 hidden-dir negation attempts, negations
+// blocked by the global rule floor (docs/SPEC_AMENDMENTS.md 2026-07-18),
+// and exact-duplicate rules — plus the global rule directory
 // (docs/SPEC_AMENDMENTS.md 2026-07-17), always included in the scan.
 func newCheckCmd() *cobra.Command {
 	var jsonOut bool
@@ -48,6 +49,13 @@ func runCheck(dir string, jsonOut bool) error {
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
+		var findings []check.Finding
+		for _, f := range report.Findings {
+			if f.Severity != check.SeverityInfo {
+				findings = append(findings, f)
+			}
+		}
+		report.Findings = findings
 		if err := enc.Encode(report); err != nil {
 			return fmt.Errorf("check: encoding JSON: %w", err)
 		}
@@ -66,15 +74,23 @@ func runCheck(dir string, jsonOut bool) error {
 
 // printCheckReport implements FR-33: findings grouped by file (Run already
 // sorts by severity then file then line), each with file:line and a
-// suggested fix where one exists.
+// suggested fix where one exists. Only warnings and errors are shown — info
+// findings (redundancies, etc.) are suppressed since they're not actionable.
 func printCheckReport(report check.Report) {
-	if len(report.Findings) == 0 {
-		fmt.Printf("No findings across %d files, %d directories.\n", report.FileCount, report.DirCount)
+	var findings []check.Finding
+	for _, f := range report.Findings {
+		if f.Severity != check.SeverityInfo {
+			findings = append(findings, f)
+		}
+	}
+
+	if len(findings) == 0 {
+		fmt.Printf("No problems found across %d files, %d directories.\n", report.FileCount, report.DirCount)
 		return
 	}
 
 	lastFile := ""
-	for _, f := range report.Findings {
+	for _, f := range findings {
 		if f.File != lastFile {
 			fmt.Printf("\n%s\n", f.File)
 			lastFile = f.File
@@ -89,17 +105,15 @@ func printCheckReport(report check.Report) {
 		}
 	}
 
-	errs, warns, infos := 0, 0, 0
-	for _, f := range report.Findings {
+	errs, warns := 0, 0
+	for _, f := range findings {
 		switch f.Severity {
 		case check.SeverityError:
 			errs++
 		case check.SeverityWarn:
 			warns++
-		default:
-			infos++
 		}
 	}
-	fmt.Printf("\n%d error(s), %d warning(s), %d info across %d files, %d directories.\n",
-		errs, warns, infos, report.FileCount, report.DirCount)
+	fmt.Printf("\n%d error(s), %d warning(s) across %d files, %d directories.\n",
+		errs, warns, report.FileCount, report.DirCount)
 }

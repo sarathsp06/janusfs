@@ -2,8 +2,10 @@
 // tree (internal/rules) and a real source tree together and reports
 // findings a human should look at before mounting — regex/glob errors,
 // globs that touch nothing, mask globs that accidentally target a
-// directory (FR-9), and negations that can never take effect because an
-// ancestor directory is Hidden (FR-8).
+// directory (FR-9), negations that can never take effect because an
+// ancestor directory is Hidden (FR-8), and in-tree negations that can never
+// take effect because the global rule floor already hid the path
+// (docs/SPEC_AMENDMENTS.md 2026-07-18).
 //
 // This package is shared, per SPEC.md §3.7/§20.3 (Phase 5), by both
 // `janusfs check` and the future `.janusfs/conflicts.json` virtual file —
@@ -16,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/sarathsp06/janusfs/internal/engine"
 	"github.com/sarathsp06/janusfs/internal/rules"
@@ -116,7 +119,10 @@ func Run(root string) (Report, error) {
 	findings = append(findings, ignoreLevelFindings(rs, entries)...)
 	findings = append(findings, maskLevelFindings(rs, entries)...)
 	findings = append(findings, hiddenDirNegationFindings(rs, eng, entries)...)
+	findings = append(findings, globalFloorNegationFindings(rs, eng, entries)...)
 	findings = append(findings, redundancyFindings(rs)...)
+	findings = append(findings, maskRedundancyFindings(rs)...)
+	findings = append(findings, subdirLevelRedundancyFindings(rs, entries)...)
 
 	sort.SliceStable(findings, func(i, j int) bool {
 		if findings[i].Severity != findings[j].Severity {
@@ -285,6 +291,53 @@ func hiddenDirNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries []
 	return out
 }
 
+// globalFloorNegationFindings reports docs/SPEC_AMENDMENTS.md (2026-07-18,
+// "Rule precedence") "in-tree negation attempts a global-floor block": an
+// in-tree (mount root or subdirectory) negation that matches a real file
+// the global rule level already resolves Hidden has no effect —
+// rules.RuleSet.Resolve's fail-closed floor keeps the path Hidden
+// regardless of the in-tree negation. Distinct from hiddenDirNegationFindings
+// (FR-8, an ancestor-directory block): this is the cross-trust-boundary
+// block between the global level and everything inside <src>.
+func globalFloorNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries []treeEntry) []Finding {
+	if rs.GlobalDir == "" {
+		return nil
+	}
+	var out []Finding
+	for _, lvl := range rs.IgnoreLevels {
+		if lvl.Poisoned || lvl.Dir == rs.GlobalDir {
+			continue // only in-tree levels can attempt to lift the floor
+		}
+		for _, p := range lvl.Patterns {
+			if !p.Negate() {
+				continue
+			}
+			for _, te := range entries {
+				if !isUnderDir(rs.Root, lvl.Dir, te.rel) {
+					continue
+				}
+				rel := relToDir(rs.Root, lvl.Dir, te.rel)
+				if !p.Matches(rel, te.isDir) {
+					continue
+				}
+				res := eng.Resolve(te.rel, te.isDir)
+				for _, t := range res.Trace {
+					if t.Kind == "ignore" && t.Negated && !t.Matched && t.File == lvl.File && t.LineNo == p.LineNo() {
+						out = append(out, Finding{
+							Severity: SeverityWarn,
+							File:     lvl.File,
+							Line:     p.LineNo(),
+							Message:  fmt.Sprintf("negation %q has no effect: %s is Hidden by the global rule floor", p.Raw(), te.rel),
+						})
+						break
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
 // redundancyFindings reports exact-duplicate lines across levels — a rough
 // but honest approximation of FR-28's "redundant pairs (identical
 // effect)": true semantic-equivalence detection (e.g. two differently
@@ -312,6 +365,129 @@ func redundancyFindings(rs *rules.RuleSet) []Finding {
 	return out
 }
 
+// maskRedundancyFindings reports duplicate mask entries (identical glob +
+// same pattern set at the same or different levels).
+func maskRedundancyFindings(rs *rules.RuleSet) []Finding {
+	seen := map[string]string{}
+	var out []Finding
+	for _, lvl := range rs.MaskLevels {
+		for _, e := range lvl.Entries {
+			if e.CompileErr != nil {
+				continue
+			}
+			key := e.Glob
+			for _, p := range e.PatternRefs {
+				key += ":" + p
+			}
+			loc := fmt.Sprintf("%s:%d", lvl.File, e.LineNo)
+			if prior, ok := seen[key]; ok {
+				out = append(out, Finding{
+					Severity: SeverityInfo,
+					File:     lvl.File,
+					Line:     e.LineNo,
+					Message:  fmt.Sprintf("mask entry %q identical to %s — likely redundant", e.Glob, prior),
+				})
+				continue
+			}
+			seen[key] = loc
+		}
+	}
+	return out
+}
+
+// subdirLevelRedundancyFindings reports subdirectory ignore levels whose
+// patterns are entirely redundant because a parent level already hides all
+// matched files (the subdir level can never add new hidden entries).
+func subdirLevelRedundancyFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
+	var levels []levelInfo
+	for i, lvl := range rs.IgnoreLevels {
+		if lvl.Poisoned || lvl.Dir == rs.Root || lvl.Dir == rs.GlobalDir {
+			continue
+		}
+		var pats []matcher
+		for _, p := range lvl.Patterns {
+			pats = append(pats, p)
+		}
+		levels = append(levels, levelInfo{
+			index:    i,
+			dir:      lvl.Dir,
+			patterns: pats,
+			file:     lvl.File,
+		})
+	}
+
+	if len(levels) < 2 {
+		return nil
+	}
+
+	var out []Finding
+	for _, child := range levels {
+		parent := findParentLevel(rs.Root, child.dir, levels)
+		if parent == nil {
+			continue
+		}
+		// Check if every file the child could match is already matched by
+		// the parent. If all of the child's patterns are covered, the child
+		// level is redundant.
+		allCovered := true
+		for _, pat := range child.patterns {
+			found := false
+			for _, te := range entries {
+				if !isUnderDir(rs.Root, child.dir, te.rel) {
+					continue
+				}
+				if pat.Matches(relToDir(rs.Root, child.dir, te.rel), te.isDir) {
+					// This file is matched by the child. Check if parent also matches it.
+					parentMatch := false
+					for _, pp := range parent.patterns {
+						if pp.Matches(relToDir(rs.Root, parent.dir, te.rel), te.isDir) {
+							parentMatch = true
+							break
+						}
+					}
+					if !parentMatch {
+						found = true
+						break
+					}
+				}
+			}
+			if found {
+				allCovered = false
+				break
+			}
+		}
+		if allCovered && len(child.patterns) > 0 {
+			out = append(out, Finding{
+				Severity: SeverityInfo,
+				File:     child.file,
+				Message:  fmt.Sprintf("level at %s is redundant — parent level covers all matched paths", displayDir(rs.Root, child.dir)),
+			})
+		}
+	}
+
+	return out
+}
+
+func findParentLevel(root string, childDir string, levels []levelInfo) *levelInfo {
+	var best *levelInfo
+	for i, l := range levels {
+		if l.dir == childDir {
+			continue
+		}
+		// l is a parent of childDir if childDir is under l.dir.
+		rel, err := filepath.Rel(l.dir, childDir)
+		if err != nil {
+			continue
+		}
+		if len(rel) > 0 && !strings.HasPrefix(rel, "..") {
+			if best == nil || len(l.dir) > len(best.dir) {
+				best = &levels[i]
+			}
+		}
+	}
+	return best
+}
+
 func isUnderDir(root, dir, entryRel string) bool {
 	full := filepath.Join(root, entryRel)
 	if dir == full {
@@ -328,6 +504,15 @@ func relToDir(root, dir, entryRel string) string {
 		return entryRel
 	}
 	return filepath.ToSlash(rel)
+}
+
+// levelInfo carries a single ignore level's metadata for redundancy analysis.
+type levelInfo struct {
+	index    int
+	dir      string
+	patterns []matcher
+	file     string
+	lines    []int
 }
 
 // matcher is satisfied by internal/rules's unexported ignorePattern type

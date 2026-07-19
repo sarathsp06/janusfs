@@ -3,7 +3,7 @@
 **A sanitized filesystem view for AI agents.** JanusFS mounts your project directory and shows every file through one of three faces — plain, redacted, or hidden — so an agent gets exactly the access you intend, and never a byte more.
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
-[![macOS via FUSE-T](https://img.shields.io/badge/platform-macOS%20%28FUSE--T%29-lightgrey.svg)](https://www.fuse-t.org/)
+[![macOS via macFUSE](https://img.shields.io/badge/platform-macOS%20%28macFUSE%29-lightgrey.svg)](https://osxfuse.github.io/)
 [![License TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
 
 > In Roman mythology, **Janus** is the god of doorways, transitions, and gates — depicted with two faces, one looking forward and one back. Nothing passes through a door watched by Janus without him deciding what's seen on each side.
@@ -53,7 +53,7 @@ JanusFS resolves this per-file, per-read, at the FS boundary. Rules use `.gitign
                  ▼                                 │
       ┌─────────────────────┐                      │
       │  JanusFS mountpoint │  ── Allowed  ──────► │
-      │  (FUSE-T on macOS)  │  ── Masked   ──────► redact and serve
+      │  (macFUSE on macOS)  │  ── Masked   ──────► redact and serve
       │                     │  ── Hidden   ──────► EACCES
       └─────────────────────┘
 ```
@@ -64,15 +64,21 @@ The rule engine reads `.janusignore` and `.janusmask` from the mount root down (
 
 ```bash
 # 1) install
-brew install --cask fuse-t     # macOS FUSE implementation, no kernel extension
+brew install --cask macfuse     # macOS FUSE implementation (kernel extension)
 go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
+
+# On Apple Silicon, macFUSE's system extension must be approved once:
+#   System Settings → Privacy & Security → allow the "macFUSE" extension,
+#   then reboot (a reduced-security reboot is required for third-party kexts).
+# See docs/SPEC_AMENDMENTS.md (2026-07-18) for why janusfs uses macFUSE
+# (hanwen/go-fuse) rather than the earlier, unreliable FUSE-T stack.
 
 # 2) drop secure defaults into your project (or ~/.janusfs/config for machine-wide)
 cd my-project
 janusfs init                    # writes .janusignore + .janusmask templates
 
 # 3) preview what those rules will do BEFORE you mount
-janusfs check                   # linter: zero-match globs, dir-mask, hidden-dir negations
+janusfs check                   # linter: zero-match globs, dir-mask, hidden-dir/global-floor negations
 janusfs explain .env            # per-file trace: which rule decided this file's fate
 
 # 4) mount
@@ -130,7 +136,7 @@ build/
 !.aws/known_public_config
 ```
 
-Rules are **hierarchical** and follow git semantics exactly: files further down the tree override shallower ones, and negation (`!`) can re-include a previously-excluded file — but **never** something under a directory that itself resolves to Hidden (a hidden ancestor short-circuits every descendant).
+Rules are **hierarchical** and follow git semantics exactly: files further down the tree override shallower ones, and negation (`!`) can re-include a previously-excluded file — but **never** something under a directory that itself resolves to Hidden (a hidden ancestor short-circuits every descendant), and **never** a path the [global rule level](#global-rules-machine-wide-defaults) already hid (the global level is a fail-closed floor no in-tree rule can lift).
 
 ### `.janusmask`
 
@@ -163,7 +169,7 @@ Set rules that apply to every mount on your machine — for personal always-hide
 janusfs init --global    # writes ~/.janusfs/config/{.janusignore,.janusmask}
 ```
 
-Global rules are treated as an **ancestor level above every mount root** — the lowest precedence of all, so any repo's own rules can override them. This is fail-closed-safe: a global Hidden rule can only be widened into visibility by an explicit local negation, and a global Masked rule is only ever narrowed or overridden by more specific in-tree rules.
+Global rules are treated as an **ancestor level above every mount root**, and act as a **fail-closed floor**: a repo's own rules (including negation) can freely override each other as usual, but no in-tree rule may re-include a path the global level Hid, or un-mask a path it Masked. `janusfs check`/`explain` flag any in-tree negation that has no effect for this reason.
 
 The `.janusfs` directory layout mirrors other JanusFS on-disk state:
 
@@ -171,7 +177,7 @@ The `.janusfs` directory layout mirrors other JanusFS on-disk state:
 ~/.janusfs/
 ├── config/           # global .janusignore, .janusmask
 ├── run/              # pidfiles for active mounts
-└── history/          # SQLite rollups for the dashboard (Phase 4)
+└── history/          # SQLite rollups for the dashboard
 ```
 
 Perms: `~/.janusfs/` is `0700`, files inside are `0600`.
@@ -196,11 +202,11 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | Command | Purpose |
 |---------|---------|
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
-| `janusfs mount <src> <mountpoint>` | Mount a sanitized view. Blocks; unmount with SIGINT/SIGTERM or `janusfs umount`. |
+| `janusfs mount <src> [mountpoint]` | Mount a sanitized view. `[mountpoint]` may be omitted if `--mount-root <dir>` is set, deriving `<dir>/<basename(src)>` (`--name` overrides the leaf). Blocks; unmount with SIGINT/SIGTERM or `janusfs umount`. |
 | `janusfs umount <mountpoint>` | Unmount a running JanusFS. Best-effort signal to the owning process (via pidfile). |
-| `janusfs check [path]` | Static linter: unknown builtins, bad regex, zero-match globs, directory-mask globs, hidden-dir negations, duplicate rules. `--json` for machine output; exit 1 on errors. |
+| `janusfs check [path]` | Static linter: unknown builtins, bad regex, zero-match globs, directory-mask globs, hidden-dir/global-floor negations that have no effect, duplicate rules. `--json` for machine output; exit 1 on errors. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
-| `janusfs doctor` | *(Phase 5)* Runtime health: FUSE-T status, active mounts, rule counts, cache memory, watcher health. |
+| `janusfs doctor` | Runtime health: macFUSE status, active mounts, engine state, history DB stats, watcher health, cache memory. |
 
 All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
 
@@ -233,10 +239,10 @@ $ janusfs check
 
 ## Security model
 
-- **Trust boundary:** the mountpoint and (once Phase 4 lands) the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted.
+- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted.
 - **Agents cannot weaken policy.** `.janusignore` and `.janusmask` are read-only through the mount, regardless of any user rule. The dashboard API has no mutating endpoints.
 - **Fail-closed under all faults.** Parser errors, watcher overflow, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
-- **No content on disk.** Redacted bytes live only in RAM; the (Phase 4) history DB stores per-path counters and coverage snapshots, **never** file contents.
+- **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
 - **Read path validates every time.** The watcher is advisory — every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving.
 - **`~/.janusfs/` perms:** directory `0700`, files `0600`.
 
@@ -268,7 +274,7 @@ make fmt              # gofmt + goimports
 make vet              # go vet
 make lint             # golangci-lint (optional)
 
-# integration (requires FUSE-T installed)
+# integration (requires macFUSE installed + approved)
 make integration      # -tags fuseintegration
 make leak-oracle      # sentinel-secret scan through real mount
 
@@ -286,18 +292,18 @@ Amendment log for anything the spec didn't cover: **[`docs/SPEC_AMENDMENTS.md`](
 
 ## Status
 
-**Currently:** Phases 0–1 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding), the built-in pattern library, and the static linter (`janusfs check`) plus the per-file tracer (`janusfs explain`) all work today against a real directory tree — no mount required. The FUSE-T mount adapter itself (Phase 0's walking skeleton) is present but Phase 2–4 (masking on the read path, hot reload, dashboard/API/history) are not yet wired up end-to-end.
+**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Hot-reload (`internal/watch`) detects config and data-file changes, debounces, and triggers engine recompilation plus cache invalidation. The observability stack (`internal/obs` + `internal/api`) serves a live dashboard with stat cards, top paths, latency percentiles, and a real-time SSE event feed — with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting.
 
 Roadmap:
 
-- [x] Phase 0 — walking-skeleton FUSE-T passthrough
+- [x] Phase 0 — walking-skeleton macFUSE passthrough
 - [x] Phase 1 — rule engine, three-state resolution, `janusfs init`/`check`/`explain`
-- [ ] Phase 2 — pattern-based masking on the read path
-- [ ] Phase 3 — hot reload, watcher, race-tight leak oracle
-- [ ] Phase 4 — dashboard, history, HTTP API, per-mount token auth
-- [ ] Phase 5 — diagnostics maturity (`janusfs doctor`, conflicts.json)
+- [x] Phase 2 — pattern-based masking wired into the mount, leak oracle green
+- [x] Phase 3 — hot reload, watcher, race-tight leak oracle
+- [x] Phase 4 — dashboard, history, HTTP API, per-mount token auth
+- [x] Phase 5 — diagnostics maturity (`janusfs doctor`, conflicts.json)
 
-MVP is Phases 0–4.
+MVP (Phases 0–4) is complete.
 
 ## License
 

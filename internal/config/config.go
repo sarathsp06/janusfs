@@ -8,11 +8,7 @@
 //
 // Per AGENTS.md / SPEC §21, no package other than cmd/janusfs reads a flag or
 // os.Getenv directly; every tunable named anywhere in SPEC.md must have a
-// field here. Env vars are read via caarlos0/env's struct tags rather than
-// hand-written os.Getenv calls, per docs/SPEC_AMENDMENTS.md (2026-07-16) and
-// SPEC §20.4's amended dependency allowlist — this keeps each tunable's
-// env binding declared once, next to the field, instead of duplicated in a
-// separate parsing function that must be kept in sync by hand.
+// field here. Env vars are read in ApplyEnv via os.Getenv + strconv.
 package config
 
 import (
@@ -21,9 +17,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
-	"github.com/caarlos0/env/v11"
 )
 
 // Default tunable values, per SPEC §11 (--ui-port), §3.8/NFR-4 (cache and
@@ -59,37 +55,50 @@ type Config struct {
 	// Src is the source tree being protected (SPEC §2 "Source tree";
 	// FR-1's required positional <src>). Positional only: not read from
 	// the environment (SPEC FR-1's positionals have no env equivalent).
-	Src string `env:"-"`
+	Src string
 
 	// Mountpoint is where the sanitized view appears (SPEC §2 "Mount
 	// point"; FR-1's required positional <mountpoint>). Positional only.
-	Mountpoint string `env:"-"`
+	Mountpoint string
 
 	// UIPort is the localhost port the dashboard/API listens on
-	// (--ui-port, SPEC §11).
-	UIPort int `env:"JANUSFS_UI_PORT"`
+	// (--ui-port, SPEC §11). Env: JANUSFS_UI_PORT.
+	UIPort int
 
 	// CacheMaxBytes is the RAM-cache budget in bytes (--cache-max-bytes,
-	// SPEC NFR-4).
-	CacheMaxBytes int64 `env:"JANUSFS_CACHE_MAX_BYTES"`
+	// SPEC NFR-4). Env: JANUSFS_CACHE_MAX_BYTES.
+	CacheMaxBytes int64
 
 	// CacheMaxFile is the per-entry cache size cap in bytes; files larger
 	// than this are refused from the cache and streamed instead
-	// (--cache-max-file, SPEC NFR-4).
-	CacheMaxFile int64 `env:"JANUSFS_CACHE_MAX_FILE"`
+	// (--cache-max-file, SPEC NFR-4). Env: JANUSFS_CACHE_MAX_FILE.
+	CacheMaxFile int64
 
 	// HistoryRetentionDays is how many days of history rollups are kept
 	// before pruning (--history-retention, SPEC FR-45).
-	HistoryRetentionDays int `env:"JANUSFS_HISTORY_RETENTION_DAYS"`
+	// Env: JANUSFS_HISTORY_RETENTION_DAYS.
+	HistoryRetentionDays int
 
 	// NoHistory disables history persistence entirely when true
-	// (--no-history, SPEC FR-45).
-	NoHistory bool `env:"JANUSFS_NO_HISTORY"`
+	// (--no-history, SPEC FR-45). Env: JANUSFS_NO_HISTORY.
+	NoHistory bool
 
 	// RedactBufferMax is the hard cap, in bytes, on whole-file buffering
 	// for unbounded custom regexes before failing closed to HIDDEN
-	// (--redact-buffer-max, SPEC §8.2).
-	RedactBufferMax int64 `env:"JANUSFS_REDACT_BUFFER_MAX"`
+	// (--redact-buffer-max, SPEC §8.2). Env: JANUSFS_REDACT_BUFFER_MAX.
+	RedactBufferMax int64
+
+	// MountRoot is the directory under which a mountpoint is derived when
+	// <mountpoint> is omitted (--mount-root, env JANUSFS_MOUNT_ROOT; SPEC
+	// FR-1 amendment, docs/SPEC_AMENDMENTS.md 2026-07-18). Empty disables
+	// derivation: <mountpoint> stays required, per unamended FR-1.
+	MountRoot string
+
+	// Name overrides the derived mountpoint's leaf name (--name) when
+	// MountRoot is set and <mountpoint> is omitted; defaults to
+	// filepath.Base(Src) when empty. Positional-like, not read from the
+	// environment.
+	Name string
 }
 
 // Default returns a Config populated with every tunable's documented default
@@ -107,17 +116,109 @@ func Default() Config {
 	}
 }
 
-// ApplyEnv overlays environment-variable values (via caarlos0/env, using
-// each field's `env` tag) onto cfg in place, leaving any field whose env
-// var is unset untouched. Callers apply this to a Default() config before
-// registering CLI flags, so a flag's default reflects the env override and
-// an explicit flag still wins if the user passes one — the ordering SPEC
-// §15 requires ("CLI flags ... primary ... env vars are a secondary
-// override").
+// ApplyEnv overlays JANUSFS_* environment-variable values onto cfg in place,
+// leaving any field whose env var is unset (or empty) untouched. Callers apply
+// this to a Default() config before registering CLI flags, so a flag's default
+// reflects the env override and an explicit flag still wins if the user passes
+// one — the ordering SPEC §15 requires ("CLI flags ... primary ... env vars
+// are a secondary override").
 func ApplyEnv(cfg *Config) error {
-	if err := env.Parse(cfg); err != nil {
-		return fmt.Errorf("config: parsing environment: %w", err)
+	if err := envInt("JANUSFS_UI_PORT", &cfg.UIPort); err != nil {
+		return err
 	}
+	if err := envInt64("JANUSFS_CACHE_MAX_BYTES", &cfg.CacheMaxBytes); err != nil {
+		return err
+	}
+	if err := envInt64("JANUSFS_CACHE_MAX_FILE", &cfg.CacheMaxFile); err != nil {
+		return err
+	}
+	if err := envInt("JANUSFS_HISTORY_RETENTION_DAYS", &cfg.HistoryRetentionDays); err != nil {
+		return err
+	}
+	if err := envBool("JANUSFS_NO_HISTORY", &cfg.NoHistory); err != nil {
+		return err
+	}
+	if err := envInt64("JANUSFS_REDACT_BUFFER_MAX", &cfg.RedactBufferMax); err != nil {
+		return err
+	}
+	if s, ok := os.LookupEnv("JANUSFS_MOUNT_ROOT"); ok && s != "" {
+		cfg.MountRoot = s
+	}
+	return nil
+}
+
+func envInt(key string, dst *int) error {
+	s, ok := os.LookupEnv(key)
+	if !ok || s == "" {
+		return nil
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("config: parsing %s=%q: %w", key, s, err)
+	}
+	*dst = v
+	return nil
+}
+
+func envInt64(key string, dst *int64) error {
+	s, ok := os.LookupEnv(key)
+	if !ok || s == "" {
+		return nil
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("config: parsing %s=%q: %w", key, s, err)
+	}
+	*dst = v
+	return nil
+}
+
+func envBool(key string, dst *bool) error {
+	s, ok := os.LookupEnv(key)
+	if !ok || s == "" {
+		return nil
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return fmt.Errorf("config: parsing %s=%q: %w", key, s, err)
+	}
+	*dst = v
+	return nil
+}
+
+// ResolveMountpoint implements FR-1's mount-root amendment
+// (docs/SPEC_AMENDMENTS.md 2026-07-18): when Mountpoint is empty and
+// MountRoot is set, it derives Mountpoint as "<MountRoot>/<leaf>" (leaf is
+// Name if set, else filepath.Base(Src)) and creates that directory (0700)
+// if it doesn't exist yet. A no-op if Mountpoint is already set (an
+// explicit mountpoint always wins) or MountRoot is empty (feature off;
+// Validate then requires an explicit mountpoint exactly as unamended FR-1
+// does). Call before Validate. A leaf collision with a live mount (a
+// different <src> sharing the derived leaf) is not silently reused: the
+// derived directory exists but is non-empty, so Validate's existing
+// empty-directory check rejects it via ErrMountpointNotEmpty.
+func (c *Config) ResolveMountpoint() error {
+	if c.Mountpoint != "" || c.MountRoot == "" {
+		return nil
+	}
+	if c.Src == "" {
+		return fmt.Errorf("config: src is required to derive a mountpoint: %w", errEmptyPath)
+	}
+
+	leaf := c.Name
+	if leaf == "" {
+		srcAbs, err := absClean(c.Src)
+		if err != nil {
+			return fmt.Errorf("config: resolving src %q: %w", c.Src, err)
+		}
+		leaf = filepath.Base(srcAbs)
+	}
+
+	derived := filepath.Join(c.MountRoot, leaf)
+	if err := os.MkdirAll(derived, 0o700); err != nil {
+		return fmt.Errorf("config: creating mountpoint %q under --mount-root: %w", derived, err)
+	}
+	c.Mountpoint = derived
 	return nil
 }
 
@@ -164,7 +265,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: checking mountpoint %q: %w", c.Mountpoint, err)
 	}
 	if !empty {
-		return fmt.Errorf("config: mountpoint %q must be an empty directory: %w", c.Mountpoint, errNotEmpty)
+		return fmt.Errorf("config: mountpoint %q must be an empty directory: %w", c.Mountpoint, ErrMountpointNotEmpty)
 	}
 
 	if pathsOverlap(srcAbs, mountAbs) {
@@ -176,8 +277,12 @@ func (c Config) Validate() error {
 
 var (
 	errEmptyPath = errors.New("config: path must not be empty")
-	errNotEmpty  = errors.New("config: directory is not empty")
 	errOverlap   = errors.New("config: src and mountpoint overlap")
+
+	// ErrMountpointNotEmpty is exported so callers deriving a mountpoint
+	// (ResolveMountpoint) can detect a leaf collision with a live mount and
+	// add a --name/explicit-mountpoint remedy (FR-30) via errors.Is.
+	ErrMountpointNotEmpty = errors.New("config: directory is not empty")
 )
 
 // absClean resolves p to an absolute, cleaned, symlink-evaluated path so

@@ -3,13 +3,20 @@
 // evaluates paths against.
 //
 // Discovery is hierarchical (FR-15): a global level at GlobalDir()
-// (docs/SPEC_AMENDMENTS.md 2026-07-17 — not in SPEC.md itself, added as the
-// lowest-precedence level so a user can set machine-wide defaults) plus
-// every directory under a mount root that contains either file. Gitignore
-// semantics (FR-12) are implemented directly in glob.go rather than via a
-// third-party library — see docs/SPEC_AMENDMENTS.md (2026-07-17,
-// "gitignore matcher") for why the originally-planned
-// github.com/sabhiram/go-gitignore was dropped.
+// (docs/SPEC_AMENDMENTS.md 2026-07-17 — not in SPEC.md itself, added as a
+// machine-wide-defaults level) plus every directory under a mount root that
+// contains either file. Gitignore semantics (FR-12) are implemented
+// directly in glob.go rather than via a third-party library — see
+// docs/SPEC_AMENDMENTS.md (2026-07-17, "gitignore matcher") for why the
+// originally-planned github.com/sabhiram/go-gitignore was dropped, and
+// (2026-07-18, "Rule precedence") for why a later doublestar/no-negation
+// proposal was reviewed and withdrawn in favor of keeping this matcher.
+//
+// Precedence (resolve.go) is a two-tier floor per the 2026-07-18 amendment:
+// the global level is a fail-closed floor — no in-tree rule (mount root or
+// any subdirectory) may negate a Hidden/Masked verdict the global level set.
+// Within the in-tree tier, gitignore's own deeper-wins/negation precedence
+// is unchanged from FR-12/FR-15 as written.
 package rules
 
 import (

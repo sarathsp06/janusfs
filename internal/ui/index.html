@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JanusFS — Dashboard</title>
+<style>
+  :root {
+    --parchment: #f4efea;
+    --off-white: #f8f8f7;
+    --pure-white: #ffffff;
+    --signal-yellow: #ffde00;
+    --sky-blue: #6fc2ff;
+    --warm-orange: #ff9538;
+    --black: #000000;
+    --charcoal: #383838;
+    --mid-grey: #666666;
+    --light-grey: #a1a1a1;
+    --radius-sharp: 2px;
+    --sp-xs: 4px;
+    --sp-sm: 8px;
+    --sp-md: 16px;
+    --sp-lg: 20px;
+    --sp-xl: 24px;
+    --sp-2xl: 32px;
+    --sp-3xl: 40px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 16px; }
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--parchment);
+    color: var(--charcoal);
+    line-height: 25.6px;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, .mono { font-family: "Aeonik Mono", "SF Mono", "JetBrains Mono", monospace; font-weight: 400; }
+  h1 { font-size: 32px; line-height: 44.8px; }
+  h2 { font-size: 20px; line-height: 28px; }
+  h3 { font-size: 14px; line-height: 16.8px; letter-spacing: 0.5px; text-transform: uppercase; font-family: "Inter", sans-serif; font-weight: 700; color: var(--mid-grey); }
+  .mono-code { font-family: "Aeonik Mono", "SF Mono", monospace; font-size: 13px; line-height: 18px; }
+
+  .top-bar {
+    position: sticky; top: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: var(--sp-md) var(--sp-2xl);
+    background: var(--signal-yellow);
+    border-bottom: 2px solid var(--charcoal);
+  }
+  .top-bar .brand { display: flex; align-items: center; gap: var(--sp-sm); }
+  .top-bar .brand-mark {
+    width: 16px; height: 16px;
+    background: var(--charcoal);
+    clip-path: polygon(50% 0%, 60% 35%, 100% 50%, 60% 65%, 50% 100%, 40% 65%, 0% 50%, 40% 35%);
+  }
+  .top-bar h1 { font-size: 18px; line-height: 1; color: var(--charcoal); }
+  .top-bar .status { font-size: 14px; color: var(--charcoal); font-weight: 400; }
+  .top-bar .status .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--charcoal); margin-right: 6px;
+  }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: var(--sp-3xl) var(--sp-2xl); }
+
+  .stat-grid { display: grid; gap: var(--sp-xl); grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .stat-card {
+    background: var(--pure-white);
+    border: 2px solid var(--charcoal);
+    border-radius: var(--radius-sharp);
+    padding: var(--sp-lg) var(--sp-xl);
+    box-shadow: -6px 6px 0px 0px var(--charcoal);
+  }
+  .stat-card .value {
+    font-family: "Aeonik Mono", monospace;
+    font-size: 28px; line-height: 1.1; margin-top: var(--sp-sm);
+  }
+  .stat-card .sub { font-size: 13px; color: var(--mid-grey); margin-top: var(--sp-xs); }
+
+  .grid-2 { display: grid; gap: var(--sp-xl); grid-template-columns: 1fr 1fr; }
+  .panel {
+    background: var(--pure-white);
+    border: 2px solid var(--charcoal);
+    border-radius: var(--radius-sharp);
+    padding: var(--sp-xl);
+    box-shadow: -6px 6px 0px 0px var(--charcoal);
+  }
+  .panel h2 {
+    font-family: "Aeonik Mono", monospace;
+    font-size: 20px; line-height: 28px;
+    margin-bottom: var(--sp-lg);
+    padding-bottom: var(--sp-sm);
+    border-bottom: 1px solid var(--charcoal);
+  }
+  .panel .empty-state {
+    padding: var(--sp-2xl) 0; text-align: center;
+    color: var(--light-grey); font-style: normal;
+    font-size: 14px;
+  }
+
+  .coverage-section { margin-bottom: var(--sp-md); }
+  .coverage-section:last-child { margin-bottom: 0; }
+  .coverage-section h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--mid-grey); margin-bottom: var(--sp-sm);
+    font-family: "Inter", sans-serif; font-weight: 700;
+  }
+
+  .file-entry {
+    padding: var(--sp-xs) 0;
+    border-bottom: 1px solid var(--off-white);
+    cursor: pointer;
+  }
+  .file-entry:last-child { border-bottom: none; }
+  .file-entry .header {
+    display: flex; align-items: center; gap: var(--sp-sm);
+    font-size: 13px;
+  }
+  .file-entry .header .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-entry .header .pat { font-size: 11px; color: var(--mid-grey); }
+  .file-entry .header .toggle {
+    font-size: 12px; color: var(--sky-blue); cursor: pointer;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .file-entry .header .toggle:hover { text-decoration: underline; }
+  .file-entry .content {
+    display: none;
+    margin-top: var(--sp-sm); padding: var(--sp-sm);
+    background: var(--off-white); border: 1px solid var(--light-grey);
+    border-radius: var(--radius-sharp);
+    font-family: "Aeonik Mono", monospace;
+    font-size: 12px; line-height: 16px;
+    max-height: 200px; overflow: auto;
+    white-space: pre;
+  }
+  .file-entry .content.loading { color: var(--light-grey); }
+  .file-entry .content.open { display: block; }
+  .file-entry .why { font-size: 11px; color: var(--mid-grey); font-family: "Aeonik Mono", monospace; }
+
+  .config-file { margin-bottom: var(--sp-lg); }
+  .config-file:last-child { margin-bottom: 0; }
+  .config-file .config-path { font-size: 13px; margin-bottom: var(--sp-xs); }
+  .config-file textarea {
+    width: 100%; min-height: 120px; resize: vertical;
+    font-family: "Aeonik Mono", "SF Mono", monospace; font-size: 12px; line-height: 16px;
+    padding: var(--sp-sm); border: 1px solid var(--light-grey); border-radius: var(--radius-sharp);
+    background: var(--off-white);
+  }
+  .config-file .config-actions { margin-top: var(--sp-xs); display: flex; align-items: center; gap: var(--sp-sm); }
+  .config-file button {
+    font-family: "Inter", sans-serif; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 4px 12px; border: 1px solid var(--charcoal); border-radius: var(--radius-sharp);
+    background: var(--pure-white); color: var(--charcoal);
+  }
+  .config-file button:hover { background: var(--signal-yellow); }
+  .config-file .save-status { font-size: 12px; color: var(--mid-grey); }
+
+  table.data { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.data th {
+    text-align: left; font-weight: 600; color: var(--mid-grey);
+    padding: var(--sp-sm) var(--sp-sm);
+    border-bottom: 2px solid var(--charcoal);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  table.data td { padding: var(--sp-sm); border-bottom: 1px solid var(--light-grey); }
+  table.data tr:last-child td { border-bottom: none; }
+  .allowed { color: #2e7d32; }
+  .masked { color: var(--warm-orange); }
+  .hidden { color: #d32f2f; }
+
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: var(--radius-sharp);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    border: 1px solid;
+  }
+  .badge.masked { background: #fff3e0; color: #bf5b1a; border-color: #bf5b1a; }
+  .badge.hidden { background: #ffebee; color: #c62828; border-color: #c62828; }
+
+  .events-feed { max-height: 300px; overflow-y: auto; font-size: 13px; }
+  .events-feed .event {
+    padding: var(--sp-xs) 0; border-bottom: 1px solid var(--off-white);
+    font-size: 12px;
+  }
+  .events-feed .event.denied { background: #fff5f5; }
+
+  .section-tabs { display: flex; gap: 0; margin-bottom: var(--sp-md); border: 1px solid var(--charcoal); border-radius: var(--radius-sharp); overflow: hidden; }
+  .section-tabs .tab {
+    flex: 1; text-align: center; padding: var(--sp-sm) var(--sp-md);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    font-weight: 600; cursor: pointer; background: var(--off-white); color: var(--mid-grey);
+    transition: none;
+  }
+  .section-tabs .tab.active { background: var(--pure-white); color: var(--charcoal); box-shadow: inset 0 -2px 0 var(--charcoal); }
+  .section-tabs .tab:not(:last-child) { border-right: 1px solid var(--charcoal); }
+
+  @media (max-width: 768px) {
+    .stat-grid { grid-template-columns: 1fr 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .container { padding: var(--sp-xl) var(--sp-md); }
+  }
+  @media (max-width: 480px) {
+    .stat-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="top-bar">
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <h1>JanusFS</h1>
+  </div>
+  <div class="status" id="status-bar">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-label">connecting...</span>
+    <span style="margin:0 var(--sp-sm);opacity:0.3">|</span>
+    <span id="generation-label">gen —</span>
+    <span style="margin:0 var(--sp-sm);opacity:0.3">|</span>
+    <span id="mount-label"></span>
+  </div>
+</div>
+
+<div class="container">
+  <div class="stat-grid" id="stat-cards">
+    <div class="stat-card">
+      <h3>Allowed Ops</h3>
+      <div class="value" id="stat-allowed">—</div>
+      <div class="sub">total operations</div>
+    </div>
+    <div class="stat-card">
+      <h3>Masked Ops</h3>
+      <div class="value" id="stat-masked">—</div>
+      <div class="sub">redacted reads</div>
+    </div>
+    <div class="stat-card">
+      <h3>Hidden Denials</h3>
+      <div class="value" id="stat-hidden">—</div>
+      <div class="sub">EACCES events</div>
+    </div>
+    <div class="stat-card">
+      <h3>Cache</h3>
+      <div class="value" id="stat-cache">—</div>
+      <div class="sub">hit / miss / rebuild</div>
+    </div>
+  </div>
+
+  <div style="margin-top:var(--sp-3xl)">
+    <div class="grid-2">
+      <div class="panel" id="coverage-panel">
+        <h2>Coverage</h2>
+        <div class="section-tabs">
+          <div class="tab active" data-tab="masked" onclick="switchCoverageTab('masked')">Masked</div>
+          <div class="tab" data-tab="hidden" onclick="switchCoverageTab('hidden')">Hidden</div>
+        </div>
+        <div id="coverage-masked"><div class="empty-state">Loading...</div></div>
+        <div id="coverage-hidden" style="display:none"><div class="empty-state">No hidden files</div></div>
+      </div>
+      <div class="panel">
+        <h2>Denied Access</h2>
+        <div class="events-feed" id="denied-feed"><div class="empty-state">No denials yet — agent is behaving</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:var(--sp-xl)">
+    <div class="grid-2">
+      <div class="panel">
+        <h2>Live Events</h2>
+        <div class="events-feed" id="events-feed"><div class="empty-state">Waiting for events...</div></div>
+      </div>
+      <div class="panel">
+        <h2>Latency</h2>
+        <div id="latency-panel"><div class="empty-state">No latency data yet</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:var(--sp-xl)">
+    <div class="panel" style="max-width:100%">
+      <h2>Config Editor</h2>
+      <div id="config-editor"><div class="empty-state">Loading config files...</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  var params = new URLSearchParams(window.location.search);
+  var token = params.get('token') || '';
+
+  function apiURL(path) {
+    var base = window.location.origin;
+    return base + path + (token ? '?token=' + encodeURIComponent(token) : '');
+  }
+
+  var POLL = 2000;
+  var activeTab = 'masked';
+
+  window.switchCoverageTab = function(tab) {
+    activeTab = tab;
+    document.querySelectorAll('.section-tabs .tab').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    document.getElementById('coverage-masked').style.display = tab === 'masked' ? 'block' : 'none';
+    document.getElementById('coverage-hidden').style.display = tab === 'hidden' ? 'block' : 'none';
+  };
+
+  function fetchSummary() {
+    fetch(apiURL('/api/v1/summary'))
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data) { renderSummary(data.snapshot); })
+      .catch(function() { setStatus('disconnected'); });
+  }
+
+  function renderSummary(snap) {
+    var ops = snap.ops || {};
+    var a = 0, m = 0, h = 0;
+    for (var k in ops) {
+      if (k.endsWith(':ALLOWED')) a += ops[k];
+      else if (k.endsWith(':MASKED')) m += ops[k];
+      else if (k.endsWith(':HIDDEN')) h += ops[k];
+    }
+    document.getElementById('stat-allowed').textContent = fmtNum(a);
+    document.getElementById('stat-masked').textContent = fmtNum(m);
+    document.getElementById('stat-hidden').textContent = fmtNum(h);
+    document.getElementById('stat-cache').textContent = fmtNum(snap.cacheHits || 0) + ' / ' + fmtNum(snap.cacheMisses || 0) + ' / ' + fmtNum(snap.cacheRebuilds || 0);
+    document.getElementById('generation-label').textContent = 'gen ' + (snap.generation || '—');
+    setStatus('live');
+  }
+
+  function fetchCoverage() {
+    fetch(apiURL('/api/v1/coverage'))
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data) { renderCoverage(data); })
+      .catch(function() {});
+  }
+
+  function renderCoverage(data) {
+    var masked = data.masked || [];
+    var hidden = data.hidden || [];
+    renderFileList('coverage-masked', masked, 'masked');
+    renderFileList('coverage-hidden', hidden, 'hidden');
+  }
+
+  function renderFileList(id, entries, kind) {
+    var el = document.getElementById(id);
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="empty-state">No ' + kind + ' files</div>';
+      return;
+    }
+    var html = '<div class="coverage-section">';
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var patStr = e.patterns && e.patterns.length ? '<span class="pat">' + esc(e.patterns.join(', ')) + '</span>' : '';
+      var ruleStr = e.rule ? '<div class="why">why: <span class="mono-code">' + esc(e.rule) + '</span></div>' : '';
+      html += '<div class="file-entry">';
+      html += '<div class="header">';
+      html += '<span class="badge ' + kind + '">' + kind.charAt(0) + '</span>';
+      html += '<span class="path mono-code">' + esc(e.path) + '</span>';
+      html += patStr;
+      html += '<span class="toggle" onclick="event.stopPropagation();revealFile(this,\'' + escJS(e.path) + '\')">show</span>';
+      html += '</div>';
+      html += ruleStr;
+      html += '<div class="content" data-path="' + escAttr(e.path) + '"></div>';
+      html += '</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  window.revealFile = function(btn, path) {
+    var entry = btn.closest('.file-entry');
+    var content = entry.querySelector('.content');
+    if (content.classList.contains('open')) {
+      content.classList.remove('open');
+      btn.textContent = 'show';
+      return;
+    }
+    content.classList.add('open', 'loading');
+    content.textContent = 'Loading...';
+    btn.textContent = 'hide';
+    fetch(apiURL('/api/v1/reveal?path=' + encodeURIComponent(path)))
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function(text) {
+        content.classList.remove('loading');
+        content.textContent = text;
+      })
+      .catch(function() {
+        content.classList.remove('loading');
+        content.textContent = '(error loading file)';
+      });
+  };
+
+  function fetchConfig() {
+    fetch(apiURL('/api/v1/config'))
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data) { renderConfig(data.files || []); })
+      .catch(function() {
+        document.getElementById('config-editor').innerHTML = '<div class="empty-state">Could not load config files</div>';
+      });
+  }
+
+  function renderConfig(files) {
+    var el = document.getElementById('config-editor');
+    if (files.length === 0) {
+      el.innerHTML = '<div class="empty-state">No .janusignore or .janusmask files found</div>';
+      return;
+    }
+    el.innerHTML = '';
+    files.forEach(function(f) {
+      var box = document.createElement('div');
+      box.className = 'config-file';
+      var textareaId = 'cfg-' + Math.random().toString(36).slice(2);
+      box.innerHTML =
+        '<div class="config-path mono-code">' + esc(f.path) + '</div>' +
+        '<textarea id="' + textareaId + '" spellcheck="false">' + esc(f.content) + '</textarea>' +
+        '<div class="config-actions">' +
+          '<button type="button">Save</button>' +
+          '<span class="save-status"></span>' +
+        '</div>';
+      box.querySelector('button').addEventListener('click', function() {
+        saveConfig(f.path, document.getElementById(textareaId).value, box.querySelector('.save-status'));
+      });
+      el.appendChild(box);
+    });
+  }
+
+  function saveConfig(path, content, statusEl) {
+    statusEl.textContent = 'Saving...';
+    fetch(apiURL('/api/v1/config'), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: path, content: content})
+    })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function() { statusEl.textContent = 'Saved'; setTimeout(function() { statusEl.textContent = ''; }, 2000); })
+      .catch(function() { statusEl.textContent = 'Save failed'; });
+  }
+
+  function fetchLatency() {
+    fetch(apiURL('/api/v1/latency'))
+      .then(function(r) { if (!r.ok) return; return r.json(); })
+      .then(function(data) { renderLatency(data.ops); })
+      .catch(function() {});
+  }
+
+  function renderLatency(ops) {
+    var el = document.getElementById('latency-panel');
+    if (!ops || ops.length === 0) {
+      el.innerHTML = '<div class="empty-state">No latency data yet</div>';
+      return;
+    }
+    var html = '<table class="data"><tr><th>Op</th><th>p50</th><th>p90</th><th>p99</th><th>Avg</th><th>Hits</th></tr>';
+    for (var i = 0; i < ops.length; i++) {
+      var o = ops[i];
+      html += '<tr><td class="mono-code">' + esc(o.op) + '</td><td>' + fmtUs(o.p50) + '</td><td>' + fmtUs(o.p90) + '</td><td>' + fmtUs(o.p99) + '</td><td>' + fmtUs(o.avg) + '</td><td>' + fmtNum(o.hits) + '</td></tr>';
+    }
+    html += '</table>';
+    el.innerHTML = html;
+  }
+
+  function connectSSE() {
+    var el = document.getElementById('events-feed');
+    var denied = document.getElementById('denied-feed');
+    var url = apiURL('/api/v1/events');
+    var es = new EventSource(url);
+
+    es.onmessage = function(e) {
+      if (e.data === '{"type":"done"}') return;
+
+      // Live events feed (all events)
+      var line = document.createElement('div');
+      line.className = 'event mono-code';
+      try {
+        var parsed = JSON.parse(e.data);
+        var text = parsed.Op + ' ' + parsed.Decision + ' ' + parsed.Path;
+        if (parsed.Bytes) text += ' ' + fmtBytes(parsed.Bytes);
+        if (parsed.LatencyUs) text += ' ' + fmtUs(parsed.LatencyUs);
+        line.textContent = text;
+      } catch(_) {
+        line.textContent = e.data;
+      }
+      el.appendChild(line);
+      if (el.children.length > 200) el.removeChild(el.firstChild);
+      el.scrollTop = el.scrollHeight;
+
+      // Denied access feed (HIDDEN denials only)
+      try {
+        var p = JSON.parse(e.data);
+        if (p.Decision === 'HIDDEN') {
+          var dline = document.createElement('div');
+          dline.className = 'event mono-code denied';
+          dline.textContent = p.Op + ' ' + p.Path + ' ' + fmtTimeAgo(Date.now());
+          if (denied.querySelector('.empty-state')) denied.innerHTML = '';
+          denied.appendChild(dline);
+          if (denied.children.length > 100) denied.removeChild(denied.firstChild);
+          denied.scrollTop = denied.scrollHeight;
+        }
+      } catch(_) {}
+    };
+
+    es.onerror = function() {
+      el.innerHTML += '<div class="event mono-code" style="color:var(--light-grey);">reconnecting...</div>';
+      es.close();
+      setTimeout(connectSSE, 3000);
+    };
+  }
+
+  function setStatus(s) {
+    var dot = document.getElementById('status-dot');
+    var label = document.getElementById('status-label');
+    if (s === 'live') {
+      dot.style.background = '#2e7d32';
+      label.textContent = 'live';
+    } else {
+      dot.style.background = '#c62828';
+      label.textContent = 'disconnected';
+    }
+  }
+
+  function fmtTimeAgo(now) {
+    var s = Math.floor((now - Date.now()) / 1000);
+    if (s < 5) return 'just now';
+    if (s < 60) return s + 's ago';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ago';
+    return Math.floor(m / 60) + 'h ago';
+  }
+
+  function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function escJS(s) { return s.replace(/'/g, "\\'"); }
+  function escAttr(s) { return s.replace(/"/g, '&quot;'); }
+  function fmtNum(n) { if (n === undefined || n === null) return '—'; return n.toLocaleString(); }
+  function fmtBytes(b) {
+    if (!b || b === 0) return '—';
+    if (b >= 1073741824) return (b/1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576) return (b/1048576).toFixed(1) + ' MB';
+    if (b >= 1024) return (b/1024).toFixed(1) + ' KB';
+    return b + ' B';
+  }
+  function fmtUs(us) {
+    if (!us || us === 0) return '—';
+    if (us >= 1000000) return (us/1000000).toFixed(2) + ' s';
+    if (us >= 1000) return (us/1000).toFixed(1) + ' ms';
+    return Math.round(us) + ' µs';
+  }
+
+  document.getElementById('mount-label').textContent = window.location.host;
+  fetchSummary();
+  fetchCoverage();
+  fetchConfig();
+  fetchLatency();
+  connectSSE();
+  setInterval(fetchSummary, POLL);
+  setInterval(fetchLatency, POLL);
+})();
+</script>
+</body>
+</html>

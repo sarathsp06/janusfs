@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // pidfilePath implements FR-3's "pidfile at ~/.janusfs/run/<hash-of-mountpoint>.pid":
@@ -63,6 +64,19 @@ func readPidfile(mountpoint string) (int, error) {
 		return 0, fmt.Errorf("pidfile: parsing %q: %w", path, err)
 	}
 	return pid, nil
+}
+
+// pidAlive reports whether pid names a live process, using the POSIX
+// "signal 0" existence probe: no signal is actually delivered, only the
+// existence/permission check is performed. EPERM (process exists but is
+// owned by another user) still counts as alive — a real collision either
+// way, not something to mount over.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
 }
 
 // removePidfile deletes the pidfile for mountpoint, if any. Never treated as

@@ -44,3 +44,27 @@ Copy this into the phase's exit review:
 
 ### Phase 0
 - No user data flows through the system yet (passthrough only, no rules). Primary risk: an incorrect FUSE adapter silently corrupting or losing data in `<src>` during the spike. Mitigation: spike run only against disposable fixture trees, never a real project directory.
+
+### Phase 3 — Change detection (hot-reload, watcher)
+
+**New components:** `internal/watch` (fsnotify-based recursive watcher), watcher wiring in `cmd/janusfs/mount.go` (debounce + recompiler goroutine).
+
+**Security review:**
+
+- **Watcher is advisory-only (FR-21).** The authoritative change detector is the per-read mtime/size/inode backstop in `internal/provider` (which existed before Phase 3). Even if the watcher misses an event, fails, or is not created (non-fatal), no unredacted bytes can leak — the backstop ensures cache staleness is detected independently. This is the key security property of the Phase 3 design.
+
+- **Fail-closed on recompile error.** If `engine.Reload` fails (e.g., a newly written `.janusignore` has a syntax error), `provider.InvalidateAll` is still called, so the cache is cleared of any content keyed to a stale rule set. The engine retains the *previous* valid rule set (FR-18: "the previous compiled generation serves until the new one is atomically swapped") — readers see the old rules, never an unredacted file that a new-but-broken rule would have masked.
+
+- **Fail-closed on watcher overflow/error.** If `fsnotify` drops events (inotify/kqueue queue overflow) or returns an error from the Errors channel, the watcher signals the consumer via `onData("", 0)`, which triggers `provider.InvalidateAll()`. This is safe because: (a) the backstop re-validates every cache entry on subsequent reads anyway, and (b) full invalidation is conservative — it only causes a brief performance cost from cache miss, never a leak.
+
+- **No file content passes through the watcher.** The watcher only receives file *paths* and event *types* (Create/Write/Remove/etc.) from fsnotify. It never opens, reads, or buffers file content. Logs from the watcher carry the config file path that changed (for debuggability) and the generation number after reload — never matched bytes or pattern-matched content (NFR-1).
+
+- **Race between watcher event and concurrent read.** A data-file write triggers `provider.Invalidate(path)`. If a concurrent FUSE handler is mid-read on that path's cached entry, the invalidation deletes the entry from the cache map. The in-flight read's `waitAndServe` already has a reference to the entry's `bytes` slice — that goroutine finishes with whatever it had, and a subsequent read will miss the cache and trigger a rebuild. This is safe: the in-flight read served the *old* version, not unredacted bytes. The reloaded version is redacted with the same pattern set (or a new one, caught by the pattern-set-signature check in `waitAndServe`, which fails closed to EIO on mismatch).
+
+**Checklist (Phase 3 exit):**
+
+- [x] New leak channels introduced this phase: none. The watcher is advisory-only, never reads content, logs only paths and generations.
+- [x] Fail-closed behavior verified for every new error path: recompile failure → old rules + full cache invalidate; watcher overflow/error → `InvalidateAll`; watcher creation failure → mount proceeds without hot-reload.
+- [x] Leak oracle: not extended (Phase 3 adds no new masking/parsing surface; the oracle remains armed from Phase 1/2 for its existing sentinels).
+- [x] No new dependency outside SPEC §20.4's allowlist: `fsnotify` is specifically allowed ("fsnotify" listed without asking in §20.4 and §9).
+- [x] Logging/error-handling conventions (§21) followed: watcher logs use `internal/logging.New("watch")` (not bare `slog`), carry only paths and event metadata, never file content. `ToErrno` translation point is untouched (watcher doesn't produce errno values).
