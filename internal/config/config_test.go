@@ -213,24 +213,6 @@ func TestResolveMountpoint_MirrorsFullSrcPath(t *testing.T) {
 	}
 }
 
-func TestResolveMountpoint_NameOverridesLeaf(t *testing.T) {
-	root := t.TempDir()
-	src := t.TempDir()
-
-	c := Default()
-	c.Src = src
-	c.MountRoot = root
-	c.Name = "custom-name"
-
-	if err := c.ResolveMountpoint(); err != nil {
-		t.Fatalf("ResolveMountpoint() error = %v", err)
-	}
-	want := filepath.Join(root, "custom-name")
-	if c.Mountpoint != want {
-		t.Errorf("Mountpoint = %q, want %q", c.Mountpoint, want)
-	}
-}
-
 func TestResolveMountpoint_DistinctSourcesDontCollide(t *testing.T) {
 	root := t.TempDir()
 	srcA := filepath.Join(t.TempDir(), "shared")
@@ -306,14 +288,14 @@ func TestMountsRegistry_RoundTrip(t *testing.T) {
 		t.Fatalf("RemoveMount on empty registry = %v, want nil", err)
 	}
 
-	if err := RecordMount("/src/a", "/mnt/a"); err != nil {
+	if err := RecordMount("/src/a", "/mnt/a", "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordMount("/src/b", "/mnt/b"); err != nil {
+	if err := RecordMount("/src/b", "/mnt/b", ""); err != nil {
 		t.Fatal(err)
 	}
-	// Re-record the same mountpoint: upsert, not duplicate; src updated.
-	if err := RecordMount("/src/a2", "/mnt/a"); err != nil {
+	// Re-record the same mountpoint: upsert, not duplicate; src + label updated.
+	if err := RecordMount("/src/a2", "/mnt/a", "alpha2"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,12 +306,12 @@ func TestMountsRegistry_RoundTrip(t *testing.T) {
 	if len(recs) != 2 {
 		t.Fatalf("registry has %d entries, want 2 (upsert should not duplicate): %+v", len(recs), recs)
 	}
-	got := map[string]string{}
+	got := map[string]MountRecord{}
 	for _, r := range recs {
-		got[r.Mountpoint] = r.Src
+		got[r.Mountpoint] = r
 	}
-	if got["/mnt/a"] != "/src/a2" {
-		t.Errorf("upsert did not update src: /mnt/a -> %q, want /src/a2", got["/mnt/a"])
+	if got["/mnt/a"].Src != "/src/a2" || got["/mnt/a"].Label != "alpha2" {
+		t.Errorf("upsert did not update record: /mnt/a -> %+v, want src /src/a2 label alpha2", got["/mnt/a"])
 	}
 
 	if err := RemoveMount("/mnt/a"); err != nil {

@@ -93,12 +93,6 @@ type Config struct {
 	// FR-1 amendment, docs/SPEC_AMENDMENTS.md 2026-07-18). Empty disables
 	// derivation: <mountpoint> stays required, per unamended FR-1.
 	MountRoot string
-
-	// Name overrides the derived mountpoint's leaf name (--name) when
-	// MountRoot is set and <mountpoint> is omitted; defaults to
-	// filepath.Base(Src) when empty. Positional-like, not read from the
-	// environment.
-	Name string
 }
 
 // Default returns a Config populated with every tunable's documented default
@@ -221,11 +215,13 @@ func MountsPath() (string, error) {
 	return filepath.Join(home, ".janusfs", "mounts.json"), nil
 }
 
-// MountRecord is one entry in the mounts registry: a src/mountpoint pair
-// that `janusfs resume` can remount.
+// MountRecord is one entry in the mounts registry: a src/mountpoint pair the
+// daemon can remount on start, plus an optional human label shown in the
+// dashboard.
 type MountRecord struct {
 	Src        string `json:"src"`
 	Mountpoint string `json:"mountpoint"`
+	Label      string `json:"label,omitempty"`
 }
 
 // LoadMounts reads the mounts registry. A missing file is not an error.
@@ -263,9 +259,9 @@ func saveMounts(records []MountRecord) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
-// RecordMount upserts (src, mountpoint) into the mounts registry, keyed by
-// mountpoint, so a later `janusfs resume` knows to remount it.
-func RecordMount(src, mountpoint string) error {
+// RecordMount upserts (src, mountpoint, label) into the mounts registry, keyed
+// by mountpoint, so the daemon can remount it on start with the same label.
+func RecordMount(src, mountpoint, label string) error {
 	records, err := LoadMounts()
 	if err != nil {
 		return err
@@ -273,10 +269,11 @@ func RecordMount(src, mountpoint string) error {
 	for i, r := range records {
 		if r.Mountpoint == mountpoint {
 			records[i].Src = src
+			records[i].Label = label
 			return saveMounts(records)
 		}
 	}
-	records = append(records, MountRecord{Src: src, Mountpoint: mountpoint})
+	records = append(records, MountRecord{Src: src, Mountpoint: mountpoint, Label: label})
 	return saveMounts(records)
 }
 
@@ -340,12 +337,11 @@ func envBool(key string, dst *bool) error {
 // MountRoot is set, creating the directory (0700) if it doesn't exist yet.
 // A no-op if Mountpoint is already set or MountRoot is empty. Call before Validate.
 //
-// Default derivation mirrors the source's full, symlink-resolved absolute
-// path under MountRoot: `mount /Users/me/projects/app` with root ~/janusroot
-// mounts at ~/janusroot/Users/me/projects/app. Every source maps to a unique,
-// predictable location — two sources never collide.
-//
-// --name is the opt-in escape hatch to a short leaf (<MountRoot>/<Name>).
+// The derived path mirrors the source's full, symlink-resolved absolute path
+// under MountRoot: `mount /Users/me/projects/app` with root ~/janusroot mounts
+// at ~/janusroot/Users/me/projects/app. Every source maps to a unique,
+// predictable location — two sources never collide, and there is deliberately
+// no override: a friendly name is a dashboard label, not a different path.
 func (c *Config) ResolveMountpoint() error {
 	if c.Mountpoint != "" || c.MountRoot == "" {
 		return nil
@@ -353,18 +349,13 @@ func (c *Config) ResolveMountpoint() error {
 	if c.Src == "" {
 		return fmt.Errorf("config: src is required to derive a mountpoint: %w", errEmptyPath)
 	}
-	var derived string
-	if c.Name != "" {
-		derived = filepath.Join(c.MountRoot, c.Name)
-	} else {
-		srcAbs, err := absClean(c.Src)
-		if err != nil {
-			return fmt.Errorf("config: resolving src %q: %w", c.Src, err)
-		}
-		// filepath.Join cleans the leading slash of srcAbs, nesting the full
-		// source path under MountRoot rather than anchoring at it.
-		derived = filepath.Join(c.MountRoot, srcAbs)
+	srcAbs, err := absClean(c.Src)
+	if err != nil {
+		return fmt.Errorf("config: resolving src %q: %w", c.Src, err)
 	}
+	// filepath.Join cleans the leading slash of srcAbs, nesting the full
+	// source path under MountRoot rather than anchoring at it.
+	derived := filepath.Join(c.MountRoot, srcAbs)
 	if err := os.MkdirAll(derived, 0o700); err != nil {
 		return fmt.Errorf("config: creating mountpoint %q under --mount-root: %w", derived, err)
 	}

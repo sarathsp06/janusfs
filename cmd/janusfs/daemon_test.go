@@ -12,13 +12,13 @@ import (
 
 // fakeRuntime builds a mountRuntime with just the fields the daemon's
 // status/index/list code reads — no FUSE, no goroutines.
-func fakeRuntime(src, mp string, port int, token string) *mountRuntime {
-	return &mountRuntime{Src: src, Mountpoint: mp, UIPort: port, Token: token}
+func fakeRuntime(src, mp, label string, port int, token string) *mountRuntime {
+	return &mountRuntime{Src: src, Mountpoint: mp, Label: label, UIPort: port, Token: token}
 }
 
-func TestDaemonIndex_RendersAndEscapes(t *testing.T) {
+func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/<script>", "/mnt/a", 1234, "tok-abc"),
+		"/mnt/a": fakeRuntime("/src/<script>", "/mnt/a", "My <b>Project</b>", 1234, "tok-abc"),
 	}}
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -31,11 +31,25 @@ func TestDaemonIndex_RendersAndEscapes(t *testing.T) {
 	if !strings.Contains(body, "localhost:1234/?token=tok-abc") {
 		t.Errorf("index missing per-mount dashboard link, got %q", body)
 	}
-	if strings.Contains(body, "<script>") {
-		t.Errorf("index did not escape source path: %q", body)
+	if !strings.Contains(body, "My &lt;b&gt;Project&lt;/b&gt;") {
+		t.Errorf("index did not show the escaped label, got %q", body)
+	}
+	if strings.Contains(body, "<script>") || strings.Contains(body, "<b>Project") {
+		t.Errorf("index did not escape user-supplied text: %q", body)
 	}
 	if !strings.Contains(body, "1 mount(s)") {
 		t.Errorf("index missing mount count, got %q", body)
+	}
+}
+
+func TestDaemonIndex_FallsBackToSrcWithoutLabel(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{
+		"/mnt/a": fakeRuntime("/src/proj", "/mnt/a", "", 1, "t"),
+	}}
+	w := httptest.NewRecorder()
+	d.handleIndex(w, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(w.Body.String(), "/src/proj") {
+		t.Errorf("index should fall back to src when no label; got %q", w.Body.String())
 	}
 }
 
@@ -79,7 +93,7 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", 7, "t"),
+		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", 7, "t"),
 	}}
 
 	sock, err := socketPath()

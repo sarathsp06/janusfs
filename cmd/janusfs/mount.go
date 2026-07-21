@@ -28,21 +28,18 @@ func newMountCmd() *cobra.Command {
 	var noHistory bool
 
 	cmd := &cobra.Command{
-		Use:   "mount <src> [mountpoint]",
+		Use:   "mount <src>",
 		Short: "Ask the daemon to mount a sanitized view of <src> (returns immediately)",
 		Long: "Hands a mount to the running janusfs daemon and returns; the daemon owns the\n" +
 			"mount and keeps it alive across reboots (via `janusfs daemon`) until you run\n" +
-			"`janusfs umount`. Start the daemon first with `janusfs daemon`.",
-		Args: cobra.RangeArgs(1, 2),
+			"`janusfs umount`. The mountpoint mirrors <src>'s full path under the mount\n" +
+			"root — there is no path override. Start the daemon first with `janusfs daemon`.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := daemonRequest{Cmd: "mount", Src: args[0], Name: name, NoHistory: noHistory}
-			if len(args) == 2 {
-				req.Mountpoint = args[1]
-			}
-			return runMount(req)
+			return runMount(daemonRequest{Cmd: "mount", Src: args[0], Label: name, NoHistory: noHistory})
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "leaf name for the derived mountpoint (default: mirror the source's full path)")
+	cmd.Flags().StringVar(&name, "name", "", "friendly label for this mount, shown in the dashboard (does not change the path)")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "disable history persistence for this mount")
 	return cmd
 }

@@ -31,6 +31,7 @@ import (
 type mountRuntime struct {
 	Src        string
 	Mountpoint string
+	Label      string // friendly name for the dashboard; empty falls back to Src
 	Token      string
 	UIPort     int // actual bound dashboard port
 

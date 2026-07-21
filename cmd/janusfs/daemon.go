@@ -26,10 +26,10 @@ import (
 // daemonRequest is one command sent by a `janusfs mount`/`umount`/`daemon
 // status` client over the control socket. One JSON object per connection.
 type daemonRequest struct {
-	Cmd        string `json:"cmd"` // "mount" | "unmount" | "list"
-	Src        string `json:"src,omitempty"`
-	Mountpoint string `json:"mountpoint,omitempty"`
-	Name       string `json:"name,omitempty"`
+	Cmd        string `json:"cmd"`                  // "mount" | "unmount" | "list"
+	Src        string `json:"src,omitempty"`        // mount: source tree
+	Mountpoint string `json:"mountpoint,omitempty"` // unmount: mountpoint or src; resume: exact recorded mountpoint
+	Label      string `json:"label,omitempty"`      // mount: friendly dashboard name (not a path)
 	NoHistory  bool   `json:"no_history,omitempty"`
 }
 
@@ -42,6 +42,7 @@ type daemonResponse struct {
 
 type mountStatus struct {
 	Src        string `json:"src"`
+	Label      string `json:"label,omitempty"`
 	Mountpoint string `json:"mountpoint"`
 	Dashboard  string `json:"dashboard"`
 }
@@ -211,15 +212,14 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	cfg := d.base
 	cfg.UIPort = 0 // auto-assign a free per-mount dashboard port
 	cfg.Src = req.Src
-	cfg.Mountpoint = req.Mountpoint
-	cfg.Name = req.Name
+	cfg.Mountpoint = req.Mountpoint // empty for a client mount (derived); set only on resume
 	cfg.NoHistory = req.NoHistory || d.base.NoHistory
 
 	if err := cfg.ResolveMountpoint(); err != nil {
 		return daemonResponse{Error: err.Error()}
 	}
 	if cfg.Mountpoint == "" {
-		return daemonResponse{Error: "no mountpoint: pass one explicitly or configure a mount root (janusfs install)"}
+		return daemonResponse{Error: "no mount root configured: run `janusfs install` (or set --mount-root/JANUSFS_MOUNT_ROOT)"}
 	}
 	mpAbs, err := filepath.Abs(cfg.Mountpoint)
 	if err != nil {
@@ -242,6 +242,7 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	if err != nil {
 		return daemonResponse{Error: err.Error()}
 	}
+	rt.Label = req.Label
 
 	d.mu.Lock()
 	d.mounts[mpAbs] = rt
@@ -249,7 +250,7 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 
 	_ = writePidfile(mpAbs) // records the daemon PID; keeps the double-mount guard working
 	srcAbs, _ := filepath.Abs(cfg.Src)
-	if err := config.RecordMount(srcAbs, mpAbs); err != nil {
+	if err := config.RecordMount(srcAbs, mpAbs, req.Label); err != nil {
 		d.logger.Warn("failed to record mount", "error", err)
 	}
 
@@ -313,7 +314,7 @@ func (d *daemon) resume() {
 		return
 	}
 	for _, rec := range records {
-		resp := d.doMount(daemonRequest{Cmd: "mount", Src: rec.Src, Mountpoint: rec.Mountpoint})
+		resp := d.doMount(daemonRequest{Cmd: "mount", Src: rec.Src, Mountpoint: rec.Mountpoint, Label: rec.Label})
 		if resp.OK {
 			d.logger.Info("resumed mount", "src", rec.Src, "mountpoint", rec.Mountpoint)
 		} else {
@@ -349,6 +350,7 @@ func (d *daemon) shutdown() {
 func (d *daemon) status(rt *mountRuntime) mountStatus {
 	return mountStatus{
 		Src:        rt.Src,
+		Label:      rt.Label,
 		Mountpoint: rt.Mountpoint,
 		Dashboard:  fmt.Sprintf("http://localhost:%d/?token=%s", rt.UIPort, rt.Token),
 	}
@@ -384,8 +386,12 @@ func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "<p>No active mounts. Run <code>janusfs mount &lt;src&gt;</code>.</p>")
 	}
 	for _, m := range mounts {
+		title := m.Label
+		if title == "" {
+			title = m.Src
+		}
 		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a><div class=\"mp\">%s</div></li>",
-			html.EscapeString(m.Dashboard), html.EscapeString(m.Src), html.EscapeString(m.Mountpoint))
+			html.EscapeString(m.Dashboard), html.EscapeString(title), html.EscapeString(m.Mountpoint))
 	}
 	fmt.Fprint(w, "</ul></body></html>")
 }

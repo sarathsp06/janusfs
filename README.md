@@ -110,9 +110,11 @@ janusfs mount .
 # never at the real path. Unmount later with:  janusfs umount .
 ```
 
-The mountpoint mirrors the source's full path under your mount root (e.g.
-`~/.janusfs/mounts/Users/you/my-project`), so two sources never collide. Pass
-an explicit `[mountpoint]` or `--name <leaf>` if you want a shorter path.
+The mountpoint always mirrors the source's full path under your mount root
+(e.g. `~/.janusfs/mounts/Users/you/my-project`), so two sources never collide
+and the location is fully predictable — there's no path override. To give a
+mount a friendly name in the dashboard, pass `--name "My Project"`; it's a
+display label only and never changes the path.
 
 Every file that reaches the agent has been filtered (`$MP` is the mountpoint `janusfs mount` printed):
 
@@ -257,7 +259,7 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 |---------|---------|
 | `janusfs install` | One-time setup: choose a mount root (saved to `~/.janusfs/settings.json`) so `janusfs mount <src>` needs no `--mount-root`. `--global-rules` also seeds `~/.janusfs/config/`. |
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
-| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a sanitized view and return immediately. `[mountpoint]` is optional — the mountpoint mirrors `<src>`'s full path under the mount root (`--name` overrides the leaf). |
+| `janusfs mount <src>` | Ask the daemon to mount a sanitized view and return immediately. The mountpoint always mirrors `<src>`'s full path under the mount root (no path override). `--name "<label>"` sets a friendly dashboard name only. |
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
