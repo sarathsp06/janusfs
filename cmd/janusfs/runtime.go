@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/sarathsp06/janusfs/internal/api"
@@ -21,13 +20,14 @@ import (
 	"github.com/sarathsp06/janusfs/internal/obs"
 	"github.com/sarathsp06/janusfs/internal/provider"
 	"github.com/sarathsp06/janusfs/internal/ui"
-	"github.com/sarathsp06/janusfs/internal/watch"
 )
 
 // mountRuntime is one live mount owned by the daemon: its FUSE adapter, the
-// per-mount dashboard/API server, and the observability/history/watch
-// machinery behind them. The daemon holds one of these per mounted source
-// and calls stop() to tear it down cleanly.
+// per-mount dashboard/API server, and the observability/history machinery
+// behind them. The daemon holds one of these per mounted source and calls
+// stop() to tear it down cleanly. Rule changes are applied on demand via
+// reload() (there is no file watcher — see janusfs update / the dashboard's
+// Reload button; docs/SPEC_AMENDMENTS.md 2026-07-21).
 type mountRuntime struct {
 	Src        string
 	Mountpoint string
@@ -35,15 +35,34 @@ type mountRuntime struct {
 	Token      string
 	UIPort     int // actual bound dashboard port
 
+	eng      *engine.Engine
+	prov     *provider.RamCache
+	metrics  *obs.JanusMetrics
 	adapter  *mount.Adapter
 	apiSrv   *api.Server
 	hist     *history.Store
 	eventBus *obs.EventBus
-	watcher  *watch.Watcher
 	cancel   context.CancelFunc
 	done     chan struct{} // closed when the FUSE serve loop exits
 	mountErr error
 	logger   *slog.Logger
+}
+
+// reload recompiles the rule set from disk and invalidates the redaction cache
+// so the next read reflects edited .janusignore/.janusmask files. Called by
+// `janusfs update` and the dashboard (config save + Reload button).
+func (rt *mountRuntime) reload() error {
+	if rt.eng == nil {
+		return nil
+	}
+	err := rt.eng.Reload(rt.Src)
+	if rt.prov != nil {
+		rt.prov.InvalidateAll()
+	}
+	if rt.metrics != nil {
+		rt.metrics.Generation.Store(rt.eng.Generation())
+	}
+	return err
 }
 
 // startMount builds the full per-mount stack for an already-resolved and
@@ -84,13 +103,14 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 		Src:        cfg.Src,
 		Mountpoint: cfg.Mountpoint,
 		Token:      bearerToken,
+		eng:        eng,
+		prov:       prov,
+		metrics:    metrics,
 		eventBus:   eventBus,
 		cancel:     cancel,
 		done:       make(chan struct{}),
 		logger:     logger,
 	}
-
-	rt.watcher = startWatcher(ctx, cfg, eng, prov, logger)
 
 	metrics.Generation.Store(eng.Generation())
 
@@ -112,7 +132,8 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	}, func(relPath string, isDir bool) (string, []string, string) {
 		res := eng.Resolve(relPath, isDir)
 		return res.Decision.String(), res.PatternNames, res.RuleRef
-	}, func() bool { return rt.watcher != nil })
+	}, func() bool { return true }) // no watcher; rules reload on demand
+	apiSrv.SetReload(rt.reload)
 	rt.apiSrv = apiSrv
 
 	apiAddr := fmt.Sprintf("0.0.0.0:%d", cfg.UIPort)
@@ -203,77 +224,6 @@ func (rt *mountRuntime) stop() {
 	if rt.hist != nil {
 		rt.hist.Close()
 	}
-	if rt.watcher != nil {
-		rt.watcher.Stop()
-	}
-}
-
-// startWatcher wires internal/watch to recompile the engine (debounced 200ms
-// per FR-18) and invalidate provider cache (FR-19/20) on config/data changes.
-// Returns nil if the watcher can't be created — the mount still works, just
-// without hot-reload (FR-21).
-func startWatcher(ctx context.Context, cfg config.Config, eng *engine.Engine, prov *provider.RamCache, logger *slog.Logger) *watch.Watcher {
-	wtr, err := watch.New()
-	if err != nil {
-		logger.Warn("failed to create file watcher, continuing without hot-reload", "error", err)
-		return nil
-	}
-	wtr.SkipDirs = cfg.WatchSkipDirs // nil → watcher's DefaultSkipDirs
-	wl := logging.New("watch")
-	reloadCh := make(chan struct{}, 1)
-
-	wtr.Start(cfg.Src,
-		func(path string) {
-			select {
-			case reloadCh <- struct{}{}:
-			default:
-			}
-		},
-		func(path string, op watch.Op) {
-			if path == "" {
-				prov.InvalidateAll()
-				logger.Warn("watcher overflow, invalidating all cached content")
-				return
-			}
-			prov.Invalidate(path)
-		},
-	)
-
-	if st := wtr.Stats(); st.Limited {
-		logger.Warn("watcher hit its directory cap; some config-file edits won't hot-reload, but reads stay correct (per-read revalidation is authoritative)",
-			"watched_dirs", st.WatchedDirs)
-	}
-
-	go func() {
-		var mu sync.Mutex
-		var timer *time.Timer
-		for {
-			select {
-			case <-reloadCh:
-				mu.Lock()
-				if timer != nil {
-					timer.Stop()
-				}
-				timer = time.AfterFunc(200*time.Millisecond, func() {
-					wl.Info("config file changed, recompiling rule set")
-					if err := eng.Reload(cfg.Src); err != nil {
-						wl.Error("recompile failed after config change", "error", err)
-					}
-					prov.InvalidateAll()
-					wl.Info("rule set recompiled", "generation", eng.Generation())
-				})
-				mu.Unlock()
-			case <-ctx.Done():
-				mu.Lock()
-				if timer != nil {
-					timer.Stop()
-				}
-				mu.Unlock()
-				return
-			}
-		}
-	}()
-	return wtr
 }
 
 // drainEvents fans every FUSE event into the obs components and history store

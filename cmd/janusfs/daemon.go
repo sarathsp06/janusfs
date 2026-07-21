@@ -196,9 +196,50 @@ func (d *daemon) handleConn(conn net.Conn) {
 		writeResp(conn, d.doUnmount(req))
 	case "list":
 		writeResp(conn, daemonResponse{OK: true, Mounts: d.snapshot()})
+	case "reload":
+		writeResp(conn, d.doReload(req))
 	default:
 		writeResp(conn, daemonResponse{Error: "unknown command: " + req.Cmd})
 	}
+}
+
+// doReload recompiles the rule set for the mount matching req.Mountpoint (by
+// mountpoint or src), or every mount when it's empty.
+func (d *daemon) doReload(req daemonRequest) daemonResponse {
+	d.mu.Lock()
+	var targets []*mountRuntime
+	if req.Mountpoint == "" {
+		for _, rt := range d.mounts {
+			targets = append(targets, rt)
+		}
+	} else {
+		want, _ := filepath.Abs(req.Mountpoint)
+		for mp, rt := range d.mounts {
+			if src, _ := filepath.Abs(rt.Src); mp == want || src == want {
+				targets = append(targets, rt)
+				break
+			}
+		}
+	}
+	d.mu.Unlock()
+
+	if len(targets) == 0 {
+		if req.Mountpoint == "" {
+			return daemonResponse{OK: true, Message: "no mounts to reload"}
+		}
+		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon", req.Mountpoint)}
+	}
+	var failed int
+	for _, rt := range targets {
+		if err := rt.reload(); err != nil {
+			failed++
+			d.logger.Warn("reload failed", "mountpoint", rt.Mountpoint, "error", err)
+		}
+	}
+	if failed > 0 {
+		return daemonResponse{Error: fmt.Sprintf("%d of %d mount(s) failed to reload; see daemon log", failed, len(targets))}
+	}
+	return daemonResponse{OK: true, Message: fmt.Sprintf("reloaded %d mount(s)", len(targets))}
 }
 
 func (d *daemon) doMount(req daemonRequest) daemonResponse {
@@ -438,7 +479,9 @@ func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>JanusFS</title>")
 	fmt.Fprint(w, "<style>body{font-family:-apple-system,system-ui,sans-serif;background:#f4efea;color:#383838;max-width:820px;margin:40px auto;padding:0 24px}"+
 		"h1{font-size:22px}a{color:#383838}li{margin:8px 0;list-style:none;padding:12px;background:#fff;border:2px solid #383838;box-shadow:-4px 4px 0 #383838}"+
-		".mp{font-family:monospace;font-size:13px;color:#666}</style></head><body>")
+		".mp{font-family:monospace;font-size:13px;color:#666;margin-top:4px;display:flex;gap:8px;align-items:center}"+
+		"button.copy{font:inherit;font-size:11px;cursor:pointer;border:1px solid #383838;background:#fff;padding:1px 8px}"+
+		"button.copy:hover{background:#ffde00}</style></head><body>")
 	fmt.Fprintf(w, "<h1>JanusFS — %d mount(s)</h1><ul>", len(mounts))
 	if len(mounts) == 0 {
 		fmt.Fprint(w, "<p>No active mounts. Run <code>janusfs mount &lt;src&gt;</code>.</p>")
@@ -448,10 +491,16 @@ func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 		if title == "" {
 			title = m.Src
 		}
-		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a><div class=\"mp\">%s</div></li>",
-			html.EscapeString(m.Dashboard), html.EscapeString(title), html.EscapeString(m.Mountpoint))
+		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a><div class=\"mp\"><span>%s</span>"+
+			"<button class=\"copy\" data-mp=\"%s\">copy path</button></div></li>",
+			html.EscapeString(m.Dashboard), html.EscapeString(title),
+			html.EscapeString(m.Mountpoint), html.EscapeString(m.Mountpoint))
 	}
-	fmt.Fprint(w, "</ul></body></html>")
+	fmt.Fprint(w, "</ul>")
+	fmt.Fprint(w, "<script>document.querySelectorAll('button.copy').forEach(function(b){"+
+		"b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-mp'))"+
+		".then(function(){var t=b.textContent;b.textContent='copied';setTimeout(function(){b.textContent=t;},1500);});});});</script>")
+	fmt.Fprint(w, "</body></html>")
 }
 
 // socketPath is the daemon control socket, ~/.janusfs/daemon.sock.

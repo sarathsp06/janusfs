@@ -93,14 +93,6 @@ type Config struct {
 	// FR-1 amendment, docs/SPEC_AMENDMENTS.md 2026-07-18). Empty disables
 	// derivation: <mountpoint> stays required, per unamended FR-1.
 	MountRoot string
-
-	// WatchSkipDirs overrides the directory names the file watcher skips
-	// (node_modules, .git, …) to keep its descriptor use bounded. Nil means
-	// use the watcher's built-in default set; a non-nil value REPLACES it.
-	// Env: JANUSFS_WATCH_SKIP_DIRS (comma-separated); settings.json:
-	// "watch_skip_dirs". The watcher is advisory, so this only affects
-	// hot-reload coverage, never correctness.
-	WatchSkipDirs []string
 }
 
 // Default returns a Config populated with every tunable's documented default
@@ -146,21 +138,7 @@ func ApplyEnv(cfg *Config) error {
 	if s, ok := os.LookupEnv("JANUSFS_MOUNT_ROOT"); ok && s != "" {
 		cfg.MountRoot = s
 	}
-	if s, ok := os.LookupEnv("JANUSFS_WATCH_SKIP_DIRS"); ok && s != "" {
-		cfg.WatchSkipDirs = splitList(s)
-	}
 	return nil
-}
-
-// splitList parses a comma-separated list into trimmed, non-empty entries.
-func splitList(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // DefaultMountRoot is the suggested --mount-root for `janusfs install`'s
@@ -184,8 +162,7 @@ func SettingsPath() (string, error) {
 }
 
 type fileSettings struct {
-	MountRoot     string   `json:"mount_root"`
-	WatchSkipDirs []string `json:"watch_skip_dirs,omitempty"`
+	MountRoot string `json:"mount_root"`
 }
 
 // ApplyFile overlays ~/.janusfs/settings.json onto cfg (Default -> File -> Env -> Flag).
@@ -208,9 +185,6 @@ func ApplyFile(cfg *Config) error {
 	}
 	if fsettings.MountRoot != "" {
 		cfg.MountRoot = fsettings.MountRoot
-	}
-	if len(fsettings.WatchSkipDirs) > 0 {
-		cfg.WatchSkipDirs = fsettings.WatchSkipDirs
 	}
 	return nil
 }

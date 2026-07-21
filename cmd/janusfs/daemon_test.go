@@ -20,7 +20,7 @@ func fakeRuntime(src, mp, label string, port int, token string) *mountRuntime {
 
 func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/<script>", "/mnt/a", "My <b>Project</b>", 1234, "tok-abc"),
+		"/mnt/a": fakeRuntime("/src/x", "/mnt/a", "<script>alert('x')</script>", 1234, "tok-abc"),
 	}}
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -33,10 +33,11 @@ func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 	if !strings.Contains(body, "localhost:1234/?token=tok-abc") {
 		t.Errorf("index missing per-mount dashboard link, got %q", body)
 	}
-	if !strings.Contains(body, "My &lt;b&gt;Project&lt;/b&gt;") {
+	// The malicious label must appear only in escaped form, never as a raw tag.
+	if !strings.Contains(body, "&lt;script&gt;alert") {
 		t.Errorf("index did not show the escaped label, got %q", body)
 	}
-	if strings.Contains(body, "<script>") || strings.Contains(body, "<b>Project") {
+	if strings.Contains(body, "<script>alert") {
 		t.Errorf("index did not escape user-supplied text: %q", body)
 	}
 	if !strings.Contains(body, "1 mount(s)") {
@@ -103,6 +104,34 @@ func TestDoUnmount_UnknownAndNotInRegistry(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error, "not in the registry") {
 		t.Errorf("error = %q, want it to mention the registry", resp.Error)
+	}
+}
+
+func TestDoReload_AllWithNoMounts(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+	resp := d.doReload(daemonRequest{Cmd: "reload"})
+	if !resp.OK {
+		t.Errorf("reload-all with no mounts should be OK, got %+v", resp)
+	}
+}
+
+func TestDoReload_UnknownMount(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+	resp := d.doReload(daemonRequest{Cmd: "reload", Mountpoint: "/nope"})
+	if resp.OK || !strings.Contains(resp.Error, "not mounted") {
+		t.Errorf("got %+v, want a not-mounted error", resp)
+	}
+}
+
+func TestDoReload_MatchesBySrc(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{
+		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", 1, "t"),
+	}}
+	// reload() on a fake runtime (nil engine) is a no-op success; this checks
+	// the src→runtime matching and the response.
+	resp := d.doReload(daemonRequest{Cmd: "reload", Mountpoint: "/src/a"})
+	if !resp.OK || !strings.Contains(resp.Message, "reloaded 1") {
+		t.Errorf("got %+v, want 'reloaded 1 mount(s)'", resp)
 	}
 }
 

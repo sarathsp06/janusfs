@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -18,6 +20,36 @@ func newPathsCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPaths()
+		},
+	}
+}
+
+// newPathCmd prints the mountpoint for a mounted source, so it can be used in
+// shells: `cd "$(janusfs path ~/projects)"`.
+func newPathCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "path <src>",
+		Short: "Print the mountpoint for a mounted source (for cd/scripting)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			want, err := filepath.Abs(args[0])
+			if err != nil {
+				want = args[0]
+			}
+			resp, err := daemonCall(daemonRequest{Cmd: "list"})
+			if errors.Is(err, errDaemonNotRunning) {
+				return fmt.Errorf("path: %s", hintStartDaemon)
+			}
+			if err != nil {
+				return fmt.Errorf("path: %w", err)
+			}
+			for _, m := range resp.Mounts {
+				if abs, _ := filepath.Abs(m.Src); abs == want || m.Mountpoint == want {
+					fmt.Println(m.Mountpoint)
+					return nil
+				}
+			}
+			return fmt.Errorf("path: %q is not mounted", args[0])
 		},
 	}
 }

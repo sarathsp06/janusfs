@@ -149,12 +149,21 @@ client that talks to it over `~/.janusfs/daemon.sock` and exits.
   dashboard.
 
 ```bash
-janusfs daemon            # start it (add & to background, or use a terminal)
-janusfs mount ~/proj      # hand a mount to the daemon; returns at once
-janusfs mount ~/other     # mount as many sources as you like
-janusfs umount ~/proj     # unmount by source path OR mountpoint
-janusfs paths             # show where settings, the registry, and rules live
+janusfs daemon             # start it (add & to background, or use a terminal)
+janusfs mount ~/proj       # hand a mount to the daemon; returns at once
+janusfs mount ~/proj ~/pv  # or mount at a short path you choose (must be empty)
+janusfs update ~/proj      # re-apply edited .janusignore/.janusmask (no remount)
+janusfs path ~/proj        # print the mountpoint:  cd "$(janusfs path ~/proj)"
+janusfs umount ~/proj      # unmount by source path OR mountpoint
+janusfs paths              # show where settings, the registry, and rules live
 ```
+
+Rules are applied on demand — there's no file watcher (watching a large tree
+exhausts macOS file descriptors, and the native FSEvents API needs cgo, which
+this project forbids). Editing a config file in the dashboard reloads
+automatically; editing on disk, run `janusfs update` (or click **Reload rules**
+in the dashboard). Reads are always correct regardless: every masked read
+revalidates the file before serving.
 
 If no daemon is running, `janusfs mount` says so; `janusfs umount` falls back to
 a direct OS-level unmount so a stray mount can still be cleaned up.
@@ -259,13 +268,15 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 |---------|---------|
 | `janusfs install` | One-time setup: choose a mount root (saved to `~/.janusfs/settings.json`) so `janusfs mount <src>` needs no `--mount-root`. `--global-rules` also seeds `~/.janusfs/config/`. |
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
-| `janusfs mount <src>` | Ask the daemon to mount a sanitized view and return immediately. The mountpoint always mirrors `<src>`'s full path under the mount root (no path override). `--name "<label>"` sets a friendly dashboard name only. |
-| `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Falls back to a direct OS unmount if no daemon is running. |
+| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a sanitized view and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an empty `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
+| `janusfs update [src\|mountpoint]` | Re-apply edited `.janusignore`/`.janusmask` rules without remounting (no arg = all mounts). |
+| `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
+| `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
 | `janusfs check [path]` | Static linter: unknown builtins, bad regex, zero-match globs, directory-mask globs, hidden-dir/global-floor negations that have no effect, duplicate rules. `--json` for machine output; exit 1 on errors. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
-| `janusfs doctor` | Runtime health: macFUSE status, active mounts, engine state, history DB stats, watcher health, cache memory. |
+| `janusfs doctor` | Runtime health: macFUSE status, active mounts, engine state, history DB stats, cache memory. |
 
 All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
 
@@ -299,10 +310,10 @@ $ janusfs check
 ## Security model
 
 - **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted.
-- **Agents cannot weaken policy.** `.janusignore` and `.janusmask` are read-only through the mount, regardless of any user rule. The dashboard API has no mutating endpoints.
-- **Fail-closed under all faults.** Parser errors, watcher overflow, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
+- **Agents cannot weaken policy.** `.janusignore` and `.janusmask` are read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (edit a revealed file, save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount.
+- **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
 - **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
-- **Read path validates every time.** The watcher is advisory — every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving.
+- **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector (there is no file watcher).
 - **`~/.janusfs/` perms:** directory `0700`, files `0600`.
 
 See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / assets / leak-channels table, updated at every phase exit.

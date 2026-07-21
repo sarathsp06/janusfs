@@ -308,6 +308,10 @@
   <div style="margin-top:var(--sp-xl)">
     <div class="panel" style="max-width:100%">
       <h2>Config Editor</h2>
+      <div class="editor-actions" style="margin-bottom:var(--sp-md)">
+        <button type="button" id="reload-rules-btn" onclick="reloadRules()">Reload rules</button>
+        <span class="save-status" id="reload-status"></span>
+      </div>
       <div id="config-editor"><div class="empty-state">Loading config files...</div></div>
     </div>
   </div>
@@ -370,6 +374,19 @@
       .then(function(data) { renderCoverage(data); })
       .catch(function() {});
   }
+
+  window.reloadRules = function() {
+    var status = document.getElementById('reload-status');
+    status.textContent = 'Reloading...';
+    fetch(apiURL('/api/v1/reload'), { method: 'POST' })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function() {
+        status.textContent = 'Reloaded';
+        fetchCoverage();
+        setTimeout(function() { if (status.textContent === 'Reloaded') status.textContent = ''; }, 2000);
+      })
+      .catch(function() { status.textContent = 'Reload failed'; });
+  };
 
   function renderCoverage(data) {
     var masked = data.masked || [];
