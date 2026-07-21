@@ -17,6 +17,7 @@
 - [Why](#why)
 - [How it works](#how-it-works)
 - [Quickstart](#quickstart)
+- [The daemon](#the-daemon)
 - [The three faces](#the-three-faces)
 - [Configuration files](#configuration-files)
   - [`.janusignore`](#janusignore)
@@ -44,18 +45,34 @@ JanusFS resolves this per-file, per-read, at the FS boundary. Rules use `.gitign
 
 ## How it works
 
+A long-running **daemon** owns every mount. You drive it with short-lived CLI
+commands (`janusfs mount`/`umount`) that talk to it over a local unix socket
+and return immediately; the daemon holds the FUSE mounts, resumes them after a
+reboot, and serves one dashboard for all of them. The agent only ever touches
+the mountpoint — where each file wears one of three faces.
+
 ```
-       ┌────────────────────┐          ┌───────────────────────┐
-       │  AI agent, editor, │          │  Real files on disk   │
-       │  build tool, shell │          │  (your source tree)   │
-       └─────────┬──────────┘          └──────────┬────────────┘
-                 │  reads/writes                   ▲
-                 ▼                                 │
-      ┌─────────────────────┐                      │
-      │  JanusFS mountpoint │  ── Allowed  ──────► │
-      │  (macFUSE on macOS)  │  ── Masked   ──────► redact and serve
-      │                     │  ── Hidden   ──────► EACCES
-      └─────────────────────┘
+  ┌─ you (trusted) ─────────────┐          ┌─ agent (untrusted) ─────────┐
+  │  janusfs mount <src>        │          │  cat / grep / open / readdir│
+  │  janusfs umount <src>       │          └──────────────┬──────────────┘
+  └──────────────┬──────────────┘                         │
+                 │ command over unix socket               │ filesystem calls
+                 │ ~/.janusfs/daemon.sock                 ▼
+                 ▼                              ┌─────────────────────────┐
+      ┌──────────────────────────┐  owns &     │  mountpoint (macFUSE)   │
+      │      janusfs daemon      │──starts────► │  one FUSE server /mount │
+      │  • owns every mount      │             └────────────┬────────────┘
+      │  • resumes past mounts   │                          │ consult compiled rules
+      │    on start (reboot-safe)│                          │ on every open/read/readdir
+      │  • serves the dashboard  │◄─── stats/events ────────┤
+      │    http://127.0.0.1:7381 │                          ▼
+      └──────────────────────────┘             ┌─────────────────────────┐
+                                               │  Allowed → passthrough  │
+                                               │  Masked  → redact in RAM│
+                                               │  Hidden  → EACCES       │
+                                               └────────────┬────────────┘
+                                                            ▼
+                                            Real files on disk (never modified)
 ```
 
 The rule engine reads `.janusignore` and `.janusmask` from the mount root down (and from `~/.janusfs/config/` if it exists — see [Global rules](#global-rules-machine-wide-defaults)) and compiles them into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so file sizes and offsets stay identical — tools don't see short reads and don't get confused. Errors — parser failures, missing rules, watcher lag, anything — resolve to **Hidden**.
@@ -73,35 +90,72 @@ go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
 # See docs/SPEC_AMENDMENTS.md (2026-07-18) for why janusfs uses macFUSE
 # (hanwen/go-fuse) rather than the earlier, unreliable FUSE-T stack.
 
-# 2) drop secure defaults into your project (or ~/.janusfs/config for machine-wide)
+# 2) one-time setup: pick a mount root (where sanitized mirrors appear)
+janusfs install                 # saves ~/.janusfs/settings.json; --global-rules also seeds machine-wide defaults
+
+# 3) drop secure defaults into your project (or use --global-rules above)
 cd my-project
 janusfs init                    # writes .janusignore + .janusmask templates
 
-# 3) preview what those rules will do BEFORE you mount
+# 4) preview what those rules will do BEFORE you mount
 janusfs check                   # linter: zero-match globs, dir-mask, hidden-dir/global-floor negations
 janusfs explain .env            # per-file trace: which rule decided this file's fate
 
-# 4) mount
-mkdir /tmp/my-project-view
-janusfs mount . /tmp/my-project-view
-# point your agent at /tmp/my-project-view — never at the real path
+# 5) start the daemon (owns mounts, serves the dashboard, resumes past mounts)
+janusfs daemon &                # or run in its own terminal; opens the dashboard
+
+# 6) mount — returns immediately; the daemon keeps it alive
+janusfs mount .
+# prints the mountpoint + dashboard URL. Point your agent at that mountpoint,
+# never at the real path. Unmount later with:  janusfs umount .
 ```
 
-Every file that reaches the agent has been filtered:
+The mountpoint mirrors the source's full path under your mount root (e.g.
+`~/.janusfs/mounts/Users/you/my-project`), so two sources never collide. Pass
+an explicit `[mountpoint]` or `--name <leaf>` if you want a shorter path.
+
+Every file that reaches the agent has been filtered (`$MP` is the mountpoint `janusfs mount` printed):
 
 ```bash
-$ cat /tmp/my-project-view/.env
+$ cat "$MP/.env"
 API_KEY=****************************
 DEBUG=true
 
-$ cat /tmp/my-project-view/id_rsa
+$ cat "$MP/id_rsa"
 cat: id_rsa: Permission denied
 
-$ ls -la /tmp/my-project-view/       # hidden files still LIST (with real sizes)
+$ ls -la "$MP"                       # hidden files still LIST (with real sizes)
 -rw-r--r--  ...   44 .env            #   so tools don't get confused
 -rw-r--r--  ...  135 id_rsa          #   but reading fails closed
 -rw-r--r--  ...  137 README.md       #   Allowed: passthrough
 ```
+
+## The daemon
+
+`janusfs daemon` is the one long-running process. Everything else is a thin
+client that talks to it over `~/.janusfs/daemon.sock` and exits.
+
+- **Owns every mount.** Each mounted source is a FUSE server running inside the
+  daemon, with its own dashboard on an auto-assigned port. `janusfs mount <src>`
+  hands the mount to the daemon and returns immediately — your terminal is free.
+- **Reboot-safe.** Every mount is recorded in `~/.janusfs/mounts.json`; on start
+  the daemon remounts all of them (except ones you explicitly `janusfs umount`).
+- **One dashboard.** The daemon serves a combined index at
+  `http://127.0.0.1:7381/` listing every live mount and linking to each mount's
+  own dashboard. Change the port with `--ui-port`.
+- **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
+  dashboard.
+
+```bash
+janusfs daemon            # start it (add & to background, or use a terminal)
+janusfs mount ~/proj      # hand a mount to the daemon; returns at once
+janusfs mount ~/other     # mount as many sources as you like
+janusfs umount ~/proj     # unmount by source path OR mountpoint
+janusfs paths             # show where settings, the registry, and rules live
+```
+
+If no daemon is running, `janusfs mount` says so; `janusfs umount` falls back to
+a direct OS-level unmount so a stray mount can still be cleaned up.
 
 ## The three faces
 
@@ -201,9 +255,12 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 
 | Command | Purpose |
 |---------|---------|
+| `janusfs install` | One-time setup: choose a mount root (saved to `~/.janusfs/settings.json`) so `janusfs mount <src>` needs no `--mount-root`. `--global-rules` also seeds `~/.janusfs/config/`. |
+| `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
+| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a sanitized view and return immediately. `[mountpoint]` is optional — the mountpoint mirrors `<src>`'s full path under the mount root (`--name` overrides the leaf). |
+| `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Falls back to a direct OS unmount if no daemon is running. |
+| `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
-| `janusfs mount <src> [mountpoint]` | Mount a sanitized view. `[mountpoint]` may be omitted if `--mount-root <dir>` is set, deriving `<dir>/<basename(src)>` (`--name` overrides the leaf). Blocks; unmount with SIGINT/SIGTERM or `janusfs umount`. |
-| `janusfs umount <mountpoint>` | Unmount a running JanusFS. Best-effort signal to the owning process (via pidfile). |
 | `janusfs check [path]` | Static linter: unknown builtins, bad regex, zero-match globs, directory-mask globs, hidden-dir/global-floor negations that have no effect, duplicate rules. `--json` for machine output; exit 1 on errors. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
 | `janusfs doctor` | Runtime health: macFUSE status, active mounts, engine state, history DB stats, watcher health, cache memory. |
@@ -292,7 +349,7 @@ Amendment log for anything the spec didn't cover: **[`docs/SPEC_AMENDMENTS.md`](
 
 ## Status
 
-**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Hot-reload (`internal/watch`) detects config and data-file changes, debounces, and triggers engine recompilation plus cache invalidation. The observability stack (`internal/obs` + `internal/api`) serves a live dashboard with stat cards, top paths, latency percentiles, and a real-time SSE event feed — with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting.
+**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Hot-reload (`internal/watch`) detects config and data-file changes, debounces, and triggers engine recompilation plus cache invalidation. The observability stack (`internal/obs` + `internal/api`) serves a live dashboard with stat cards, top paths, latency percentiles, and a real-time SSE event feed — with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting. Mounts are owned by a long-running daemon (`janusfs daemon`) that resumes them across reboots and serves one combined dashboard; `janusfs mount`/`umount` are thin clients over a local control socket.
 
 Roadmap:
 
