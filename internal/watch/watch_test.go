@@ -200,6 +200,111 @@ func TestStats(t *testing.T) {
 	}
 }
 
+func TestAddTree_SkipsHeavyDirs(t *testing.T) {
+	root := t.TempDir()
+	// A normal dir (watched) and heavy dirs (skipped).
+	for _, d := range []string{"src", "node_modules/pkg/deep", ".git/objects", "target/debug"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start(root, func(string) {}, func(string, Op) {})
+	defer w.Stop()
+
+	for _, watched := range w.w.WatchList() {
+		base := filepath.Base(watched)
+		if w.shouldSkip(base) {
+			t.Errorf("heavy dir %q should not be watched", watched)
+		}
+		if filepath.Base(filepath.Dir(watched)) == "node_modules" {
+			t.Errorf("descended into node_modules: %q", watched)
+		}
+	}
+	// root + src are watched; the heavy trees are not.
+	if got := len(w.w.WatchList()); got != 2 {
+		t.Errorf("watched %d dirs, want 2 (root + src); list=%v", got, w.w.WatchList())
+	}
+	if w.Stats().Limited {
+		t.Error("small tree should not report Limited")
+	}
+}
+
+func TestAddTree_CustomSkipDirs(t *testing.T) {
+	root := t.TempDir()
+	// "keep" would be skipped by defaults? no — use a custom set that skips
+	// "boring" but NOT node_modules, proving the override replaces defaults.
+	for _, d := range []string{"boring/x", "node_modules/y", "src"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.SkipDirs = []string{"boring"} // replaces defaults: node_modules NOT skipped now
+	w.Start(root, func(string) {}, func(string, Op) {})
+	defer w.Stop()
+
+	var sawNodeModules, sawBoring bool
+	for _, p := range w.w.WatchList() {
+		if filepath.Base(p) == "node_modules" {
+			sawNodeModules = true
+		}
+		if filepath.Base(p) == "boring" {
+			sawBoring = true
+		}
+	}
+	if !sawNodeModules {
+		t.Error("with a custom skip set that omits node_modules, it should be watched")
+	}
+	if sawBoring {
+		t.Error("custom skip set should have skipped 'boring'")
+	}
+}
+
+func TestAddTree_CapsAndReportsLimited(t *testing.T) {
+	root := t.TempDir()
+	// Create more directories than the cap so addTree must stop early.
+	for i := 0; i < maxWatchedDirs+50; i++ {
+		if err := os.Mkdir(filepath.Join(root, "d"+itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start(root, func(string) {}, func(string, Op) {})
+	defer w.Stop()
+
+	if n := len(w.w.WatchList()); n > maxWatchedDirs {
+		t.Errorf("watched %d dirs, exceeds cap %d", n, maxWatchedDirs)
+	}
+	if !w.Stats().Limited {
+		t.Error("expected Limited=true once the cap is hit")
+	}
+}
+
+// itoa avoids importing strconv just for the cap test's directory names.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	p := len(b)
+	for i > 0 {
+		p--
+		b[p] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[p:])
+}
+
 func TestIsConfigFile(t *testing.T) {
 	tests := []struct {
 		name string

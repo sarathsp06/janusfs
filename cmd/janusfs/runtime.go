@@ -218,6 +218,7 @@ func startWatcher(ctx context.Context, cfg config.Config, eng *engine.Engine, pr
 		logger.Warn("failed to create file watcher, continuing without hot-reload", "error", err)
 		return nil
 	}
+	wtr.SkipDirs = cfg.WatchSkipDirs // nil → watcher's DefaultSkipDirs
 	wl := logging.New("watch")
 	reloadCh := make(chan struct{}, 1)
 
@@ -237,6 +238,11 @@ func startWatcher(ctx context.Context, cfg config.Config, eng *engine.Engine, pr
 			prov.Invalidate(path)
 		},
 	)
+
+	if st := wtr.Stats(); st.Limited {
+		logger.Warn("watcher coverage capped on a large tree; hot-reload is partial but reads stay correct (per-read revalidation is authoritative)",
+			"watched_dirs", st.WatchedDirs)
+	}
 
 	go func() {
 		var mu sync.Mutex
