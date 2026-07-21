@@ -5,9 +5,12 @@
 // validates (mtime, size, inode) independently — the backstop, not this
 // watcher, is the authoritative change detector.
 //
-// Recursive watching is implemented by walking the root tree at startup and
-// adding new directories as they are created — fsnotify does not recursively
-// watch subtrees natively.
+// Watching is config-focused: at startup a skip-list-aware walk registers the
+// root and every directory that already holds a .janusignore/.janusmask, and
+// only those. fsnotify does not watch subtrees natively, and on macOS its
+// kqueue backend costs a descriptor per watched directory and file, so
+// watching a whole large tree exhausts the FD limit; scoping to config-bearing
+// directories keeps that bounded. The watcher is advisory (FR-21) — see Start.
 //
 // Spec intents implemented:
 //   - FR-18: detect .janusignore/.janusmask changes, emit onConfig
@@ -133,24 +136,30 @@ func New() (*Watcher, error) {
 	}, nil
 }
 
-// Start begins watching root recursively. onConfig receives paths of
-// changed .janusignore/.janusmask files; onData receives the changed path
-// and event op for all other files. An empty path passed to onData signals
-// watcher overflow — the consumer should call InvalidateAll and log a
-// warning (SPEC §9: "Overflow/error → InvalidateAll() + metric increment +
-// warning event").
+// Start begins watching root. onConfig receives paths of changed
+// .janusignore/.janusmask files; onData receives the changed path and event op
+// for other files. An empty path passed to onData signals watcher overflow —
+// the consumer should call InvalidateAll and log a warning (SPEC §9).
+//
+// The watch is config-focused: only the root and directories that already
+// contain a .janusignore/.janusmask are registered. On macOS fsnotify/kqueue
+// holds a descriptor per watched directory (and file within it), so watching a
+// whole large tree exhausts the FD limit; scoping to config-bearing directories
+// keeps descriptor use proportional to the number of config files (a handful).
+// The watcher is advisory (FR-21) — the per-read (mtime,size,inode) backstop is
+// authoritative — so this never affects correctness. Trade-offs: a data-file
+// change outside a watched directory isn't pushed as a cache eviction (the
+// backstop still revalidates on read), and a brand-new config file created in a
+// previously config-less directory is picked up on the next mount.
 //
 // Start returns immediately; the watch loop runs in a background goroutine.
-// Call Close to stop.
 func (w *Watcher) Start(root string, onConfig func(path string), onData func(path string, op Op)) {
 	w.root = root
 	w.started.Store(true)
 
-	// Build the watch list synchronously and bounded (see maxWatchedDirs), so
-	// events at the root are captured immediately and a giant tree can never
-	// open an unbounded number of descriptors. New directories created later
-	// are added by the loop, subject to the same cap and skip list.
-	w.addTree(root)
+	// Build the watch list synchronously so root-level events are captured
+	// immediately.
+	w.addConfigDirs(root)
 
 	go w.loop(onConfig, onData)
 }
@@ -193,19 +202,6 @@ func (w *Watcher) loop(onConfig func(string), onData func(string, Op)) {
 			}
 			w.eventsTotal.Add(1)
 
-			// If a new directory was created, add it to the watch list so
-			// events inside it are caught too — subject to the same skip list
-			// and descriptor cap as the initial walk.
-			if event.Has(fsnotify.Create) {
-				if fi, err := os.Stat(event.Name); err == nil && fi.IsDir() {
-					if w.shouldSkip(filepath.Base(event.Name)) || len(w.w.WatchList()) >= maxWatchedDirs {
-						w.limited.Store(true)
-					} else if addErr := w.w.Add(event.Name); addErr != nil {
-						w.limited.Store(true)
-					}
-				}
-			}
-
 			if isConfigFile(event.Name) {
 				w.configEvents.Add(1)
 				onConfig(event.Name)
@@ -225,34 +221,50 @@ func (w *Watcher) loop(onConfig func(string), onData func(string, Op)) {
 	}
 }
 
-// addTree adds root and its subdirectories to the watch list, skipping
-// heavy/noise directories and stopping at maxWatchedDirs (or the first
-// descriptor-exhaustion error). It never fails the mount: whatever it can't
-// watch is still covered by the authoritative per-read backstop, so it just
-// records that coverage was limited and returns.
-func (w *Watcher) addTree(root string) {
+// addConfigDirs watches the root plus every directory that contains a
+// .janusignore/.janusmask file, found by a skip-list-aware walk. Descriptor
+// use is proportional to the number of config-bearing directories, not the
+// tree size. maxWatchedDirs is a safety backstop; an FD error stops expansion
+// and marks the watch limited rather than failing the mount (the per-read
+// backstop still covers correctness).
+func (w *Watcher) addConfigDirs(root string) {
 	added := 0
+	watched := map[string]bool{}
+	add := func(dir string) bool {
+		if watched[dir] {
+			return true
+		}
+		if added >= maxWatchedDirs {
+			w.limited.Store(true)
+			return false
+		}
+		if err := w.w.Add(dir); err != nil {
+			w.limited.Store(true)
+			return false
+		}
+		watched[dir] = true
+		added++
+		return true
+	}
+
+	// Always watch the root so root-level config and activity are seen.
+	add(root)
+
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries; don't fail the whole tree
 		}
-		if !d.IsDir() {
+		if d.IsDir() {
+			if path != root && w.shouldSkip(d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		if path != root && w.shouldSkip(d.Name()) {
-			return filepath.SkipDir
+		if isConfigFile(path) {
+			if !add(filepath.Dir(path)) {
+				return filepath.SkipAll // hit the cap / FD limit
+			}
 		}
-		if added >= maxWatchedDirs {
-			w.limited.Store(true)
-			return filepath.SkipAll
-		}
-		if addErr := w.w.Add(path); addErr != nil {
-			// Out of descriptors (or similar): stop expanding the watch and
-			// rely on the backstop rather than erroring out the mount.
-			w.limited.Store(true)
-			return filepath.SkipAll
-		}
-		added++
 		return nil
 	})
 }

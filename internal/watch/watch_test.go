@@ -121,38 +121,33 @@ func TestDataEvent(t *testing.T) {
 	waitForEvent(t, dataCh, dataPath)
 }
 
-func TestRecursiveWatchNewDirectory(t *testing.T) {
+// TestConfigEditInSubdirFires proves the config-focused contract: a directory
+// that already holds a config file is watched, so edits to that config file
+// are detected (the recursive auto-watch of arbitrary new subdirs was dropped
+// to keep descriptor use bounded — see Start).
+func TestConfigEditInSubdirFires(t *testing.T) {
 	root := t.TempDir()
+	subdir := filepath.Join(root, "sub")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(subdir, ".janusmask")
+	writeFile(t, cfg, "*\n") // present before Start → sub/ is watched
+
 	w, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	configCh := make(chan string, 16)
-	dataCh := make(chan string, 16)
-
 	w.Start(root,
 		func(path string) { configCh <- path },
-		func(path string, op Op) { dataCh <- path },
+		func(path string, op Op) {},
 	)
 	defer w.Stop()
 
-	// Verify watcher is ready.
-	probe := filepath.Join(root, ".probe")
-	writeFile(t, probe, "")
-	waitForEvent(t, dataCh, probe)
-
-	// Create a subdirectory, then a file inside it. The file event must be
-	// captured because the watcher adds new directories on Create.
-	subdir := filepath.Join(root, "sub")
-	if err := os.Mkdir(subdir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Give the watcher time to discover the new directory.
-	time.Sleep(50 * time.Millisecond)
-
-	innerFile := filepath.Join(subdir, "inner.txt")
-	writeFile(t, innerFile, "content")
-	waitForEvent(t, dataCh, innerFile)
+	// Editing the existing config file in the watched subdir fires onConfig.
+	writeFile(t, cfg, "*.env\n")
+	waitForEvent(t, configCh, cfg)
 }
 
 func TestStats(t *testing.T) {
@@ -200,14 +195,28 @@ func TestStats(t *testing.T) {
 	}
 }
 
-func TestAddTree_SkipsHeavyDirs(t *testing.T) {
+// contains reports whether the watch list includes an exact path.
+func watchListHas(w *Watcher, path string) bool {
+	for _, p := range w.w.WatchList() {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+func TestConfigDirs_WatchesOnlyConfigBearingDirs(t *testing.T) {
 	root := t.TempDir()
-	// A normal dir (watched) and heavy dirs (skipped).
-	for _, d := range []string{"src", "node_modules/pkg/deep", ".git/objects", "target/debug"} {
+	for _, d := range []string{"src", "sub", "node_modules/pkg", ".git/objects"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Config files: at root, in sub/ (watched), and inside node_modules (skipped).
+	writeFile(t, filepath.Join(root, ".janusmask"), "*\n")
+	writeFile(t, filepath.Join(root, "sub", ".janusignore"), "*\n")
+	writeFile(t, filepath.Join(root, "node_modules", "pkg", ".janusmask"), "*\n")
+
 	w, err := New()
 	if err != nil {
 		t.Fatal(err)
@@ -215,33 +224,36 @@ func TestAddTree_SkipsHeavyDirs(t *testing.T) {
 	w.Start(root, func(string) {}, func(string, Op) {})
 	defer w.Stop()
 
-	for _, watched := range w.w.WatchList() {
-		base := filepath.Base(watched)
-		if w.shouldSkip(base) {
-			t.Errorf("heavy dir %q should not be watched", watched)
-		}
-		if filepath.Base(filepath.Dir(watched)) == "node_modules" {
-			t.Errorf("descended into node_modules: %q", watched)
-		}
+	if !watchListHas(w, root) {
+		t.Error("root should always be watched")
 	}
-	// root + src are watched; the heavy trees are not.
+	if !watchListHas(w, filepath.Join(root, "sub")) {
+		t.Error("config-bearing dir sub/ should be watched")
+	}
+	if watchListHas(w, filepath.Join(root, "src")) {
+		t.Error("src/ has no config file and should NOT be watched (config-focused)")
+	}
+	if watchListHas(w, filepath.Join(root, "node_modules", "pkg")) {
+		t.Error("config file inside a skipped dir must not cause it to be watched")
+	}
 	if got := len(w.w.WatchList()); got != 2 {
-		t.Errorf("watched %d dirs, want 2 (root + src); list=%v", got, w.w.WatchList())
+		t.Errorf("watched %d dirs, want 2 (root + sub); list=%v", got, w.w.WatchList())
 	}
 	if w.Stats().Limited {
 		t.Error("small tree should not report Limited")
 	}
 }
 
-func TestAddTree_CustomSkipDirs(t *testing.T) {
+func TestConfigDirs_CustomSkipDirs(t *testing.T) {
 	root := t.TempDir()
-	// "keep" would be skipped by defaults? no — use a custom set that skips
-	// "boring" but NOT node_modules, proving the override replaces defaults.
-	for _, d := range []string{"boring/x", "node_modules/y", "src"} {
+	for _, d := range []string{"boring", "node_modules"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	writeFile(t, filepath.Join(root, "boring", ".janusmask"), "*\n")
+	writeFile(t, filepath.Join(root, "node_modules", ".janusmask"), "*\n")
+
 	w, err := New()
 	if err != nil {
 		t.Fatal(err)
@@ -250,30 +262,23 @@ func TestAddTree_CustomSkipDirs(t *testing.T) {
 	w.Start(root, func(string) {}, func(string, Op) {})
 	defer w.Stop()
 
-	var sawNodeModules, sawBoring bool
-	for _, p := range w.w.WatchList() {
-		if filepath.Base(p) == "node_modules" {
-			sawNodeModules = true
-		}
-		if filepath.Base(p) == "boring" {
-			sawBoring = true
-		}
+	if !watchListHas(w, filepath.Join(root, "node_modules")) {
+		t.Error("with a custom skip set omitting node_modules, its config dir should be watched")
 	}
-	if !sawNodeModules {
-		t.Error("with a custom skip set that omits node_modules, it should be watched")
-	}
-	if sawBoring {
+	if watchListHas(w, filepath.Join(root, "boring")) {
 		t.Error("custom skip set should have skipped 'boring'")
 	}
 }
 
-func TestAddTree_CapsAndReportsLimited(t *testing.T) {
+func TestConfigDirs_CapsAndReportsLimited(t *testing.T) {
 	root := t.TempDir()
-	// Create more directories than the cap so addTree must stop early.
+	// More config-bearing dirs than the cap so expansion must stop early.
 	for i := 0; i < maxWatchedDirs+50; i++ {
-		if err := os.Mkdir(filepath.Join(root, "d"+itoa(i)), 0o755); err != nil {
+		d := filepath.Join(root, "d"+itoa(i))
+		if err := os.Mkdir(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(d, ".janusmask"), "*\n")
 	}
 	w, err := New()
 	if err != nil {

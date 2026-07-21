@@ -240,7 +240,7 @@ func startWatcher(ctx context.Context, cfg config.Config, eng *engine.Engine, pr
 	)
 
 	if st := wtr.Stats(); st.Limited {
-		logger.Warn("watcher coverage capped on a large tree; hot-reload is partial but reads stay correct (per-read revalidation is authoritative)",
+		logger.Warn("watcher hit its directory cap; some config-file edits won't hot-reload, but reads stay correct (per-read revalidation is authoritative)",
 			"watched_dirs", st.WatchedDirs)
 	}
 
