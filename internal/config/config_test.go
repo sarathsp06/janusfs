@@ -295,6 +295,52 @@ func TestApplyFile_MissingIsNoOp(t *testing.T) {
 	}
 }
 
+func TestMountsRegistry_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Empty registry: LoadMounts is a no-op, RemoveMount is harmless.
+	if recs, err := LoadMounts(); err != nil || len(recs) != 0 {
+		t.Fatalf("LoadMounts() on empty = (%v, %v), want (nil, nil)", recs, err)
+	}
+	if err := RemoveMount("/nothing"); err != nil {
+		t.Fatalf("RemoveMount on empty registry = %v, want nil", err)
+	}
+
+	if err := RecordMount("/src/a", "/mnt/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordMount("/src/b", "/mnt/b"); err != nil {
+		t.Fatal(err)
+	}
+	// Re-record the same mountpoint: upsert, not duplicate; src updated.
+	if err := RecordMount("/src/a2", "/mnt/a"); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, err := LoadMounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("registry has %d entries, want 2 (upsert should not duplicate): %+v", len(recs), recs)
+	}
+	got := map[string]string{}
+	for _, r := range recs {
+		got[r.Mountpoint] = r.Src
+	}
+	if got["/mnt/a"] != "/src/a2" {
+		t.Errorf("upsert did not update src: /mnt/a -> %q, want /src/a2", got["/mnt/a"])
+	}
+
+	if err := RemoveMount("/mnt/a"); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ = LoadMounts()
+	if len(recs) != 1 || recs[0].Mountpoint != "/mnt/b" {
+		t.Errorf("after RemoveMount, registry = %+v, want only /mnt/b", recs)
+	}
+}
+
 func TestDefault_Values(t *testing.T) {
 	c := Default()
 	if c.UIPort != 7381 {
