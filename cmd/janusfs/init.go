@@ -32,7 +32,6 @@ const janusmaskTemplate = `# JanusFS — <glob> : <pattern>[, <pattern>...] mask
 # Preview the effect of these rules with: janusfs check
 
 *.env*                              : env-value
-**/*                                : aws-key, github-token, private-key, jwt
 **/application*.yml                 : generic-secret, db-uri
 **/application*.yaml                : generic-secret, db-uri
 **/application*.properties          : generic-secret, db-uri
@@ -81,9 +80,10 @@ func runInit(dir string, force bool) error {
 
 	// FR-32: ≤ 10 lines, explaining what and why, pointing at `check`.
 	fmt.Printf("Wrote %s — hides *.pem/*.key/id_rsa*/*.p12/.aws credentials/*.keychain by default.\n", ignorePath)
-	fmt.Printf("Wrote %s — masks .env files and common secret shapes (AWS keys, GitHub tokens,\n", maskPath)
-	fmt.Printf("  private keys, JWTs, and generic password/secret fields) wherever they appear.\n")
-	fmt.Println("Both use built-in patterns; edit freely to narrow or extend coverage.")
+	fmt.Printf("Wrote %s — masks .env files and Spring-style application config\n", maskPath)
+	fmt.Printf("  (application*.yml/.yaml/.properties) where secrets commonly live.\n")
+	fmt.Println("Targeted by design: add lines like `**/* : aws-key` only if you want a")
+	fmt.Println("repo-wide secret scan (it masks every file — slower, noisier).")
 	fmt.Println("Run `janusfs check` to preview which files these rules affect before mounting.")
 	return nil
 }

@@ -91,6 +91,12 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	}
 	opts.FsName = "janusfs" // shown as the source in `df -T`
 	opts.Name = "janusfs"   // the "fuse.<name>" suffix in `df -T`
+	// macFUSE holds a volume busy by default: Spotlight (mdworker) indexes it
+	// and Finder browses it, so a graceful unmount fails with EBUSY forever.
+	// nobrowse keeps it out of Finder + Spotlight; noappledouble stops the
+	// ._* / .DS_Store writes Finder would otherwise make. Both are the
+	// standard cure for "macFUSE won't unmount".
+	opts.Options = append(opts.Options, "nobrowse", "noappledouble")
 	if a.DebugLogger != nil {
 		opts.Debug = true
 		opts.MountOptions.Logger = a.DebugLogger

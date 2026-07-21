@@ -55,9 +55,12 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.SetVersionTemplate("janusfs {{.Version}}\n")
+	root.AddCommand(newDaemonCmd())
 	root.AddCommand(newMountCmd())
 	root.AddCommand(newUmountCmd())
+	root.AddCommand(newInstallCmd())
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newPathsCmd())
 	root.AddCommand(newCheckCmd())
 	root.AddCommand(newExplainCmd())
 	root.AddCommand(newDoctorCmd())

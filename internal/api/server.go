@@ -269,6 +269,12 @@ func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxRevealWrite caps the body of an edit-save (10 MiB).
+const maxRevealWrite = 10 << 20
+
+// handleReveal serves (GET) and saves (POST) the real source file behind a
+// masked/hidden entry. Reads/writes the source tree directly, bypassing the
+// mount decision — this is the token-authenticated operator view.
 func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	if s.root == "" {
 		http.Error(w, "not configured", http.StatusNotFound)
@@ -280,11 +286,36 @@ func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	realPath := filepath.Join(s.root, filepath.FromSlash(rel))
-	if !strings.HasPrefix(realPath, s.root) {
+	if realPath != s.root && !strings.HasPrefix(realPath, s.root+string(os.PathSeparator)) {
 		http.Error(w, "path escape", http.StatusForbidden)
 		return
 	}
-	http.ServeFile(w, r, realPath)
+	switch r.Method {
+	case http.MethodGet:
+		http.ServeFile(w, r, realPath)
+	case http.MethodPost:
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRevealWrite))
+		if err != nil {
+			http.Error(w, "read error (file too large?)", http.StatusBadRequest)
+			return
+		}
+		info, err := os.Stat(realPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if info.IsDir() {
+			http.Error(w, "cannot write a directory", http.StatusBadRequest)
+			return
+		}
+		if err := os.WriteFile(realPath, body, info.Mode().Perm()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"saved": true, "path": rel})
+	default:
+		http.Error(w, "use GET or POST", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleTop(w http.ResponseWriter, r *http.Request) {

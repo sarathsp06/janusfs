@@ -1,5 +1,6 @@
 /build/
 /dist/
+/janusfs
 *.db
 *.db-journal
 .DS_Store

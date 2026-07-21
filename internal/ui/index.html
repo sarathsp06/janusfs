@@ -201,7 +201,38 @@
   @media (max-width: 480px) {
     .stat-grid { grid-template-columns: 1fr; }
   }
+
+  .CodeMirror { height: auto; border: 1px solid var(--charcoal); border-radius: var(--radius-sharp);
+    font-family: "Aeonik Mono", "SF Mono", monospace; font-size: 12px; line-height: 16px; }
+  .CodeMirror-scroll { min-height: 80px; max-height: 420px; }
+  .file-entry .content.has-editor { padding: 0; background: none; border: none; max-height: none; overflow: visible; white-space: normal; }
+  .editor-actions { margin-top: var(--sp-sm); display: flex; align-items: center; gap: var(--sp-sm); }
+  .editor-actions button { font-family: "Inter", sans-serif; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 4px 12px; border: 1px solid var(--charcoal); border-radius: var(--radius-sharp); background: var(--pure-white); color: var(--charcoal); }
+  .editor-actions button:hover { background: var(--signal-yellow); }
+  .editor-actions button:disabled { opacity: 0.4; cursor: default; background: var(--pure-white); }
+  .editor-actions .save-status { font-size: 12px; color: var(--mid-grey); }
+  .editor-binary { padding: var(--sp-md); color: var(--mid-grey); font-size: 13px; }
 </style>
+<link rel="stylesheet" href="vendor/cm.css">
+<link rel="stylesheet" href="vendor/addon-dialog.css">
+<script src="vendor/cm.js"></script>
+<script src="vendor/addon-matchbrackets.js"></script>
+<script src="vendor/addon-dialog.js"></script>
+<script src="vendor/addon-search.js"></script>
+<script src="vendor/addon-search-main.js"></script>
+<script src="vendor/mode-javascript.js"></script>
+<script src="vendor/mode-python.js"></script>
+<script src="vendor/mode-yaml.js"></script>
+<script src="vendor/mode-xml.js"></script>
+<script src="vendor/mode-css.js"></script>
+<script src="vendor/mode-markdown.js"></script>
+<script src="vendor/mode-shell.js"></script>
+<script src="vendor/mode-clike.js"></script>
+<script src="vendor/mode-go.js"></script>
+<script src="vendor/mode-sql.js"></script>
+<script src="vendor/mode-properties.js"></script>
+<script src="vendor/mode-dockerfile.js"></script>
 </head>
 <body>
 <div class="top-bar">
@@ -359,7 +390,7 @@
       html += '<span class="badge ' + kind + '">' + kind.charAt(0) + '</span>';
       html += '<span class="path mono-code">' + esc(e.path) + '</span>';
       html += patStr;
-      html += '<span class="toggle" onclick="event.stopPropagation();revealFile(this,\'' + escJS(e.path) + '\')">show</span>';
+      html += '<span class="toggle" onclick="event.stopPropagation();revealFile(this,\'' + escJS(e.path) + '\')">view / edit</span>';
       html += '</div>';
       html += ruleStr;
       html += '<div class="content" data-path="' + escAttr(e.path) + '"></div>';
@@ -373,24 +404,30 @@
     var entry = btn.closest('.file-entry');
     var content = entry.querySelector('.content');
     if (content.classList.contains('open')) {
-      content.classList.remove('open');
-      btn.textContent = 'show';
+      content.classList.remove('open', 'has-editor');
+      content.innerHTML = '';
+      btn.textContent = 'view / edit';
       return;
     }
-    content.classList.add('open', 'loading');
+    content.classList.add('open');
     content.textContent = 'Loading...';
     btn.textContent = 'hide';
     fetch(apiURL('/api/v1/reveal?path=' + encodeURIComponent(path)))
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function(text) {
-        content.classList.remove('loading');
-        content.textContent = text;
+        content.classList.add('has-editor');
+        mountEditor(content, text, path, function(newValue, statusEl, done) { saveFile(path, newValue, statusEl, done); });
       })
-      .catch(function() {
-        content.classList.remove('loading');
-        content.textContent = '(error loading file)';
-      });
+      .catch(function() { content.textContent = '(error loading file)'; });
   };
+
+  function saveFile(path, content, statusEl, done) {
+    fetch(apiURL('/api/v1/reveal?path=' + encodeURIComponent(path)), { method: 'POST', headers: {'Content-Type': 'text/plain'}, body: content })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function() { statusEl.textContent = 'Saved'; if (done) done();
+        setTimeout(function() { if (statusEl.textContent === 'Saved') statusEl.textContent = ''; }, 2000); })
+      .catch(function() { statusEl.textContent = 'Save failed'; });
+  }
 
   function fetchConfig() {
     fetch(apiURL('/api/v1/config'))
@@ -411,31 +448,88 @@
     files.forEach(function(f) {
       var box = document.createElement('div');
       box.className = 'config-file';
-      var textareaId = 'cfg-' + Math.random().toString(36).slice(2);
-      box.innerHTML =
-        '<div class="config-path mono-code">' + esc(f.path) + '</div>' +
-        '<textarea id="' + textareaId + '" spellcheck="false">' + esc(f.content) + '</textarea>' +
-        '<div class="config-actions">' +
-          '<button type="button">Save</button>' +
-          '<span class="save-status"></span>' +
-        '</div>';
-      box.querySelector('button').addEventListener('click', function() {
-        saveConfig(f.path, document.getElementById(textareaId).value, box.querySelector('.save-status'));
-      });
+      var title = document.createElement('div');
+      title.className = 'config-path mono-code';
+      title.textContent = f.path;
+      box.appendChild(title);
+      var host = document.createElement('div');
+      box.appendChild(host);
       el.appendChild(box);
+      mountEditor(host, f.content, f.path, function(newValue, statusEl, done) { saveConfig(f.path, newValue, statusEl, done); });
     });
   }
 
-  function saveConfig(path, content, statusEl) {
-    statusEl.textContent = 'Saving...';
+  function saveConfig(path, content, statusEl, done) {
     fetch(apiURL('/api/v1/config'), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({path: path, content: content})
     })
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function() { statusEl.textContent = 'Saved'; setTimeout(function() { statusEl.textContent = ''; }, 2000); })
+      .then(function() {
+        statusEl.textContent = 'Saved'; if (done) done();
+        setTimeout(function() { if (statusEl.textContent === 'Saved') statusEl.textContent = ''; }, 2000);
+        setTimeout(fetchCoverage, 1000);
+      })
       .catch(function() { statusEl.textContent = 'Save failed'; });
+  }
+
+  var CM_MODES = {
+    js:'javascript', jsx:'javascript', mjs:'javascript', cjs:'javascript', ts:'javascript', tsx:'javascript',
+    json:{name:'javascript',json:true}, py:'python', yml:'yaml', yaml:'yaml',
+    xml:'xml', html:'htmlmixed', htm:'htmlmixed', svg:'xml', css:'css', scss:'css',
+    md:'markdown', markdown:'markdown', sh:'shell', bash:'shell', zsh:'shell',
+    c:'text/x-csrc', h:'text/x-csrc', cpp:'text/x-c++src', cc:'text/x-c++src', hpp:'text/x-c++src',
+    java:'text/x-java', kt:'text/x-kotlin', scala:'text/x-scala', go:'go', sql:'sql',
+    properties:'properties', ini:'properties', conf:'properties', toml:'properties'
+  };
+  function modeForFilename(name) {
+    var base = String(name).toLowerCase().split('/').pop();
+    if (base === 'dockerfile') return 'dockerfile';
+    if (base.indexOf('.env') === 0) return 'shell';
+    var ext = base.indexOf('.') >= 0 ? base.split('.').pop() : '';
+    return CM_MODES[ext] || null;
+  }
+  function looksBinary(text) { return text.indexOf(String.fromCharCode(0)) !== -1; }
+
+  function mountEditor(host, value, filename, saveFn) {
+    host.innerHTML = '';
+    if (looksBinary(value)) {
+      var note = document.createElement('div');
+      note.className = 'editor-binary';
+      note.textContent = 'Binary file — not shown (the editor handles text only).';
+      host.appendChild(note);
+      return;
+    }
+    function doSave() {
+      if (cm.getValue() === saved) return;
+      status.textContent = 'Saving...';
+      saveFn(cm.getValue(), status, function() { saved = cm.getValue(); refresh(); });
+    }
+    var cm = CodeMirror(host, {
+      value: value, mode: modeForFilename(filename), lineNumbers: true, lineWrapping: true,
+      matchBrackets: true, viewportMargin: Infinity,
+      extraKeys: { 'Cmd-S': doSave, 'Ctrl-S': doSave, 'Cmd-F': 'findPersistent', 'Ctrl-F': 'findPersistent' }
+    });
+    var actions = document.createElement('div');
+    actions.className = 'editor-actions';
+    var saveBtn = document.createElement('button'); saveBtn.type = 'button'; saveBtn.textContent = 'Save';
+    var revertBtn = document.createElement('button'); revertBtn.type = 'button'; revertBtn.textContent = 'Revert';
+    var status = document.createElement('span'); status.className = 'save-status';
+    actions.appendChild(saveBtn); actions.appendChild(revertBtn); actions.appendChild(status);
+    host.appendChild(actions);
+    var saved = value;
+    function refresh() {
+      var dirty = cm.getValue() !== saved;
+      saveBtn.disabled = !dirty; revertBtn.disabled = !dirty;
+      if (dirty && status.textContent === '') status.textContent = 'unsaved';
+      if (!dirty && status.textContent === 'unsaved') status.textContent = '';
+    }
+    cm.on('change', function() { if (status.textContent === 'Saved') status.textContent = ''; refresh(); });
+    saveBtn.addEventListener('click', doSave);
+    revertBtn.addEventListener('click', function() { cm.setValue(saved); status.textContent = ''; refresh(); });
+    refresh();
+    setTimeout(function() { cm.refresh(); }, 0);
   }
 
   function fetchLatency() {

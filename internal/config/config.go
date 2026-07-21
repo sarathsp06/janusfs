@@ -12,6 +12,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +20,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
 )
 
 // Default tunable values, per SPEC §11 (--ui-port), §3.8/NFR-4 (cache and
@@ -147,6 +147,156 @@ func ApplyEnv(cfg *Config) error {
 	return nil
 }
 
+// DefaultMountRoot is the suggested --mount-root for `janusfs install`'s
+// interactive prompt: alongside ~/.janusfs/config (global rules) and
+// ~/.janusfs/settings.json, mounts live at ~/.janusfs/mounts/<full-src-path>.
+func DefaultMountRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".janusfs", "mounts")
+}
+
+// SettingsPath is the persistent settings file, ~/.janusfs/settings.json.
+func SettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("config: resolving home directory: %w", err)
+	}
+	return filepath.Join(home, ".janusfs", "settings.json"), nil
+}
+
+type fileSettings struct {
+	MountRoot string `json:"mount_root"`
+}
+
+// ApplyFile overlays ~/.janusfs/settings.json onto cfg (Default -> File -> Env -> Flag).
+// A missing file is not an error.
+func ApplyFile(cfg *Config) error {
+	path, err := SettingsPath()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("config: reading %s: %w", path, err)
+	}
+	var fsettings fileSettings
+	if err := json.Unmarshal(data, &fsettings); err != nil {
+		return fmt.Errorf("config: parsing %s: %w", path, err)
+	}
+	if fsettings.MountRoot != "" {
+		cfg.MountRoot = fsettings.MountRoot
+	}
+	return nil
+}
+
+// SaveSettings persists mountRoot to ~/.janusfs/settings.json (0700 dir, 0600 file).
+func SaveSettings(mountRoot string) error {
+	path, err := SettingsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("config: creating %s: %w", filepath.Dir(path), err)
+	}
+	data, err := json.MarshalIndent(fileSettings{MountRoot: mountRoot}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: encoding settings: %w", err)
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+// MountsPath is the registry of mounts started via `janusfs mount`,
+// ~/.janusfs/mounts.json — the input to `janusfs resume`.
+func MountsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("config: resolving home directory: %w", err)
+	}
+	return filepath.Join(home, ".janusfs", "mounts.json"), nil
+}
+
+// MountRecord is one entry in the mounts registry: a src/mountpoint pair
+// that `janusfs resume` can remount.
+type MountRecord struct {
+	Src        string `json:"src"`
+	Mountpoint string `json:"mountpoint"`
+}
+
+// LoadMounts reads the mounts registry. A missing file is not an error.
+func LoadMounts() ([]MountRecord, error) {
+	path, err := MountsPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("config: reading %s: %w", path, err)
+	}
+	var records []MountRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
+	return records, nil
+}
+
+func saveMounts(records []MountRecord) error {
+	path, err := MountsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("config: creating %s: %w", filepath.Dir(path), err)
+	}
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: encoding mounts registry: %w", err)
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+// RecordMount upserts (src, mountpoint) into the mounts registry, keyed by
+// mountpoint, so a later `janusfs resume` knows to remount it.
+func RecordMount(src, mountpoint string) error {
+	records, err := LoadMounts()
+	if err != nil {
+		return err
+	}
+	for i, r := range records {
+		if r.Mountpoint == mountpoint {
+			records[i].Src = src
+			return saveMounts(records)
+		}
+	}
+	records = append(records, MountRecord{Src: src, Mountpoint: mountpoint})
+	return saveMounts(records)
+}
+
+// RemoveMount drops mountpoint from the mounts registry (called on explicit
+// `janusfs umount`, so resume doesn't bring back a mount the user chose to
+// stop). Absent entries are a no-op.
+func RemoveMount(mountpoint string) error {
+	records, err := LoadMounts()
+	if err != nil {
+		return err
+	}
+	out := records[:0]
+	for _, r := range records {
+		if r.Mountpoint != mountpoint {
+			out = append(out, r)
+		}
+	}
+	return saveMounts(out)
+}
+
 func envInt(key string, dst *int) error {
 	s, ok := os.LookupEnv(key)
 	if !ok || s == "" {
@@ -186,17 +336,16 @@ func envBool(key string, dst *bool) error {
 	return nil
 }
 
-// ResolveMountpoint implements FR-1's mount-root amendment
-// (docs/SPEC_AMENDMENTS.md 2026-07-18): when Mountpoint is empty and
-// MountRoot is set, it derives Mountpoint as "<MountRoot>/<leaf>" (leaf is
-// Name if set, else filepath.Base(Src)) and creates that directory (0700)
-// if it doesn't exist yet. A no-op if Mountpoint is already set (an
-// explicit mountpoint always wins) or MountRoot is empty (feature off;
-// Validate then requires an explicit mountpoint exactly as unamended FR-1
-// does). Call before Validate. A leaf collision with a live mount (a
-// different <src> sharing the derived leaf) is not silently reused: the
-// derived directory exists but is non-empty, so Validate's existing
-// empty-directory check rejects it via ErrMountpointNotEmpty.
+// ResolveMountpoint derives the mountpoint when Mountpoint is empty and
+// MountRoot is set, creating the directory (0700) if it doesn't exist yet.
+// A no-op if Mountpoint is already set or MountRoot is empty. Call before Validate.
+//
+// Default derivation mirrors the source's full, symlink-resolved absolute
+// path under MountRoot: `mount /Users/me/projects/app` with root ~/janusroot
+// mounts at ~/janusroot/Users/me/projects/app. Every source maps to a unique,
+// predictable location — two sources never collide.
+//
+// --name is the opt-in escape hatch to a short leaf (<MountRoot>/<Name>).
 func (c *Config) ResolveMountpoint() error {
 	if c.Mountpoint != "" || c.MountRoot == "" {
 		return nil
@@ -204,17 +353,18 @@ func (c *Config) ResolveMountpoint() error {
 	if c.Src == "" {
 		return fmt.Errorf("config: src is required to derive a mountpoint: %w", errEmptyPath)
 	}
-
-	leaf := c.Name
-	if leaf == "" {
+	var derived string
+	if c.Name != "" {
+		derived = filepath.Join(c.MountRoot, c.Name)
+	} else {
 		srcAbs, err := absClean(c.Src)
 		if err != nil {
 			return fmt.Errorf("config: resolving src %q: %w", c.Src, err)
 		}
-		leaf = filepath.Base(srcAbs)
+		// filepath.Join cleans the leading slash of srcAbs, nesting the full
+		// source path under MountRoot rather than anchoring at it.
+		derived = filepath.Join(c.MountRoot, srcAbs)
 	}
-
-	derived := filepath.Join(c.MountRoot, leaf)
 	if err := os.MkdirAll(derived, 0o700); err != nil {
 		return fmt.Errorf("config: creating mountpoint %q under --mount-root: %w", derived, err)
 	}

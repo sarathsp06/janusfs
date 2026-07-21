@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -184,7 +183,7 @@ func TestResolveMountpoint_NoOpWhenMountRootUnset(t *testing.T) {
 	}
 }
 
-func TestResolveMountpoint_DerivesFromSrcBasename(t *testing.T) {
+func TestResolveMountpoint_MirrorsFullSrcPath(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(t.TempDir(), "myproject")
 	if err := os.Mkdir(src, 0o755); err != nil {
@@ -198,7 +197,11 @@ func TestResolveMountpoint_DerivesFromSrcBasename(t *testing.T) {
 	if err := c.ResolveMountpoint(); err != nil {
 		t.Fatalf("ResolveMountpoint() error = %v", err)
 	}
-	want := filepath.Join(root, "myproject")
+	srcAbs, err := absClean(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, srcAbs)
 	if c.Mountpoint != want {
 		t.Errorf("Mountpoint = %q, want %q", c.Mountpoint, want)
 	}
@@ -228,7 +231,7 @@ func TestResolveMountpoint_NameOverridesLeaf(t *testing.T) {
 	}
 }
 
-func TestResolveMountpoint_LeafCollisionFailsClosed(t *testing.T) {
+func TestResolveMountpoint_DistinctSourcesDontCollide(t *testing.T) {
 	root := t.TempDir()
 	srcA := filepath.Join(t.TempDir(), "shared")
 	srcB := filepath.Join(t.TempDir(), "shared")
@@ -245,11 +248,6 @@ func TestResolveMountpoint_LeafCollisionFailsClosed(t *testing.T) {
 	if err := a.ResolveMountpoint(); err != nil {
 		t.Fatalf("first ResolveMountpoint() error = %v", err)
 	}
-	// Simulate the first mount being live: the derived directory now has
-	// content (a real mount would serve the source's entries the same way).
-	if err := os.WriteFile(filepath.Join(a.Mountpoint, "file"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	b := Default()
 	b.Src = srcB
@@ -257,16 +255,43 @@ func TestResolveMountpoint_LeafCollisionFailsClosed(t *testing.T) {
 	if err := b.ResolveMountpoint(); err != nil {
 		t.Fatalf("second ResolveMountpoint() error = %v", err)
 	}
-	if b.Mountpoint != a.Mountpoint {
-		t.Fatalf("expected both derivations to collide on the same leaf, got %q and %q", a.Mountpoint, b.Mountpoint)
+
+	if a.Mountpoint == b.Mountpoint {
+		t.Fatalf("distinct sources derived the same mountpoint: %q", a.Mountpoint)
+	}
+	if err := a.Validate(); err != nil {
+		t.Errorf("a.Validate() = %v, want nil", err)
+	}
+	if err := b.Validate(); err != nil {
+		t.Errorf("b.Validate() = %v, want nil", err)
+	}
+}
+
+func TestApplyFile_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := SaveSettings("/some/mount/root"); err != nil {
+		t.Fatalf("SaveSettings() error = %v", err)
 	}
 
-	err := b.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil, want error for a leaf collision with a live mount")
+	cfg := Default()
+	if err := ApplyFile(&cfg); err != nil {
+		t.Fatalf("ApplyFile() error = %v", err)
 	}
-	if !errors.Is(err, ErrMountpointNotEmpty) {
-		t.Errorf("Validate() error = %v, want wrapping ErrMountpointNotEmpty", err)
+	if cfg.MountRoot != "/some/mount/root" {
+		t.Errorf("MountRoot = %q, want %q", cfg.MountRoot, "/some/mount/root")
+	}
+}
+
+func TestApplyFile_MissingIsNoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := Default()
+	if err := ApplyFile(&cfg); err != nil {
+		t.Fatalf("ApplyFile() error = %v, want nil for missing settings file", err)
+	}
+	if cfg.MountRoot != "" {
+		t.Errorf("MountRoot = %q, want unchanged empty", cfg.MountRoot)
 	}
 }
 

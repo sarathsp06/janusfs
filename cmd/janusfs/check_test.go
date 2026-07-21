@@ -58,8 +58,8 @@ func TestRunCheck_CleanTree_ExitZero(t *testing.T) {
 			t.Errorf("expected nil error for clean tree, got %v", err)
 		}
 	})
-	if !strings.Contains(out, "No findings") {
-		t.Errorf("expected 'No findings' summary, got %q", out)
+	if !strings.Contains(out, "No problems found") {
+		t.Errorf("expected 'No problems found' summary, got %q", out)
 	}
 }
 

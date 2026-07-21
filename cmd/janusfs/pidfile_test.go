@@ -93,3 +93,45 @@ func TestRemovePidfile_MissingIsNotAnError(t *testing.T) {
 		t.Errorf("removePidfile() error = %v, want nil for missing pidfile", err)
 	}
 }
+
+func TestPruneMirrorDirs(t *testing.T) {
+	root := t.TempDir()
+	deep := filepath.Join(root, "Users", "me", "projects", "app")
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pruneMirrorDirs(deep, root)
+	if _, err := os.Stat(filepath.Join(root, "Users")); !os.IsNotExist(err) {
+		t.Errorf("expected empty chain up to root to be removed, got err=%v", err)
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		t.Errorf("root %q should never be removed", root)
+	}
+}
+
+func TestPruneMirrorDirs_StopsAtNonEmptySibling(t *testing.T) {
+	root := t.TempDir()
+	deep := filepath.Join(root, "Users", "me", "app")
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Users", "me", "keep.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pruneMirrorDirs(deep, root)
+	if _, err := os.Stat(filepath.Join(root, "Users", "me")); err != nil {
+		t.Errorf("non-empty parent should survive, stat err=%v", err)
+	}
+	if _, err := os.Stat(deep); !os.IsNotExist(err) {
+		t.Errorf("expected leaf dir to be removed, got err=%v", err)
+	}
+}
+
+func TestPruneMirrorDirs_OutsideRootUntouched(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	pruneMirrorDirs(outside, root)
+	if info, err := os.Stat(outside); err != nil || !info.IsDir() {
+		t.Errorf("path outside root should be untouched, err=%v", err)
+	}
+}

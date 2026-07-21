@@ -66,6 +66,26 @@ func readPidfile(mountpoint string) (int, error) {
 	return pid, nil
 }
 
+// pruneMirrorDirs removes the now-empty mountpoint and its empty parent
+// directories, stopping before mountRoot. Best-effort; the strict-prefix guard
+// means it only ever touches paths under mountRoot.
+func pruneMirrorDirs(mountpoint, mountRoot string) {
+	if mountRoot == "" {
+		return
+	}
+	mp, err1 := filepath.Abs(mountpoint)
+	root, err2 := filepath.Abs(mountRoot)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	for mp != root && strings.HasPrefix(mp, root+string(filepath.Separator)) {
+		if err := os.Remove(mp); err != nil {
+			return
+		}
+		mp = filepath.Dir(mp)
+	}
+}
+
 // pidAlive reports whether pid names a live process, using the POSIX
 // "signal 0" existence probe: no signal is actually delivered, only the
 // existence/permission check is performed. EPERM (process exists but is
