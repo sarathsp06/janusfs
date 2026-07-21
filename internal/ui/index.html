@@ -322,7 +322,11 @@
 
   function apiURL(path) {
     var base = window.location.origin;
-    return base + path + (token ? '?token=' + encodeURIComponent(token) : '');
+    if (!token) return base + path;
+    // Use & when the path already carries a query (e.g. reveal?path=...),
+    // otherwise the token lands inside the path param and auth fails.
+    var sep = path.indexOf('?') >= 0 ? '&' : '?';
+    return base + path + sep + 'token=' + encodeURIComponent(token);
   }
 
   var POLL = 2000;

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -219,7 +221,7 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 		return daemonResponse{Error: err.Error()}
 	}
 	if cfg.Mountpoint == "" {
-		return daemonResponse{Error: "no mount root configured: run `janusfs install` (or set --mount-root/JANUSFS_MOUNT_ROOT)"}
+		return daemonResponse{Error: hintNoMountRoot}
 	}
 	mpAbs, err := filepath.Abs(cfg.Mountpoint)
 	if err != nil {
@@ -235,6 +237,15 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	}
 
 	if err := cfg.Validate(); err != nil {
+		if errors.Is(err, config.ErrMountpointNotEmpty) {
+			if kids := d.childMountsUnder(mpAbs); len(kids) > 0 {
+				return daemonResponse{Error: fmt.Sprintf(
+					"%s already has %d mount(s) nested under it (%s). Nested mounts aren't supported — a parent mount would shadow them. Unmount those first, e.g. `janusfs umount %s`, then mount %s.",
+					mpAbs, len(kids), strings.Join(kids, ", "), kids[0], req.Src)}
+			}
+			return daemonResponse{Error: fmt.Sprintf(
+				"mountpoint %s is not empty (leftover from a previous run?); remove its contents and retry", mpAbs)}
+		}
 		return daemonResponse{Error: err.Error()}
 	}
 
@@ -292,7 +303,14 @@ func (d *daemon) doUnmount(req daemonRequest) daemonResponse {
 	}
 	d.mu.Unlock()
 	if !ok {
-		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon (pass its mountpoint or source path)", req.Mountpoint)}
+		// Not live in this daemon. It may still be a stale registry entry — a
+		// mount recorded earlier that failed to resume (e.g. after a restart).
+		// Prune it so it stops being listed and re-attempted, and report that
+		// rather than a bare "not mounted" the user can't act on.
+		if pruned := pruneStaleRegistry(target); pruned != "" {
+			return daemonResponse{OK: true, Message: fmt.Sprintf("%s was not live; removed its stale entry from the mount registry", pruned)}
+		}
+		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon and is not in the registry (pass its mountpoint or source path)", req.Mountpoint)}
 	}
 
 	rt.stop()
@@ -354,6 +372,46 @@ func (d *daemon) status(rt *mountRuntime) mountStatus {
 		Mountpoint: rt.Mountpoint,
 		Dashboard:  fmt.Sprintf("http://localhost:%d/?token=%s", rt.UIPort, rt.Token),
 	}
+}
+
+// pruneStaleRegistry removes a registry entry matching target (by mountpoint
+// or source path, absolute) and returns the removed mountpoint, or "" if no
+// entry matched. Used to clear entries the daemon isn't tracking live so they
+// stop being listed and re-resumed.
+func pruneStaleRegistry(target string) string {
+	records, err := config.LoadMounts()
+	if err != nil {
+		return ""
+	}
+	for _, r := range records {
+		mpAbs, _ := filepath.Abs(r.Mountpoint)
+		srcAbs, _ := filepath.Abs(r.Src)
+		if mpAbs == target || srcAbs == target {
+			if err := config.RemoveMount(r.Mountpoint); err != nil {
+				return ""
+			}
+			return r.Mountpoint
+		}
+	}
+	return ""
+}
+
+// childMountsUnder returns the source paths of active mounts whose mountpoint
+// is nested under parent, so a parent-mount attempt can name exactly what to
+// unmount first. Sources (not mountpoints) because `janusfs umount` accepts a
+// source path and it's the friendlier thing to show.
+func (d *daemon) childMountsUnder(parent string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	prefix := parent + string(filepath.Separator)
+	var out []string
+	for mp, rt := range d.mounts {
+		if strings.HasPrefix(mp, prefix) {
+			out = append(out, rt.Src)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (d *daemon) snapshot() []mountStatus {

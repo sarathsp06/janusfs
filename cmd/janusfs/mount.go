@@ -18,11 +18,6 @@ import (
 // unmount.
 const shutdownGrace = 5 * time.Second
 
-// errDaemonNotRunning is returned by daemonCall when no daemon is listening
-// on the control socket, so commands can print a clear "start the daemon"
-// hint instead of a raw dial error.
-var errDaemonNotRunning = errors.New("no janusfs daemon is running")
-
 func newMountCmd() *cobra.Command {
 	var name string
 	var noHistory bool
@@ -47,7 +42,7 @@ func newMountCmd() *cobra.Command {
 func runMount(req daemonRequest) error {
 	resp, err := daemonCall(req)
 	if errors.Is(err, errDaemonNotRunning) {
-		return fmt.Errorf("mount: no janusfs daemon is running; start it first with: janusfs daemon")
+		return fmt.Errorf("mount: %s", hintStartDaemon)
 	}
 	if err != nil {
 		return fmt.Errorf("mount: %w", err)
