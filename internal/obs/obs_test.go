@@ -57,31 +57,6 @@ func TestJanusMetricsRecordBytes(t *testing.T) {
 	}
 }
 
-func TestRingBuffer(t *testing.T) {
-	r := NewRingBuffer(4)
-	r.Push("a")
-	r.Push("b")
-	r.Push("c")
-	r.Push("d")
-
-	snap := r.Snapshot()
-	if len(snap) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(snap))
-	}
-	// After filling, push one more to wrap around.
-	r.Push("e")
-	snap = r.Snapshot()
-	if len(snap) != 4 {
-		t.Errorf("expected 4 entries after wrap, got %d", len(snap))
-	}
-	if snap[0] != "b" {
-		t.Errorf("expected oldest 'b', got %q", snap[0])
-	}
-	if snap[3] != "e" {
-		t.Errorf("expected newest 'e', got %q", snap[3])
-	}
-}
-
 func TestTopN(t *testing.T) {
 	tn := NewTopN(100)
 	tn.Record("/a.txt", 100)

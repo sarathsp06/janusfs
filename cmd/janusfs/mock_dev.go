@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -40,7 +39,6 @@ func startMockMount(parent context.Context, src, mountpoint, label string) (*mou
 
 	eventBus := obs.NewEventBus(4096)
 	metrics := &obs.JanusMetrics{}
-	ringBuf := obs.NewRingBuffer(8192)
 	topN := obs.NewTopN(1000)
 
 	tokenBytes := make([]byte, 16)
@@ -70,13 +68,10 @@ func startMockMount(parent context.Context, src, mountpoint, label string) (*mou
 	metrics.RecordBytes(obs.Allowed, 4500)
 	metrics.RecordBytes(obs.Masked, 1200)
 
-	ringBuf.Push(`{"TS":"` + time.Now().Format(time.RFC3339) + `","Op":"read","Path":"app.env","Decision":1,"Bytes":24,"LatencyUs":140,"Cache":1}`)
-	ringBuf.Push(`{"TS":"` + time.Now().Format(time.RFC3339) + `","Op":"open","Path":"db.secret","Decision":2,"Bytes":0,"LatencyUs":42,"Cache":0}`)
-
 	topN.Record("app.env", 1200)
 	topN.Record("README.md", 3300)
 
-	apiSrv := api.New(ui.FS, bearerToken, metrics, ringBuf, topN, eventBus, nil)
+	apiSrv := api.New(ui.FS, bearerToken, metrics, topN, eventBus, nil)
 	apiSrv.SetMountInfo(src, mountpoint)
 	apiSrv.SetVFSMeta(src, func() (int, int64, uint64, uint64, uint64) {
 		return 1, 1024, 12, 3, 0

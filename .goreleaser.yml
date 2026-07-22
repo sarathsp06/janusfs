@@ -68,9 +68,9 @@ checksum:
   algorithm: sha256
 
 sboms:
-  # Software Bill of Materials via syft (CycloneDX JSON). goreleaser skips
-  # SBOM generation when syft isn't installed; users can install it with
-  # `brew install syft` and re-run the release.
+  # Software Bill of Materials via syft (CycloneDX JSON). syft must be
+  # installed; the release workflow installs it automatically. Local runs:
+  # `brew install syft` (macOS) or the install script on other platforms.
   - id: janusfs-sbom
     artifacts: archive
     documents:

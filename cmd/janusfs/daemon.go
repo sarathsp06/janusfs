@@ -92,8 +92,24 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 		return fmt.Errorf("daemon: %w", err)
 	}
 	// Refuse a second daemon: if the socket answers, one is already running.
-	if _, derr := net.Dial("unix", sock); derr == nil {
-		return fmt.Errorf("daemon: already running (control socket %s is live); stop it first", sock)
+	conn, derr := net.Dial("unix", sock)
+	if derr == nil {
+		// Query the running daemon for its mount list.
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(daemonRequest{Cmd: "list"})
+		var resp daemonResponse
+		_ = json.NewDecoder(conn).Decode(&resp)
+		conn.Close()
+
+		fmt.Fprintf(os.Stderr, "JanusFS daemon is already running.\n")
+		fmt.Fprintf(os.Stderr, "  Dashboard: http://127.0.0.1:%d/\n", indexPort)
+		if resp.OK && len(resp.Mounts) > 0 {
+			fmt.Fprintf(os.Stderr, "  Mounts:\n")
+			for _, m := range resp.Mounts {
+				fmt.Fprintf(os.Stderr, "    %s → %s\n", m.Src, m.Dashboard)
+			}
+		}
+		return nil
 	}
 	// Stale socket from a crashed daemon — remove before rebinding.
 	_ = os.Remove(sock)

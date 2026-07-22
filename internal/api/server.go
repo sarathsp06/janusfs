@@ -11,7 +11,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -21,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sarathsp06/janusfs/internal/history"
 	"github.com/sarathsp06/janusfs/internal/obs"
 	"github.com/sarathsp06/janusfs/internal/vfsmeta"
@@ -31,7 +32,7 @@ type Server struct {
 	mux           *http.ServeMux
 	server        *http.Server
 	metrics       *obs.JanusMetrics
-	ring          *obs.RingBuffer
+	promReg       *prometheus.Registry
 	topN          *obs.TopN
 	bus           *obs.EventBus
 	history       *history.Store
@@ -49,11 +50,13 @@ type Server struct {
 // New constructs an API server. uiFS is the embedded dashboard filesystem
 // (internal/ui.FS). token is the per-mount bearer token minted at startup.
 // bus may be nil (no live feed). hist may be nil (no history persistence).
-func New(uiFS fs.FS, token string, metrics *obs.JanusMetrics, ring *obs.RingBuffer, topN *obs.TopN, bus *obs.EventBus, hist *history.Store) *Server {
+func New(uiFS fs.FS, token string, metrics *obs.JanusMetrics, topN *obs.TopN, bus *obs.EventBus, hist *history.Store) *Server {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(obs.NewCollector(metrics))
 	s := &Server{
 		mux:     http.NewServeMux(),
 		metrics: metrics,
-		ring:    ring,
+		promReg: reg,
 		topN:    topN,
 		bus:     bus,
 		history: hist,
@@ -100,7 +103,7 @@ func (s *Server) register() {
 	s.mux.HandleFunc("/api/v1/latency", s.withToken(s.handleLatency))
 	s.mux.HandleFunc("/api/v1/config", s.withToken(s.handleConfig))
 	s.mux.HandleFunc("/api/v1/reload", s.withToken(s.handleReload))
-	s.mux.HandleFunc("/api/v1/events", s.withToken(s.handleEvents))
+	s.mux.Handle("/metrics", promhttp.HandlerFor(s.promReg, promhttp.HandlerOpts{}))
 	s.mux.HandleFunc("/api/v1/history", s.withToken(s.handleHistory))
 	s.mux.HandleFunc("/api/v1/sessions", s.withToken(s.handleSessions))
 	s.mux.HandleFunc("/api/v1/vfsmeta/status.json", s.withToken(s.handleStatusJSON))
@@ -373,49 +376,6 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
 		snaps = []obs.LatencySnapshot{}
 	}
 	writeJSON(w, map[string]any{"ops": snaps})
-}
-
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	if s.ring != nil {
-		for _, label := range s.ring.Snapshot() {
-			fmt.Fprintf(w, "data: %s\n\n", label)
-		}
-		flusher.Flush()
-	}
-
-	if s.bus == nil {
-		fmt.Fprintf(w, "data: {\"type\":\"done\"}\n\n")
-		flusher.Flush()
-		return
-	}
-
-	ctx := r.Context()
-	for {
-		select {
-		case e, ok := <-s.bus.Events():
-			if !ok {
-				return
-			}
-			b, _ := json.Marshal(e)
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-		case <-ctx.Done():
-			return
-		case <-time.After(15 * time.Second):
-			fmt.Fprintf(w, ": heartbeat\n\n")
-			flusher.Flush()
-		}
-	}
 }
 
 // handleHistory returns aggregated history rollups (FR-46).

@@ -91,6 +91,11 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	}
 	opts.FsName = "janusfs" // shown as the source in `df -T`
 	opts.Name = "janusfs"   // the "fuse.<name>" suffix in `df -T`
+	// NullPermissions: let the kernel handle permission checks against the
+	// reported mode bits rather than having go-fuse do it — avoids spurious
+	// EACCES for root vs. user ownership mismatches on the loopback.
+	opts.NullPermissions = true
+
 	// macFUSE holds a volume busy by default: Spotlight (mdworker) indexes it
 	// and Finder browses it, so a graceful unmount fails with EBUSY forever.
 	// nobrowse keeps it out of Finder + Spotlight; noappledouble stops the

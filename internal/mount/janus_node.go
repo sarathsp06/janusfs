@@ -145,6 +145,17 @@ func (n *JanusNode) decisionFor(name string) engine.Decision {
 var _ = (fs.NodeOpener)((*JanusNode)(nil))
 
 // Open implements FR-7's open matrix: HIDDEN denies unconditionally;
+// Getattr overrides LoopbackNode to zero the inode number reported to the
+// FUSE bridge. LoopbackNode reports the real filesystem inode, but when files
+// are replaced (git checkout, editor rename-on-save) the same FUSE node gets a
+// new backing inode, causing go-fuse's bridge to log noisy "overriding ino"
+// warnings. Zeroing Ino tells go-fuse to use its own synthetic inode numbering.
+func (n *JanusNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	errno := n.LoopbackNode.Getattr(ctx, fh, out)
+	out.Ino = 0
+	return errno
+}
+
 // MASKED denies any write-intent open and otherwise returns a virtual
 // handle serving redacted bytes; ALLOWED passes through to LoopbackNode.
 // Config files (.janusignore/.janusmask) are unconditionally read-only:
@@ -169,6 +180,16 @@ func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, f
 	default:
 		return n.LoopbackNode.Open(ctx, flags)
 	}
+}
+
+var _ = (fs.NodeIoctler)((*JanusNode)(nil))
+
+// Ioctl returns ENOSYS for all ioctl calls. macOS tools (e.g. make) issue
+// ioctls on regular files; the default go-fuse LoopbackFile.Ioctl panics on
+// empty input buffers (OPCODE-60). Returning ENOSYS tells the kernel this
+// filesystem does not support ioctls, which is the correct fail-closed answer.
+func (n *JanusNode) Ioctl(ctx context.Context, f fs.FileHandle, cmd uint32, arg uint64, input []byte, output []byte) (int32, syscall.Errno) {
+	return 0, syscall.ENOSYS
 }
 
 var _ = (fs.NodeOpendirHandler)((*JanusNode)(nil))
