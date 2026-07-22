@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin || linux
 
 // JanusRoot/JanusNode implement SPEC.md §6/§7's decision-bearing FUSE
 // adapter by embedding fs.LoopbackNode and overriding only the ops FR-7's
@@ -489,7 +489,7 @@ func (h *maskedHandle) contentKey() (provider.ContentKey, error) {
 	}
 	return provider.ContentKey{
 		Path:    h.node.absPath(),
-		MTimeNS: st.Mtimespec.Sec*1e9 + st.Mtimespec.Nsec,
+		MTimeNS: getMtimeNS(&st),
 		Size:    st.Size,
 		Inode:   st.Ino,
 		Gen:     h.node.root.Engine.Generation(),
