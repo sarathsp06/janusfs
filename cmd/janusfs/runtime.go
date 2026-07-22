@@ -87,7 +87,6 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 
 	eventBus := obs.NewEventBus(4096)
 	metrics := &obs.JanusMetrics{}
-	ringBuf := obs.NewRingBuffer(8192)
 	topN := obs.NewTopN(1000)
 
 	tokenBytes := make([]byte, 16)
@@ -125,7 +124,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 		}
 	}
 
-	apiSrv := api.New(ui.FS, bearerToken, metrics, ringBuf, topN, eventBus, rt.hist)
+	apiSrv := api.New(ui.FS, bearerToken, metrics, topN, eventBus, rt.hist)
 	apiSrv.SetMountInfo(cfg.Src, cfg.Mountpoint)
 	apiSrv.SetVFSMeta(cfg.Src, func() (int, int64, uint64, uint64, uint64) {
 		ps := prov.Stats()
@@ -153,7 +152,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 		}
 	}()
 
-	go drainEvents(eventBus, metrics, ringBuf, topN, rt.hist)
+	go drainEvents(eventBus, metrics, topN, rt.hist)
 
 	ready := make(chan error, 1)
 	rt.adapter = &mount.Adapter{
@@ -230,7 +229,7 @@ func (rt *mountRuntime) stop() {
 // drainEvents fans every FUSE event into the obs components and history store
 // so FUSE handlers never block on observability (FR-22). Returns when the bus
 // is closed.
-func drainEvents(bus *obs.EventBus, metrics *obs.JanusMetrics, ring *obs.RingBuffer, topN *obs.TopN, hist *history.Store) {
+func drainEvents(bus *obs.EventBus, metrics *obs.JanusMetrics, topN *obs.TopN, hist *history.Store) {
 	for e := range bus.Events() {
 		metrics.RecordOp(e.Op, e.Decision)
 		if e.Bytes > 0 {
@@ -247,7 +246,6 @@ func drainEvents(bus *obs.EventBus, metrics *obs.JanusMetrics, ring *obs.RingBuf
 		case obs.CacheRebuild:
 			metrics.CacheRebuild.Add(1)
 		}
-		ring.Push(e.Label())
 		if e.Decision == obs.Masked || e.Decision == obs.Allowed {
 			topN.Record(e.Path, e.Bytes)
 		}

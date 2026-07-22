@@ -24,9 +24,7 @@ func testMetrics() *obs.JanusMetrics {
 
 func testServer() *Server {
 	m := testMetrics()
-	r := obs.NewRingBuffer(64)
-	r.Push("test event")
-	return New(nil, "test-token", m, r, nil, nil, nil)
+	return New(nil, "test-token", m, nil, nil, nil)
 }
 
 func TestSummaryEndpoint(t *testing.T) {
@@ -279,7 +277,7 @@ func TestConfigSaveTriggersReload(t *testing.T) {
 }
 
 func TestVendorAssetServed(t *testing.T) {
-	s := New(ui.FS, "test-token", testMetrics(), obs.NewRingBuffer(64), nil, nil, nil)
+	s := New(ui.FS, "test-token", testMetrics(), nil, nil, nil)
 	req := httptest.NewRequest("GET", "/vendor/cm.js", nil)
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
