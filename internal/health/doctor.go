@@ -15,11 +15,11 @@ import (
 
 // Report is a full FR-29 diagnostic report.
 type Report struct {
-	MacFUSE  MacFUSEStatus  `json:"macfuse"`
-	Mounts   []MountInfo    `json:"mounts"`
-	Runtime  RuntimeInfo    `json:"runtime"`
-	Version  string         `json:"version"`
-	Warnings []string       `json:"warnings,omitempty"`
+	MacFUSE  MacFUSEStatus `json:"macfuse"`
+	Mounts   []MountInfo   `json:"mounts"`
+	Runtime  RuntimeInfo   `json:"runtime"`
+	Version  string        `json:"version"`
+	Warnings []string      `json:"warnings,omitempty"`
 }
 
 // MacFUSEStatus reports whether the macFUSE kext is loaded.
@@ -74,7 +74,7 @@ func Run(pidfileDir string) *Report {
 			for _, e := range entries {
 				if !e.IsDir() && strings.HasSuffix(e.Name(), ".pid") {
 					mi := MountInfo{
-						Pidfile: filepath.Join(pidfileDir, e.Name()),
+						Pidfile:    filepath.Join(pidfileDir, e.Name()),
 						Mountpoint: strings.TrimSuffix(e.Name(), ".pid"),
 					}
 					data, err := os.ReadFile(mi.Pidfile)

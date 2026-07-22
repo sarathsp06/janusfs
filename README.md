@@ -53,18 +53,18 @@ Here's a compact, layered view of exactly what JanusFS does when an agent reads 
 
 ```mermaid
 flowchart LR
-  A[Agent (untrusted)] -->|read / open / readdir| J[JanusFS<br/>(policy snapshot)]
+  A["Agent (untrusted)"] -->|read / open / readdir| J["JanusFS<br/>(policy snapshot)"]
   subgraph JanusFS_Decisions [JanusFS Decisions]
     direction TB
-    JA[ALLOWED]\n(passthrough)
-    JM[MASKED]\n(redaction)
-    JH[HIDDEN]\n(deny EACCES)
+    JA["ALLOWED<br/>(passthrough)"]
+    JM["MASKED<br/>(redaction)"]
+    JH["HIDDEN<br/>(deny EACCES)"]
   end
   J --> JA
   J --> JM
   J --> JH
-  JA --> D[Real files on disk\n(trusted)]
-  JM --> R[Redaction layer\n(RAM cache / re-redact)]
+  JA --> D["Real files on disk<br/>(trusted)"]
+  JM --> R["Redaction layer<br/>(RAM cache / re-redact)"]
   R --> A
   D --> A
   JH --> X((Denied))
@@ -89,11 +89,11 @@ Examples (behavior):
 
 ```mermaid
 flowchart LR
-  Agent[Agent (untrusted)]
-  Janus[JanusFS (FUSE mount)\n(policy snapshot)]
-  Disk[Real files on disk (trusted)]
-  Redact[Redaction Layer\n(RAM cache)]
-  Deny[Denied (EACCES)]
+  Agent["Agent (untrusted)"]
+  Janus["JanusFS (FUSE mount)<br/>(policy snapshot)"]
+  Disk["Real files on disk (trusted)"]
+  Redact["Redaction Layer<br/>(RAM cache)"]
+  Deny["Denied (EACCES)"]
 
   Agent -->|read/open/readdir| Janus
   Janus -->|ALLOWED| Disk
