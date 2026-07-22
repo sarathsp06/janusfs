@@ -215,6 +215,44 @@ func TestRevealViewAndEdit(t *testing.T) {
 	}
 }
 
+func TestReloadEndpoint(t *testing.T) {
+	s := testServer()
+	called := 0
+	s.SetReload(func() error { called++; return nil })
+
+	req := httptest.NewRequest("POST", "/api/v1/reload?token=test-token", nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reload: got %d, body %q", w.Code, w.Body.String())
+	}
+	if called != 1 {
+		t.Errorf("reload callback called %d times, want 1", called)
+	}
+}
+
+func TestConfigSaveTriggersReload(t *testing.T) {
+	root := t.TempDir()
+	s := testServer()
+	s.SetVFSMeta(root, nil, nil, nil)
+	called := 0
+	s.SetReload(func() error { called++; return nil })
+
+	body := `{"path":".janusmask","content":"*.env : env-value\n"}`
+	req := httptest.NewRequest("POST", "/api/v1/config?token=test-token", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("config save: got %d, body %q", w.Code, w.Body.String())
+	}
+	if called != 1 {
+		t.Errorf("saving config should trigger reload; callback called %d times", called)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".janusmask")); err != nil {
+		t.Errorf("config file not written: %v", err)
+	}
+}
+
 func TestVendorAssetServed(t *testing.T) {
 	s := New(ui.FS, "test-token", testMetrics(), obs.NewRingBuffer(64), nil, nil, nil)
 	req := httptest.NewRequest("GET", "/vendor/cm.js", nil)

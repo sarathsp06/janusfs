@@ -36,18 +36,47 @@ func runUmount(mountpoint string) error {
 
 	resp, err := daemonCall(daemonRequest{Cmd: "unmount", Mountpoint: mpAbs})
 	switch {
-	case err == nil && resp.OK:
-		fmt.Println(resp.Message)
-		return nil
 	case errors.Is(err, errDaemonNotRunning):
-		// No daemon — clean up directly below.
+		// No daemon: fall back to a direct OS unmount so a stray mount left by
+		// a crashed daemon can still be cleaned up.
+		return directUnmount(mpAbs)
 	case err != nil:
 		return fmt.Errorf("umount: %w", err)
+	case resp.OK:
+		fmt.Println(resp.Message)
+		// The daemon may have only pruned a stale registry entry; if a real
+		// mount is still lingering at the path (e.g. it failed to resume but
+		// the kernel mount survived), clear it too — quietly, and only when
+		// something is actually mounted there.
+		if isMountpoint(mpAbs) {
+			if uerr := tryUnmount("diskutil", []string{"unmount", "force", mpAbs}, 5); uerr == nil {
+				fmt.Printf("Also cleared a lingering mount at %s\n", mpAbs)
+			}
+		}
+		return nil
 	default:
-		// Daemon running but doesn't own this mountpoint; try direct cleanup.
+		// Daemon up but doesn't know this path and it isn't in the registry.
+		// If something is nonetheless mounted there, clean it directly;
+		// otherwise report the daemon's clean message.
+		if isMountpoint(mpAbs) {
+			return directUnmount(mpAbs)
+		}
+		return fmt.Errorf("umount: %s", resp.Error)
 	}
+}
 
-	return directUnmount(mpAbs)
+// isMountpoint reports whether path is a mount point, by comparing its device
+// number with its parent's — a cheap check that avoids running diskutil
+// against a path where nothing is actually mounted.
+func isMountpoint(path string) bool {
+	var st, parent syscall.Stat_t
+	if err := syscall.Lstat(path, &st); err != nil {
+		return false
+	}
+	if err := syscall.Lstat(filepath.Dir(path), &parent); err != nil {
+		return false
+	}
+	return st.Dev != parent.Dev
 }
 
 // directUnmount performs an OS-level unmount without the daemon: macFUSE's

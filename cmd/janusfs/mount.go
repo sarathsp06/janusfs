@@ -18,25 +18,25 @@ import (
 // unmount.
 const shutdownGrace = 5 * time.Second
 
-// errDaemonNotRunning is returned by daemonCall when no daemon is listening
-// on the control socket, so commands can print a clear "start the daemon"
-// hint instead of a raw dial error.
-var errDaemonNotRunning = errors.New("no janusfs daemon is running")
-
 func newMountCmd() *cobra.Command {
 	var name string
 	var noHistory bool
 
 	cmd := &cobra.Command{
-		Use:   "mount <src>",
+		Use:   "mount <src> [mountpoint]",
 		Short: "Ask the daemon to mount a sanitized view of <src> (returns immediately)",
 		Long: "Hands a mount to the running janusfs daemon and returns; the daemon owns the\n" +
 			"mount and keeps it alive across reboots (via `janusfs daemon`) until you run\n" +
-			"`janusfs umount`. The mountpoint mirrors <src>'s full path under the mount\n" +
-			"root — there is no path override. Start the daemon first with `janusfs daemon`.",
-		Args: cobra.ExactArgs(1),
+			"`janusfs umount`. With no [mountpoint], the mountpoint mirrors <src>'s full\n" +
+			"path under the mount root; pass an empty [mountpoint] to mount at a short path\n" +
+			"of your choosing. Start the daemon first with `janusfs daemon`.",
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMount(daemonRequest{Cmd: "mount", Src: args[0], Label: name, NoHistory: noHistory})
+			req := daemonRequest{Cmd: "mount", Src: args[0], Label: name, NoHistory: noHistory}
+			if len(args) == 2 {
+				req.Mountpoint = args[1]
+			}
+			return runMount(req)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "friendly label for this mount, shown in the dashboard (does not change the path)")
@@ -44,10 +44,45 @@ func newMountCmd() *cobra.Command {
 	return cmd
 }
 
+func newUpdateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "update [src|mountpoint|configpath]",
+		Short: "Reload .janusignore/.janusmask rules for a mount (or all mounts) without remounting",
+		Long: "Recompiles the rule set from disk and clears the redaction cache so edits to\n" +
+			".janusignore/.janusmask take effect. The argument may be a mount's source path,\n" +
+			"its mountpoint, or any file inside either tree (e.g. the config file you just\n" +
+			"edited); the daemon resolves it to the owning mount. With no argument, reloads\n" +
+			"every mount.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := daemonRequest{Cmd: "reload"}
+			if len(args) == 1 {
+				if abs, err := filepath.Abs(args[0]); err == nil {
+					req.Mountpoint = abs
+				} else {
+					req.Mountpoint = args[0]
+				}
+			}
+			resp, err := daemonCall(req)
+			if errors.Is(err, errDaemonNotRunning) {
+				return fmt.Errorf("update: %s", hintStartDaemon)
+			}
+			if err != nil {
+				return fmt.Errorf("update: %w", err)
+			}
+			if !resp.OK {
+				return fmt.Errorf("update: %s", resp.Error)
+			}
+			fmt.Println(resp.Message)
+			return nil
+		},
+	}
+}
+
 func runMount(req daemonRequest) error {
 	resp, err := daemonCall(req)
 	if errors.Is(err, errDaemonNotRunning) {
-		return fmt.Errorf("mount: no janusfs daemon is running; start it first with: janusfs daemon")
+		return fmt.Errorf("mount: %s", hintStartDaemon)
 	}
 	if err != nil {
 		return fmt.Errorf("mount: %w", err)

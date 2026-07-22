@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -194,9 +196,63 @@ func (d *daemon) handleConn(conn net.Conn) {
 		writeResp(conn, d.doUnmount(req))
 	case "list":
 		writeResp(conn, daemonResponse{OK: true, Mounts: d.snapshot()})
+	case "reload":
+		writeResp(conn, d.doReload(req))
 	default:
 		writeResp(conn, daemonResponse{Error: "unknown command: " + req.Cmd})
 	}
+}
+
+// doReload recompiles the rule set for the mount matching req.Mountpoint (by
+// mountpoint or src), or every mount when it's empty.
+func (d *daemon) doReload(req daemonRequest) daemonResponse {
+	d.mu.Lock()
+	var targets []*mountRuntime
+	if req.Mountpoint == "" {
+		for _, rt := range d.mounts {
+			targets = append(targets, rt)
+		}
+	} else {
+		// Match the mount by its mountpoint, its source, OR any path inside
+		// either tree — so `janusfs update <the .janusmask you just edited>`
+		// resolves to the mount that owns it. Most specific (longest matching
+		// base) wins.
+		want, _ := filepath.Abs(req.Mountpoint)
+		var best *mountRuntime
+		bestLen := -1
+		for mp, rt := range d.mounts {
+			src, _ := filepath.Abs(rt.Src)
+			for _, base := range []string{src, mp} {
+				if want == base || strings.HasPrefix(want, base+string(filepath.Separator)) {
+					if len(base) > bestLen {
+						best, bestLen = rt, len(base)
+					}
+				}
+			}
+		}
+		if best != nil {
+			targets = append(targets, best)
+		}
+	}
+	d.mu.Unlock()
+
+	if len(targets) == 0 {
+		if req.Mountpoint == "" {
+			return daemonResponse{OK: true, Message: "no mounts to reload"}
+		}
+		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon", req.Mountpoint)}
+	}
+	var failed int
+	for _, rt := range targets {
+		if err := rt.reload(); err != nil {
+			failed++
+			d.logger.Warn("reload failed", "mountpoint", rt.Mountpoint, "error", err)
+		}
+	}
+	if failed > 0 {
+		return daemonResponse{Error: fmt.Sprintf("%d of %d mount(s) failed to reload; see daemon log", failed, len(targets))}
+	}
+	return daemonResponse{OK: true, Message: fmt.Sprintf("reloaded %d mount(s)", len(targets))}
 }
 
 func (d *daemon) doMount(req daemonRequest) daemonResponse {
@@ -219,7 +275,7 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 		return daemonResponse{Error: err.Error()}
 	}
 	if cfg.Mountpoint == "" {
-		return daemonResponse{Error: "no mount root configured: run `janusfs install` (or set --mount-root/JANUSFS_MOUNT_ROOT)"}
+		return daemonResponse{Error: hintNoMountRoot}
 	}
 	mpAbs, err := filepath.Abs(cfg.Mountpoint)
 	if err != nil {
@@ -235,6 +291,15 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	}
 
 	if err := cfg.Validate(); err != nil {
+		if errors.Is(err, config.ErrMountpointNotEmpty) {
+			if kids := d.childMountsUnder(mpAbs); len(kids) > 0 {
+				return daemonResponse{Error: fmt.Sprintf(
+					"%s already has %d mount(s) nested under it (%s). Nested mounts aren't supported — a parent mount would shadow them. Unmount those first, e.g. `janusfs umount %s`, then mount %s.",
+					mpAbs, len(kids), strings.Join(kids, ", "), kids[0], req.Src)}
+			}
+			return daemonResponse{Error: fmt.Sprintf(
+				"mountpoint %s is not empty (leftover from a previous run?); remove its contents and retry", mpAbs)}
+		}
 		return daemonResponse{Error: err.Error()}
 	}
 
@@ -292,7 +357,14 @@ func (d *daemon) doUnmount(req daemonRequest) daemonResponse {
 	}
 	d.mu.Unlock()
 	if !ok {
-		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon (pass its mountpoint or source path)", req.Mountpoint)}
+		// Not live in this daemon. It may still be a stale registry entry — a
+		// mount recorded earlier that failed to resume (e.g. after a restart).
+		// Prune it so it stops being listed and re-attempted, and report that
+		// rather than a bare "not mounted" the user can't act on.
+		if pruned := pruneStaleRegistry(target); pruned != "" {
+			return daemonResponse{OK: true, Message: fmt.Sprintf("%s was not live; removed its stale entry from the mount registry", pruned)}
+		}
+		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon and is not in the registry (pass its mountpoint or source path)", req.Mountpoint)}
 	}
 
 	rt.stop()
@@ -356,6 +428,46 @@ func (d *daemon) status(rt *mountRuntime) mountStatus {
 	}
 }
 
+// pruneStaleRegistry removes a registry entry matching target (by mountpoint
+// or source path, absolute) and returns the removed mountpoint, or "" if no
+// entry matched. Used to clear entries the daemon isn't tracking live so they
+// stop being listed and re-resumed.
+func pruneStaleRegistry(target string) string {
+	records, err := config.LoadMounts()
+	if err != nil {
+		return ""
+	}
+	for _, r := range records {
+		mpAbs, _ := filepath.Abs(r.Mountpoint)
+		srcAbs, _ := filepath.Abs(r.Src)
+		if mpAbs == target || srcAbs == target {
+			if err := config.RemoveMount(r.Mountpoint); err != nil {
+				return ""
+			}
+			return r.Mountpoint
+		}
+	}
+	return ""
+}
+
+// childMountsUnder returns the source paths of active mounts whose mountpoint
+// is nested under parent, so a parent-mount attempt can name exactly what to
+// unmount first. Sources (not mountpoints) because `janusfs umount` accepts a
+// source path and it's the friendlier thing to show.
+func (d *daemon) childMountsUnder(parent string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	prefix := parent + string(filepath.Separator)
+	var out []string
+	for mp, rt := range d.mounts {
+		if strings.HasPrefix(mp, prefix) {
+			out = append(out, rt.Src)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (d *daemon) snapshot() []mountStatus {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -380,7 +492,9 @@ func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>JanusFS</title>")
 	fmt.Fprint(w, "<style>body{font-family:-apple-system,system-ui,sans-serif;background:#f4efea;color:#383838;max-width:820px;margin:40px auto;padding:0 24px}"+
 		"h1{font-size:22px}a{color:#383838}li{margin:8px 0;list-style:none;padding:12px;background:#fff;border:2px solid #383838;box-shadow:-4px 4px 0 #383838}"+
-		".mp{font-family:monospace;font-size:13px;color:#666}</style></head><body>")
+		".mp{font-family:monospace;font-size:13px;color:#666;margin-top:4px;display:flex;gap:8px;align-items:center}"+
+		"button.copy{font:inherit;font-size:11px;cursor:pointer;border:1px solid #383838;background:#fff;padding:1px 8px}"+
+		"button.copy:hover{background:#ffde00}</style></head><body>")
 	fmt.Fprintf(w, "<h1>JanusFS — %d mount(s)</h1><ul>", len(mounts))
 	if len(mounts) == 0 {
 		fmt.Fprint(w, "<p>No active mounts. Run <code>janusfs mount &lt;src&gt;</code>.</p>")
@@ -390,10 +504,16 @@ func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 		if title == "" {
 			title = m.Src
 		}
-		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a><div class=\"mp\">%s</div></li>",
-			html.EscapeString(m.Dashboard), html.EscapeString(title), html.EscapeString(m.Mountpoint))
+		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a><div class=\"mp\"><span>%s</span>"+
+			"<button class=\"copy\" data-mp=\"%s\">copy path</button></div></li>",
+			html.EscapeString(m.Dashboard), html.EscapeString(title),
+			html.EscapeString(m.Mountpoint), html.EscapeString(m.Mountpoint))
 	}
-	fmt.Fprint(w, "</ul></body></html>")
+	fmt.Fprint(w, "</ul>")
+	fmt.Fprint(w, "<script>document.querySelectorAll('button.copy').forEach(function(b){"+
+		"b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-mp'))"+
+		".then(function(){var t=b.textContent;b.textContent='copied';setTimeout(function(){b.textContent=t;},1500);});});});</script>")
+	fmt.Fprint(w, "</body></html>")
 }
 
 // socketPath is the daemon control socket, ~/.janusfs/daemon.sock.

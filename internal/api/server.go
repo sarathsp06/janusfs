@@ -41,6 +41,7 @@ type Server struct {
 	providerStats  func() (int, int64, uint64, uint64, uint64)
 	resolvePath    func(relPath string, isDir bool) (string, []string, string) // decision, patternNames, ruleRef ("<file>:<line>")
 	watcherAlive   func() bool
+	reload         func() error // recompile the rule set on demand (config save / reload button)
 	startTime      time.Time
 }
 
@@ -74,6 +75,12 @@ func (s *Server) SetVFSMeta(root string, providerStats func() (int, int64, uint6
 	}
 }
 
+// SetReload registers the callback that recompiles the rule set (used by the
+// config-save handler and the /api/v1/reload endpoint). Call before Start.
+func (s *Server) SetReload(reload func() error) {
+	s.reload = reload
+}
+
 func (s *Server) register() {
 	s.mux.HandleFunc("/api/v1/summary", s.withToken(s.handleSummary))
 	s.mux.HandleFunc("/api/v1/coverage", s.withToken(s.handleCoverage))
@@ -81,6 +88,7 @@ func (s *Server) register() {
 	s.mux.HandleFunc("/api/v1/top", s.withToken(s.handleTop))
 	s.mux.HandleFunc("/api/v1/latency", s.withToken(s.handleLatency))
 	s.mux.HandleFunc("/api/v1/config", s.withToken(s.handleConfig))
+	s.mux.HandleFunc("/api/v1/reload", s.withToken(s.handleReload))
 	s.mux.HandleFunc("/api/v1/events", s.withToken(s.handleEvents))
 	s.mux.HandleFunc("/api/v1/history", s.withToken(s.handleHistory))
 	s.mux.HandleFunc("/api/v1/sessions", s.withToken(s.handleSessions))
@@ -509,5 +517,33 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"saved": true, "path": req.Path})
+	// Apply the edit immediately: there is no file watcher, so a save must
+	// recompile the rule set itself.
+	reloaded := false
+	if s.reload != nil {
+		if err := s.reload(); err != nil {
+			http.Error(w, "saved, but reload failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		reloaded = true
+	}
+	writeJSON(w, map[string]any{"saved": true, "path": req.Path, "reloaded": reloaded})
+}
+
+// handleReload recompiles the rule set on demand (POST). Backs the dashboard's
+// "Reload rules" button and `janusfs update`.
+func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.reload == nil {
+		http.Error(w, "reload not available", http.StatusNotFound)
+		return
+	}
+	if err := s.reload(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"reloaded": true})
 }

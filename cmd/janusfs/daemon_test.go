@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sarathsp06/janusfs/internal/config"
 )
 
 // fakeRuntime builds a mountRuntime with just the fields the daemon's
@@ -18,7 +20,7 @@ func fakeRuntime(src, mp, label string, port int, token string) *mountRuntime {
 
 func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/<script>", "/mnt/a", "My <b>Project</b>", 1234, "tok-abc"),
+		"/mnt/a": fakeRuntime("/src/x", "/mnt/a", "<script>alert('x')</script>", 1234, "tok-abc"),
 	}}
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -31,10 +33,11 @@ func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 	if !strings.Contains(body, "localhost:1234/?token=tok-abc") {
 		t.Errorf("index missing per-mount dashboard link, got %q", body)
 	}
-	if !strings.Contains(body, "My &lt;b&gt;Project&lt;/b&gt;") {
+	// The malicious label must appear only in escaped form, never as a raw tag.
+	if !strings.Contains(body, "&lt;script&gt;alert") {
 		t.Errorf("index did not show the escaped label, got %q", body)
 	}
-	if strings.Contains(body, "<script>") || strings.Contains(body, "<b>Project") {
+	if strings.Contains(body, "<script>alert") {
 		t.Errorf("index did not escape user-supplied text: %q", body)
 	}
 	if !strings.Contains(body, "1 mount(s)") {
@@ -74,11 +77,130 @@ func TestDoUnmount_NotMounted(t *testing.T) {
 	}
 }
 
+func TestDoUnmount_PrunesStaleRegistryEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// A registry entry the daemon is NOT tracking live (e.g. failed to resume).
+	if err := config.RecordMount("/some/src", "/some/mnt/point", "lbl"); err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+
+	resp := d.doUnmount(daemonRequest{Cmd: "unmount", Mountpoint: "/some/mnt/point"})
+	if !resp.OK {
+		t.Fatalf("expected OK pruning a stale entry, got %+v", resp)
+	}
+	if recs, _ := config.LoadMounts(); len(recs) != 0 {
+		t.Errorf("stale entry not pruned from registry: %+v", recs)
+	}
+}
+
+func TestDoUnmount_UnknownAndNotInRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+
+	resp := d.doUnmount(daemonRequest{Cmd: "unmount", Mountpoint: "/nope"})
+	if resp.OK {
+		t.Fatal("expected an error for an unknown, unregistered path")
+	}
+	if !strings.Contains(resp.Error, "not in the registry") {
+		t.Errorf("error = %q, want it to mention the registry", resp.Error)
+	}
+}
+
+func TestDoReload_AllWithNoMounts(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+	resp := d.doReload(daemonRequest{Cmd: "reload"})
+	if !resp.OK {
+		t.Errorf("reload-all with no mounts should be OK, got %+v", resp)
+	}
+}
+
+func TestDoReload_UnknownMount(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+	resp := d.doReload(daemonRequest{Cmd: "reload", Mountpoint: "/nope"})
+	if resp.OK || !strings.Contains(resp.Error, "not mounted") {
+		t.Errorf("got %+v, want a not-mounted error", resp)
+	}
+}
+
+func TestDoReload_MatchesBySrc(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{
+		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", 1, "t"),
+	}}
+	// reload() on a fake runtime (nil engine) is a no-op success; this checks
+	// the src→runtime matching and the response.
+	resp := d.doReload(daemonRequest{Cmd: "reload", Mountpoint: "/src/a"})
+	if !resp.OK || !strings.Contains(resp.Message, "reloaded 1") {
+		t.Errorf("got %+v, want 'reloaded 1 mount(s)'", resp)
+	}
+}
+
 func TestDoMount_RequiresSrc(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{}}
 	resp := d.doMount(daemonRequest{})
 	if resp.OK || !strings.Contains(resp.Error, "src is required") {
 		t.Errorf("doMount with no src = %+v, want 'src is required' error", resp)
+	}
+}
+
+func TestDoMount_MissingSrc_CleanMessage(t *testing.T) {
+	root := t.TempDir()
+	d := &daemon{mounts: map[string]*mountRuntime{}, base: config.Config{MountRoot: root}}
+
+	resp := d.doMount(daemonRequest{Cmd: "mount", Src: filepath.Join(t.TempDir(), "does-not-exist")})
+	if resp.OK {
+		t.Fatal("doMount of a missing source returned OK")
+	}
+	if !strings.Contains(resp.Error, "does not exist") {
+		t.Errorf("error = %q, want a clean 'does not exist' message", resp.Error)
+	}
+	// The internal package prefix and raw syscall noise must not leak.
+	if strings.Contains(resp.Error, "config:") || strings.Contains(resp.Error, "stat ") {
+		t.Errorf("error leaks internal detail to the user: %q", resp.Error)
+	}
+}
+
+func TestChildMountsUnder(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{
+		"/root/a":       fakeRuntime("/src/a", "/root/a", "", 1, "t"),
+		"/root/a/child": fakeRuntime("/src/child", "/root/a/child", "", 2, "t"),
+		"/root/b":       fakeRuntime("/src/b", "/root/b", "", 3, "t"),
+	}}
+	got := d.childMountsUnder("/root/a")
+	if len(got) != 1 || got[0] != "/src/child" {
+		t.Errorf("childMountsUnder(/root/a) = %v, want [/src/child] (sibling /root/b and self excluded)", got)
+	}
+	if under := d.childMountsUnder("/root/b"); len(under) != 0 {
+		t.Errorf("childMountsUnder(/root/b) = %v, want none", under)
+	}
+}
+
+func TestDoMount_NestedChildRejected(t *testing.T) {
+	root := t.TempDir()
+	src := t.TempDir()
+	d := &daemon{mounts: map[string]*mountRuntime{}, base: config.Config{MountRoot: root}}
+
+	// Reproduce the daemon's derivation (mirror the symlink-resolved src under
+	// the root) and plant a live child mount inside it, making the parent's
+	// mountpoint non-empty exactly as a real child-first mount would.
+	abs, _ := filepath.Abs(src)
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := filepath.Join(root, resolved)
+	childMp := filepath.Join(derived, "child")
+	if err := os.MkdirAll(childMp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d.mounts[childMp] = fakeRuntime(filepath.Join(src, "child"), childMp, "", 1, "t")
+
+	resp := d.doMount(daemonRequest{Cmd: "mount", Src: src})
+	if resp.OK {
+		t.Fatal("doMount over a parent of a live mount returned OK, want a nested-mount error")
+	}
+	if !strings.Contains(resp.Error, "nested under it") || !strings.Contains(resp.Error, "umount") {
+		t.Errorf("error = %q, want it to explain the nesting and suggest umount", resp.Error)
 	}
 }
 

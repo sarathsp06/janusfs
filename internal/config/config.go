@@ -369,48 +369,54 @@ func (c *Config) ResolveMountpoint() error {
 // cause the mount attempt to abort before any FUSE call is made (SPEC §15
 // step 1), per the fail-closed tiebreak in SPEC §20.2.
 func (c Config) Validate() error {
+	// These are user-facing preconditions surfaced directly by the CLI
+	// (FR-30: a clean one-line cause), so the messages read for an operator —
+	// no "config:" package prefix, no redundant wrapped syscall text.
 	if c.Src == "" {
-		return fmt.Errorf("config: src is required: %w", errEmptyPath)
+		return fmt.Errorf("source path is required: %w", errEmptyPath)
 	}
 	if c.Mountpoint == "" {
-		return fmt.Errorf("config: mountpoint is required: %w", errEmptyPath)
+		return fmt.Errorf("mountpoint is required: %w", errEmptyPath)
 	}
 
 	srcAbs, err := absClean(c.Src)
 	if err != nil {
-		return fmt.Errorf("config: resolving src %q: %w", c.Src, err)
+		return fmt.Errorf("resolving source %q: %w", c.Src, err)
 	}
 	mountAbs, err := absClean(c.Mountpoint)
 	if err != nil {
-		return fmt.Errorf("config: resolving mountpoint %q: %w", c.Mountpoint, err)
+		return fmt.Errorf("resolving mountpoint %q: %w", c.Mountpoint, err)
 	}
 
 	srcInfo, err := os.Stat(srcAbs)
 	if err != nil {
-		return fmt.Errorf("config: src %q must exist: %w", c.Src, err)
+		if os.IsNotExist(err) {
+			return fmt.Errorf("source %q does not exist", c.Src)
+		}
+		return fmt.Errorf("cannot access source %q: %w", c.Src, err)
 	}
 	if !srcInfo.IsDir() {
-		return fmt.Errorf("config: src %q must be a directory", c.Src)
+		return fmt.Errorf("source %q is not a directory", c.Src)
 	}
 
 	mountInfo, err := os.Stat(mountAbs)
 	if err != nil {
-		return fmt.Errorf("config: mountpoint %q must exist: %w", c.Mountpoint, err)
+		return fmt.Errorf("mountpoint %q is unavailable: %w", c.Mountpoint, err)
 	}
 	if !mountInfo.IsDir() {
-		return fmt.Errorf("config: mountpoint %q must be a directory", c.Mountpoint)
+		return fmt.Errorf("mountpoint %q is not a directory", c.Mountpoint)
 	}
 
 	empty, err := isEmptyDir(mountAbs)
 	if err != nil {
-		return fmt.Errorf("config: checking mountpoint %q: %w", c.Mountpoint, err)
+		return fmt.Errorf("checking mountpoint %q: %w", c.Mountpoint, err)
 	}
 	if !empty {
-		return fmt.Errorf("config: mountpoint %q must be an empty directory: %w", c.Mountpoint, ErrMountpointNotEmpty)
+		return fmt.Errorf("mountpoint %q is not empty: %w", c.Mountpoint, ErrMountpointNotEmpty)
 	}
 
 	if pathsOverlap(srcAbs, mountAbs) {
-		return fmt.Errorf("config: src %q and mountpoint %q must not overlap: %w", c.Src, c.Mountpoint, errOverlap)
+		return fmt.Errorf("source %q and mountpoint %q overlap: %w", c.Src, c.Mountpoint, errOverlap)
 	}
 
 	return nil
