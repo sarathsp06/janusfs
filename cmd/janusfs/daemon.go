@@ -291,16 +291,7 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	}
 
 	if err := cfg.Validate(); err != nil {
-		if errors.Is(err, config.ErrMountpointNotEmpty) {
-			if kids := d.childMountsUnder(mpAbs); len(kids) > 0 {
-				return daemonResponse{Error: fmt.Sprintf(
-					"%s already has %d mount(s) nested under it (%s). Nested mounts aren't supported — a parent mount would shadow them. Unmount those first, e.g. `janusfs umount %s`, then mount %s.",
-					mpAbs, len(kids), strings.Join(kids, ", "), kids[0], req.Src)}
-			}
-			return daemonResponse{Error: fmt.Sprintf(
-				"mountpoint %s is not empty (leftover from a previous run?); remove its contents and retry", mpAbs)}
-		}
-		return daemonResponse{Error: err.Error()}
+		return daemonResponse{Error: d.mountValidationError(req.Src, mpAbs, err)}
 	}
 
 	rt, err := startMount(d.ctx, cfg, d.debug)
@@ -324,6 +315,21 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 		Message: fmt.Sprintf("mounted %s -> %s", cfg.Src, mpAbs),
 		Mounts:  []mountStatus{d.status(rt)},
 	}
+}
+
+func (d *daemon) mountValidationError(src, mountpoint string, err error) string {
+	if errors.Is(err, config.ErrMountpointNotEmpty) {
+		if kids := d.childMountsUnder(mountpoint); len(kids) > 0 {
+			return fmt.Sprintf(
+				"%s already has %d mount(s) nested under it (%s). Nested mounts aren't supported — a parent mount would shadow them. Unmount those first, e.g. `janusfs umount %s`, then mount %s.",
+				mountpoint, len(kids), strings.Join(kids, ", "), kids[0], src)
+		}
+		return fmt.Sprintf("mountpoint %s is not empty (leftover from a previous run?); remove its contents and retry", mountpoint)
+	}
+	if errors.Is(err, syscall.ENXIO) {
+		return fmt.Sprintf("mountpoint %s is a stale or broken mount (device not configured); run `janusfs umount %s` to clear it, then retry", mountpoint, mountpoint)
+	}
+	return err.Error()
 }
 
 func (d *daemon) doUnmount(req daemonRequest) daemonResponse {
@@ -362,7 +368,11 @@ func (d *daemon) doUnmount(req daemonRequest) daemonResponse {
 		// Prune it so it stops being listed and re-attempted, and report that
 		// rather than a bare "not mounted" the user can't act on.
 		if pruned := pruneStaleRegistry(target); pruned != "" {
-			return daemonResponse{OK: true, Message: fmt.Sprintf("%s was not live; removed its stale entry from the mount registry", pruned)}
+			return daemonResponse{
+				OK:      true,
+				Message: fmt.Sprintf("%s was not live; removed its stale entry from the mount registry", pruned),
+				Mounts:  []mountStatus{{Mountpoint: pruned}},
+			}
 		}
 		return daemonResponse{Error: fmt.Sprintf("%q is not mounted by this daemon and is not in the registry (pass its mountpoint or source path)", req.Mountpoint)}
 	}

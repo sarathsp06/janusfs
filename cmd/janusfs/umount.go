@@ -45,12 +45,25 @@ func runUmount(mountpoint string) error {
 	case resp.OK:
 		fmt.Println(resp.Message)
 		// The daemon may have only pruned a stale registry entry; if a real
-		// mount is still lingering at the path (e.g. it failed to resume but
-		// the kernel mount survived), clear it too — quietly, and only when
-		// something is actually mounted there.
-		if isMountpoint(mpAbs) {
-			if uerr := tryUnmount("diskutil", []string{"unmount", "force", mpAbs}, 5); uerr == nil {
-				fmt.Printf("Also cleared a lingering mount at %s\n", mpAbs)
+		// mount is still lingering at the requested path or at a returned
+		// registry mountpoint (e.g. caller passed the source path), clear it too
+		// — quietly, and only when something is actually mounted there.
+		cleanupTargets := []string{mpAbs}
+		for _, m := range resp.Mounts {
+			if m.Mountpoint != "" {
+				cleanupTargets = append(cleanupTargets, m.Mountpoint)
+			}
+		}
+		seen := map[string]bool{}
+		for _, target := range cleanupTargets {
+			if seen[target] {
+				continue
+			}
+			seen[target] = true
+			if isMountpoint(target) {
+				if uerr := tryUnmount("diskutil", []string{"unmount", "force", target}, 5); uerr == nil {
+					fmt.Printf("Also cleared a lingering mount at %s\n", target)
+				}
 			}
 		}
 		return nil

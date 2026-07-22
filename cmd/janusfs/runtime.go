@@ -126,6 +126,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	}
 
 	apiSrv := api.New(ui.FS, bearerToken, metrics, ringBuf, topN, eventBus, rt.hist)
+	apiSrv.SetMountInfo(cfg.Src, cfg.Mountpoint)
 	apiSrv.SetVFSMeta(cfg.Src, func() (int, int64, uint64, uint64, uint64) {
 		ps := prov.Stats()
 		return ps.Entries, ps.Bytes, ps.Hits, ps.Misses, ps.Rebuilds

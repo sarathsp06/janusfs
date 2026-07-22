@@ -53,6 +53,31 @@ func TestSummaryEndpoint(t *testing.T) {
 	}
 }
 
+func TestSummaryIncludesMountInfo(t *testing.T) {
+	s := testServer()
+	s.SetMountInfo("/src/project", "/mnt/project")
+	req := httptest.NewRequest("GET", "/api/v1/summary", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Mount struct {
+			Source     string `json:"source"`
+			Mountpoint string `json:"mountpoint"`
+		} `json:"mount"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Mount.Source != "/src/project" || resp.Mount.Mountpoint != "/mnt/project" {
+		t.Fatalf("mount info = %+v, want source and mountpoint", resp.Mount)
+	}
+}
+
 func TestAuthMissing(t *testing.T) {
 	s := testServer()
 	req := httptest.NewRequest("GET", "/api/v1/summary", nil)

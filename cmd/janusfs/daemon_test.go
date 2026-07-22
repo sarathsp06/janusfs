@@ -2,11 +2,13 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/sarathsp06/janusfs/internal/config"
@@ -89,8 +91,27 @@ func TestDoUnmount_PrunesStaleRegistryEntry(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("expected OK pruning a stale entry, got %+v", resp)
 	}
+	if len(resp.Mounts) != 1 || resp.Mounts[0].Mountpoint != "/some/mnt/point" {
+		t.Fatalf("stale prune response mounts = %+v, want pruned mountpoint for direct cleanup", resp.Mounts)
+	}
 	if recs, _ := config.LoadMounts(); len(recs) != 0 {
 		t.Errorf("stale entry not pruned from registry: %+v", recs)
+	}
+}
+
+func TestMountValidationError_DeviceNotConfiguredHasRemedy(t *testing.T) {
+	d := &daemon{mounts: map[string]*mountRuntime{}}
+	err := fmt.Errorf("checking mountpoint %q: %w", "/mnt/broken", syscall.ENXIO)
+
+	msg := d.mountValidationError("/src/project", "/mnt/broken", err)
+
+	for _, want := range []string{"stale or broken mount", "device not configured", "janusfs umount /mnt/broken", "retry"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("mountValidationError() = %q, want substring %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "checking mountpoint") || strings.Contains(msg, "open ") {
+		t.Fatalf("mountValidationError() leaked raw validation detail: %q", msg)
 	}
 }
 

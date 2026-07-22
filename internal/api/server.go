@@ -38,6 +38,7 @@ type Server struct {
 	token         string
 	ui            fs.FS
 	root          string
+	mountpoint    string
 	providerStats func() (int, int64, uint64, uint64, uint64)
 	resolvePath   func(relPath string, isDir bool) (string, []string, string) // decision, patternNames, ruleRef ("<file>:<line>")
 	watcherAlive  func() bool
@@ -79,6 +80,16 @@ func (s *Server) SetVFSMeta(root string, providerStats func() (int, int64, uint6
 // config-save handler and the /api/v1/reload endpoint). Call before Start.
 func (s *Server) SetReload(reload func() error) {
 	s.reload = reload
+}
+
+// SetMountInfo exposes source and mountpoint metadata to the operator
+// dashboard, so it can clearly show which path should be handed to an agent.
+func (s *Server) SetMountInfo(source, mountpoint string) {
+	s.root = source
+	s.mountpoint = mountpoint
+	if s.startTime.IsZero() {
+		s.startTime = time.Now()
+	}
 }
 
 func (s *Server) register() {
@@ -236,7 +247,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"snapshot": snap,
-		"uptime":   time.Now().Unix(),
+		"mount": map[string]any{
+			"source":     s.root,
+			"mountpoint": s.mountpoint,
+		},
+		"uptime": time.Now().Unix(),
 	})
 }
 
