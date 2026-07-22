@@ -213,12 +213,25 @@ func (d *daemon) doReload(req daemonRequest) daemonResponse {
 			targets = append(targets, rt)
 		}
 	} else {
+		// Match the mount by its mountpoint, its source, OR any path inside
+		// either tree — so `janusfs update <the .janusmask you just edited>`
+		// resolves to the mount that owns it. Most specific (longest matching
+		// base) wins.
 		want, _ := filepath.Abs(req.Mountpoint)
+		var best *mountRuntime
+		bestLen := -1
 		for mp, rt := range d.mounts {
-			if src, _ := filepath.Abs(rt.Src); mp == want || src == want {
-				targets = append(targets, rt)
-				break
+			src, _ := filepath.Abs(rt.Src)
+			for _, base := range []string{src, mp} {
+				if want == base || strings.HasPrefix(want, base+string(filepath.Separator)) {
+					if len(base) > bestLen {
+						best, bestLen = rt, len(base)
+					}
+				}
 			}
+		}
+		if best != nil {
+			targets = append(targets, best)
 		}
 	}
 	d.mu.Unlock()

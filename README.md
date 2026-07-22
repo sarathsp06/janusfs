@@ -1,14 +1,19 @@
 # JanusFS
 
-**A sanitized filesystem view for AI agents.** JanusFS mounts your project directory and shows every file through one of three faces — plain, redacted, or hidden — so an agent gets exactly the access you intend, and never a byte more.
+**JanusFS gives AI agents a safe view of your files.** It mounts a sanitized mirror of a project directory, then enforces your rules at the filesystem boundary: normal files pass through, sensitive spans are replaced with `*`, and forbidden files return `EACCES`.
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
 [![macOS via macFUSE](https://img.shields.io/badge/platform-macOS%20%28macFUSE%29-lightgrey.svg)](https://osxfuse.github.io/)
 [![License TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
 
-> In Roman mythology, **Janus** is the god of doorways, transitions, and gates — depicted with two faces, one looking forward and one back. Nothing passes through a door watched by Janus without him deciding what's seen on each side.
->
-> That's the whole idea here. Every file behind a JanusFS mount has two faces: the real one on disk, and the one an agent is allowed to see. JanusFS stands at the doorway and decides which face to show — plaintext, redacted, or not at all — before a single byte crosses through.
+## In one minute
+
+- Point JanusFS at a real source directory, then point your agent at the JanusFS mountpoint instead of the source.
+- Configure policy with familiar `.gitignore`-style files: `.janusignore` hides paths, `.janusmask` redacts secrets inside otherwise useful files.
+- Real files are never modified. Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
+- A local daemon owns the mounts, keeps them alive, reloads rules on demand, and serves a dashboard showing what is protected and how the mount is being used.
+
+The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stands at the doorway between your real files and the agent, deciding which face of each file is safe to show.
 
 ---
 
@@ -269,7 +274,7 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `janusfs install` | One-time setup: choose a mount root (saved to `~/.janusfs/settings.json`) so `janusfs mount <src>` needs no `--mount-root`. `--global-rules` also seeds `~/.janusfs/config/`. |
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
 | `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a sanitized view and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an empty `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
-| `janusfs update [src\|mountpoint]` | Re-apply edited `.janusignore`/`.janusmask` rules without remounting (no arg = all mounts). |
+| `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusignore`/`.janusmask` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
 | `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
