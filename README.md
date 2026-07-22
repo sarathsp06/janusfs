@@ -59,21 +59,24 @@ Janus watches doors and thresholds — places where context changes. The reposit
 
 Here's a compact, layered view of exactly what JanusFS does when an agent reads a file.
 
+```text
 Agent process (untrusted)
   |
-  |  read/open/readdir
+  |  read / open / readdir
   v
-+-------------------------+
-| JanusFS (FUSE mount)    |  <-- policy snapshot (compiled from .janusignore/.janusmask)
-|  - Resolve decision     |     • Hidden  -> deny (EACCES)
-|  - If Allowed: passthru |     • Masked  -> serve redacted bytes (same length)
-|  - If Masked: serve from |     • Allowed -> passthrough to real file
-|    RAM cache or re-redact|
-+-------------------------+
++-----------------------------+
+|  JanusFS (FUSE mount)       |   <-- policy snapshot (compiled from .janusignore /.janusmask)
+|  - Resolve decision         |       • HIDDEN  -> deny (EACCES)
+|  - If ALLOWED: passthrough |       • MASKED  -> redacted bytes (same length)
+|  - If MASKED: redaction    |       • ALLOWED -> passthrough to real file
+|    (RAM cache or re-redact)|
++-----------------------------+
   |
-  |  (if allowed) passthrough fd or (if masked) redacted bytes
+  |  If ALLOWED: passthrough fd (native file contents)
+  |  If MASKED: redacted bytes served (byte-length preserving)
   v
 Underlying real files on disk (trusted)
+```
 
 Examples (behavior):
 
