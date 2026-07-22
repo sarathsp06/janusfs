@@ -6,8 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sarathsp06/janusfs/internal/health"
 	"github.com/spf13/cobra"
+
+	"github.com/sarathsp06/janusfs/internal/health"
 )
 
 func newDoctorCmd() *cobra.Command {

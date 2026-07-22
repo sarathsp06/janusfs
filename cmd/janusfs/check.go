@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sarathsp06/janusfs/internal/check"
 	"github.com/spf13/cobra"
+
+	"github.com/sarathsp06/janusfs/internal/check"
 )
 
 // errSilentNonZero signals "exit 1, but the report already printed

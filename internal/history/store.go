@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/sarathsp06/janusfs/internal/obs"
 	_ "modernc.org/sqlite"
+
+	"github.com/sarathsp06/janusfs/internal/obs"
 )
 
 // Store persists event rollups to SQLite (FR-41). Zero value is not usable;

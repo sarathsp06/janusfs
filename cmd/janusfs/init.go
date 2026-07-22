@@ -5,8 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sarathsp06/janusfs/internal/rules"
 	"github.com/spf13/cobra"
+
+	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
 // janusignoreTemplate is FR-17's secure-default .janusignore: standard

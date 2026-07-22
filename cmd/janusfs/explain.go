@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/sarathsp06/janusfs/internal/engine"
 	"github.com/sarathsp06/janusfs/internal/rules"
-	"github.com/spf13/cobra"
 )
 
 // newExplainCmd adds a diagnostics subcommand not in SPEC.md itself — see
