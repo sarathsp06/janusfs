@@ -109,6 +109,12 @@ func (s *Server) register() {
 	s.mux.Handle("/", http.FileServer(http.FS(s.ui)))
 }
 
+// ServeHTTP implements the http.Handler interface so it can be nested or routed
+// easily inside other servers.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	withSecurity(withHeaders(s.mux)).ServeHTTP(w, r)
+}
+
 // Listen binds to addr (127.0.0.1 only, SPEC §11) and returns the listener,
 // so a port collision fails fast at mount time instead of asynchronously
 // after the dashboard URL has already been printed. Serve the result with
@@ -116,7 +122,7 @@ func (s *Server) register() {
 func (s *Server) Listen(addr string) (net.Listener, error) {
 	s.server = &http.Server{
 		Addr:    addr,
-		Handler: withSecurity(withHeaders(s.mux)),
+		Handler: s,
 	}
 	return net.Listen("tcp", addr)
 }
@@ -151,9 +157,17 @@ func withHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// withToken wraps a handler with bearer-token authentication.
+// withToken wraps a handler with bearer-token authentication. Since consolidated
+// dashboards running on localhost do not require token auth, token verification
+// is skipped on local connections.
 func (s *Server) withToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil && (host == "127.0.0.1" || host == "::1" || host == "localhost") {
+			// Skip token check for localhost as requested.
+			next(w, r)
+			return
+		}
 		if s.token != "" {
 			auth := r.Header.Get("Authorization")
 			if auth != "Bearer "+s.token {

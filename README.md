@@ -16,7 +16,7 @@
 - Point JanusFS at a real source directory, then point your agent at the JanusFS mountpoint instead of the source.
 - Configure policy with familiar `.gitignore`-style files: `.janusignore` hides paths, `.janusmask` redacts secrets inside otherwise useful files.
 - Real files are never modified. Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
-- A local daemon owns the mounts, keeps them alive, reloads rules on demand, and serves a dashboard showing what is protected and how the mount is being used.
+- A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
 
 The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stands at the doorway between your real files and the agent, deciding which face of each file is safe to show.
 
@@ -191,14 +191,12 @@ $ ls -la "$MP"                       # hidden files still LIST (with real sizes)
 `janusfs daemon` is the one long-running process. Everything else is a thin
 client that talks to it over `~/.janusfs/daemon.sock` and exits.
 
-- **Owns every mount.** Each mounted source is a FUSE server running inside the
-  daemon, with its own dashboard on an auto-assigned port. `janusfs mount <src>`
-  hands the mount to the daemon and returns immediately — your terminal is free.
+- **Owns every mount.** Each mounted source runs inside the daemon as an OS-level FUSE mount. `janusfs mount <src>` hands the mount to the daemon and returns immediately — your terminal is free.
 - **Reboot-safe.** Every mount is recorded in `~/.janusfs/mounts.json`; on start
   the daemon remounts all of them (except ones you explicitly `janusfs umount`).
-- **One dashboard.** The daemon serves a combined index at
-  `http://127.0.0.1:7381/` listing every live mount and linking to each mount's
-  own dashboard. Change the port with `--ui-port`.
+- **One consolidated server and port.** The daemon serves a combined index at
+  `http://127.0.0.1:7381/` listing every live mount, and routes individual mount
+  dashboards and API/V1 endpoints under subpaths (e.g., `http://127.0.0.1:7381/mounts/<uuid>/`). Change the port with `--ui-port`.
 - **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
   dashboard.
 

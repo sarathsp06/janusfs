@@ -16,13 +16,13 @@ import (
 
 // fakeRuntime builds a mountRuntime with just the fields the daemon's
 // status/index/list code reads — no FUSE, no goroutines.
-func fakeRuntime(src, mp, label string, port int, token string) *mountRuntime {
-	return &mountRuntime{Src: src, Mountpoint: mp, Label: label, UIPort: port, Token: token}
+func fakeRuntime(src, mp, label string, uuid string, token string) *mountRuntime {
+	return &mountRuntime{Src: src, Mountpoint: mp, Label: label, UUID: uuid, Token: token}
 }
 
 func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
-	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/x", "/mnt/a", "<script>alert('x')</script>", 1234, "tok-abc"),
+	d := &daemon{uiPort: 1234, mounts: map[string]*mountRuntime{
+		"/mnt/a": fakeRuntime("/src/x", "/mnt/a", "<script>alert('x')</script>", "tok-abc", "bearer-tok"),
 	}}
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -32,7 +32,7 @@ func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 		t.Fatalf("index status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "localhost:1234/?token=tok-abc") {
+	if !strings.Contains(body, "localhost:1234/mounts/tok-abc/") {
 		t.Errorf("index missing per-mount dashboard link, got %q", body)
 	}
 	// The malicious label must appear only in escaped form, never as a raw tag.
@@ -49,7 +49,7 @@ func TestDaemonIndex_RendersLabelAndEscapes(t *testing.T) {
 
 func TestDaemonIndex_FallsBackToSrcWithoutLabel(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/proj", "/mnt/a", "", 1, "t"),
+		"/mnt/a": fakeRuntime("/src/proj", "/mnt/a", "", "t", "bearer"),
 	}}
 	w := httptest.NewRecorder()
 	d.handleIndex(w, httptest.NewRequest("GET", "/", nil))
@@ -62,7 +62,7 @@ func TestDaemonIndex_NotFoundForOtherPaths(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{}}
 	req := httptest.NewRequest("GET", "/favicon.ico", nil)
 	w := httptest.NewRecorder()
-	d.handleIndex(w, req)
+	d.handleHTTP(w, req)
 	if w.Code != 404 {
 		t.Errorf("status for non-root path = %d, want 404", w.Code)
 	}
@@ -146,7 +146,7 @@ func TestDoReload_UnknownMount(t *testing.T) {
 
 func TestDoReload_MatchesBySrc(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", 1, "t"),
+		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", "t", "bearer"),
 	}}
 	// reload() on a fake runtime (nil engine) is a no-op success; this checks
 	// the src→runtime matching and the response.
@@ -183,9 +183,9 @@ func TestDoMount_MissingSrc_CleanMessage(t *testing.T) {
 
 func TestChildMountsUnder(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/root/a":       fakeRuntime("/src/a", "/root/a", "", 1, "t"),
-		"/root/a/child": fakeRuntime("/src/child", "/root/a/child", "", 2, "t"),
-		"/root/b":       fakeRuntime("/src/b", "/root/b", "", 3, "t"),
+		"/root/a":       fakeRuntime("/src/a", "/root/a", "", "t1", "b"),
+		"/root/a/child": fakeRuntime("/src/child", "/root/a/child", "", "t2", "b"),
+		"/root/b":       fakeRuntime("/src/b", "/root/b", "", "t3", "b"),
 	}}
 	got := d.childMountsUnder("/root/a")
 	if len(got) != 1 || got[0] != "/src/child" {
@@ -214,7 +214,7 @@ func TestDoMount_NestedChildRejected(t *testing.T) {
 	if err := os.MkdirAll(childMp, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	d.mounts[childMp] = fakeRuntime(filepath.Join(src, "child"), childMp, "", 1, "t")
+	d.mounts[childMp] = fakeRuntime(filepath.Join(src, "child"), childMp, "", "t", "b")
 
 	resp := d.doMount(daemonRequest{Cmd: "mount", Src: src})
 	if resp.OK {
@@ -236,7 +236,7 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	d := &daemon{mounts: map[string]*mountRuntime{
-		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", 7, "t"),
+		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", "t", "b"),
 	}}
 
 	sock, err := socketPath()

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"net"
-	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sarathsp06/janusfs/internal/api"
 	"github.com/sarathsp06/janusfs/internal/config"
@@ -29,11 +29,11 @@ import (
 // reload() (there is no file watcher — see janusfs update / the dashboard's
 // Reload button; docs/SPEC_AMENDMENTS.md 2026-07-21).
 type mountRuntime struct {
+	UUID       string
 	Src        string
 	Mountpoint string
 	Label      string // friendly name for the dashboard; empty falls back to Src
 	Token      string
-	UIPort     int // actual bound dashboard port
 
 	eng      *engine.Engine
 	prov     *provider.RamCache
@@ -68,8 +68,8 @@ func (rt *mountRuntime) reload() error {
 // startMount builds the full per-mount stack for an already-resolved and
 // validated cfg (Mountpoint set), launches the FUSE serve loop in a
 // goroutine, and returns once the mount is live (OnMounted fired) or errors
-// if the mount could not be established. cfg.UIPort == 0 auto-assigns a free
-// dashboard port, read back into the returned runtime's UIPort.
+// if the mount could not be established. Per-mount HTTP listeners are removed
+// because all routing is now consolidated within the single daemon server.
 func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRuntime, error) {
 	logger := logging.New("mount")
 
@@ -100,6 +100,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	ctx, cancel := context.WithCancel(parent)
 
 	rt := &mountRuntime{
+		UUID:       uuid.New().String(),
 		Src:        cfg.Src,
 		Mountpoint: cfg.Mountpoint,
 		Token:      bearerToken,
@@ -136,22 +137,6 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	}, func() bool { return true }) // no watcher; rules reload on demand
 	apiSrv.SetReload(rt.reload)
 	rt.apiSrv = apiSrv
-
-	apiAddr := fmt.Sprintf("0.0.0.0:%d", cfg.UIPort)
-	apiLn, err := apiSrv.Listen(apiAddr)
-	if err != nil {
-		rt.stop() // nil-safe: tears down watcher, event bus, history, api server
-		return nil, fmt.Errorf("dashboard port %d unavailable: %w", cfg.UIPort, err)
-	}
-	if tcp, ok := apiLn.Addr().(*net.TCPAddr); ok {
-		rt.UIPort = tcp.Port
-	}
-	go func() {
-		al := logging.New("api")
-		if err := apiSrv.Serve(apiLn); err != nil && err != http.ErrServerClosed {
-			al.Error("API server error", "error", err)
-		}
-	}()
 
 	go drainEvents(eventBus, metrics, ringBuf, topN, rt.hist)
 
@@ -190,9 +175,8 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 
 // stop tears down the mount: cancels the context (asking go-fuse to unmount),
 // waits up to the grace window for the serve loop to exit, force-unmounts if
-// it drags (FR-2), then shuts down the API server and closes history/event
-// resources. Nil-safe so it doubles as the cleanup path for a mount that
-// failed partway through startMount.
+// it drags (FR-2), then closes history/event resources. Nil-safe so it doubles
+// as the cleanup path for a mount that failed partway through startMount.
 func (rt *mountRuntime) stop() {
 	if rt.cancel != nil {
 		rt.cancel()
@@ -214,11 +198,6 @@ func (rt *mountRuntime) stop() {
 		}
 	}
 
-	if rt.apiSrv != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		rt.apiSrv.Shutdown(shutdownCtx)
-		cancel()
-	}
 	if rt.eventBus != nil {
 		rt.eventBus.Close()
 	}
