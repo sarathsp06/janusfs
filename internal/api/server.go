@@ -28,21 +28,21 @@ import (
 
 // Server is the localhost HTTP/SSE server (SPEC §11).
 type Server struct {
-	mux            *http.ServeMux
-	server         *http.Server
-	metrics        *obs.JanusMetrics
-	ring           *obs.RingBuffer
-	topN           *obs.TopN
-	bus            *obs.EventBus
-	history        *history.Store
-	token          string
-	ui             fs.FS
-	root           string
-	providerStats  func() (int, int64, uint64, uint64, uint64)
-	resolvePath    func(relPath string, isDir bool) (string, []string, string) // decision, patternNames, ruleRef ("<file>:<line>")
-	watcherAlive   func() bool
-	reload         func() error // recompile the rule set on demand (config save / reload button)
-	startTime      time.Time
+	mux           *http.ServeMux
+	server        *http.Server
+	metrics       *obs.JanusMetrics
+	ring          *obs.RingBuffer
+	topN          *obs.TopN
+	bus           *obs.EventBus
+	history       *history.Store
+	token         string
+	ui            fs.FS
+	root          string
+	providerStats func() (int, int64, uint64, uint64, uint64)
+	resolvePath   func(relPath string, isDir bool) (string, []string, string) // decision, patternNames, ruleRef ("<file>:<line>")
+	watcherAlive  func() bool
+	reload        func() error // recompile the rule set on demand (config save / reload button)
+	startTime     time.Time
 }
 
 // New constructs an API server. uiFS is the embedded dashboard filesystem

@@ -8,8 +8,8 @@ import (
 // (SPEC §10: "single MPSC channel (cap 4096) drained by one fan-out goroutine").
 // Producers call Emit (non-blocking); the consumer goroutine calls Consume.
 type EventBus struct {
-	ch          chan Event
-	dropped     atomic.Uint64
+	ch      chan Event
+	dropped atomic.Uint64
 }
 
 // NewEventBus creates an event bus with the given buffer capacity.

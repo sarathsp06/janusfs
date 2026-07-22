@@ -23,8 +23,8 @@ type JanusMetrics struct {
 	WatcherOverflows atomic.Uint64
 	EventsDropped    atomic.Uint64
 
-	mu          sync.Mutex
-	latBuckets  map[string]*latencyHist
+	mu         sync.Mutex
+	latBuckets map[string]*latencyHist
 }
 
 // latencyHist records p50/p90/p99 for a metric.
