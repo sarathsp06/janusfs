@@ -59,23 +59,32 @@ Janus watches doors and thresholds — places where context changes. The reposit
 
 Here's a compact, layered view of exactly what JanusFS does when an agent reads a file.
 
+```mermaid
+flowchart LR
+  A[Agent (untrusted)] -->|read / open / readdir| J[JanusFS<br/>(policy snapshot)]
+  subgraph JanusFS_Decisions [JanusFS Decisions]
+    direction TB
+    JA[ALLOWED]\n(passthrough)
+    JM[MASKED]\n(redaction)
+    JH[HIDDEN]\n(deny EACCES)
+  end
+  J --> JA
+  J --> JM
+  J --> JH
+  JA --> D[Real files on disk\n(trusted)]
+  JM --> R[Redaction layer\n(RAM cache / re-redact)]
+  R --> A
+  D --> A
+  JH --> X((Denied))
+```
+
+If your renderer does not support Mermaid diagrams, here's a plain-text fallback:
+
 ```text
-Agent process (untrusted)
-  |
-  |  read / open / readdir
-  v
-+-----------------------------+
-|  JanusFS (FUSE mount)       |   <-- policy snapshot (compiled from .janusignore /.janusmask)
-|  - Resolve decision         |       • HIDDEN  -> deny (EACCES)
-|  - If ALLOWED: passthrough |       • MASKED  -> redacted bytes (same length)
-|  - If MASKED: redaction    |       • ALLOWED -> passthrough to real file
-|    (RAM cache or re-redact)|
-+-----------------------------+
-  |
-  |  If ALLOWED: passthrough fd (native file contents)
-  |  If MASKED: redacted bytes served (byte-length preserving)
-  v
-Underlying real files on disk (trusted)
+Agent -> JanusFS (policy snapshot)
+  - ALLOWED -> passthrough to disk -> agent sees raw bytes
+  - MASKED  -> redaction layer (RAM cache) -> agent sees redacted bytes (same length)
+  - HIDDEN  -> deny (EACCES) -> agent cannot read
 ```
 
 Examples (behavior):
