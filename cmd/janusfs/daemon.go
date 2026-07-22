@@ -140,15 +140,14 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 		uiPort: indexPort,
 	}
 
-	// Combined dashboard (127.0.0.1 only: it links to per-mount dashboards
-	// with their bearer tokens embedded).
+	// Combined dashboard (127.0.0.1 only: it links to per-mount dashboards).
 	indexAddr := fmt.Sprintf("127.0.0.1:%d", indexPort)
 	ln, err := net.Listen("tcp", indexAddr)
 	if err != nil {
 		return fmt.Errorf("daemon: dashboard port %d unavailable: %w", indexPort, err)
 	}
 	d.indexLn = ln
-	d.indexer = &http.Server{Handler: http.HandlerFunc(d.handleIndex)}
+	d.indexer = &http.Server{Handler: http.HandlerFunc(d.handleHTTP)}
 	go func() {
 		if err := d.indexer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logger.Error("dashboard server error", "error", err)
@@ -156,8 +155,15 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 	}()
 	logger.Info("daemon dashboard listening", "url", fmt.Sprintf("http://%s/", indexAddr))
 
-	// Resume recorded mounts before accepting new commands.
-	d.resume()
+	if os.Getenv("JANUSFS_MOCK_DEV") == "1" {
+		rt1, _ := startMockMount(ctx, "/tmp/janus_test_src", "/home/jules/.janusfs/mounts/mock-project-1", "My Mock Project 1")
+		rt2, _ := startMockMount(ctx, "/tmp/janus_test_src_2", "/home/jules/.janusfs/mounts/mock-project-2", "My Mock Project 2")
+		d.mounts[rt1.Mountpoint] = rt1
+		d.mounts[rt2.Mountpoint] = rt2
+	} else {
+		// Resume recorded mounts before accepting new commands.
+		d.resume()
+	}
 
 	lc, err := net.Listen("unix", sock)
 	if err != nil {
@@ -282,7 +288,6 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 		return daemonResponse{Error: "src is required"}
 	}
 	cfg := d.base
-	cfg.UIPort = 0 // auto-assign a free per-mount dashboard port
 	cfg.Src = req.Src
 	cfg.Mountpoint = req.Mountpoint // empty for a client mount (derived); set only on resume
 	cfg.NoHistory = req.NoHistory || d.base.NoHistory
@@ -450,7 +455,7 @@ func (d *daemon) status(rt *mountRuntime) mountStatus {
 		Src:        rt.Src,
 		Label:      rt.Label,
 		Mountpoint: rt.Mountpoint,
-		Dashboard:  fmt.Sprintf("http://localhost:%d/?token=%s", rt.UIPort, rt.Token),
+		Dashboard:  fmt.Sprintf("http://localhost:%d/mounts/%s/", d.uiPort, rt.UUID),
 	}
 }
 
@@ -505,13 +510,45 @@ func (d *daemon) snapshot() []mountStatus {
 	return out
 }
 
+// handleHTTP multiplexes both the daemon-level combined index view, the individual
+// mount dashboards, and their API/SSE/static asset endpoints under `/mounts/<uuid>/`.
+func (d *daemon) handleHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		d.handleIndex(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/mounts/") {
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/mounts/"), "/")
+		if len(parts) > 0 && parts[0] != "" {
+			uuid := parts[0]
+			d.mu.Lock()
+			var matched *mountRuntime
+			for _, rt := range d.mounts {
+				if rt.UUID == uuid {
+					matched = rt
+					break
+				}
+			}
+			d.mu.Unlock()
+
+			if matched != nil && matched.apiSrv != nil {
+				// Strip the prefix "/mounts/<uuid>" so that the existing api.Server
+				// router handles it correctly (it registers endpoints starting with "/").
+				trimmedPath := "/" + strings.Join(parts[1:], "/")
+				r.URL.Path = trimmedPath
+				matched.apiSrv.ServeHTTP(w, r)
+				return
+			}
+		}
+	}
+
+	http.NotFound(w, r)
+}
+
 // handleIndex serves the combined dashboard: a plain list of every live
 // mount linking to its individual dashboard.
 func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 	mounts := d.snapshot()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

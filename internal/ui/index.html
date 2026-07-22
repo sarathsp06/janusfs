@@ -389,11 +389,16 @@
 
   function apiURL(path) {
     var base = window.location.origin;
-    if (!token) return base + path;
+    var match = window.location.pathname.match(/^\/mounts\/([^\/]+)/);
+    var prefix = match ? match[0] : '';
+
+    var fullPath = prefix + path;
+    if (!token) return base + fullPath;
+
     // Use & when the path already carries a query (e.g. reveal?path=...),
     // otherwise the token lands inside the path param and auth fails.
-    var sep = path.indexOf('?') >= 0 ? '&' : '?';
-    return base + path + sep + 'token=' + encodeURIComponent(token);
+    var sep = fullPath.indexOf('?') >= 0 ? '&' : '?';
+    return base + fullPath + sep + 'token=' + encodeURIComponent(token);
   }
 
   var POLL = 2000;
