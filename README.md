@@ -173,6 +173,67 @@ revalidates the file before serving.
 If no daemon is running, `janusfs mount` says so; `janusfs umount` falls back to
 a direct OS-level unmount so a stray mount can still be cleaned up.
 
+## Recovering a stale or broken mount
+
+If you see errors like "device not configured" or `ENXIO` when opening the
+mountpoint, the kernel may still have a stale macFUSE mount while the daemon
+has no live runtime for it. The CLI supports safe recovery steps:
+
+- Try the daemon-aware unmount first:
+
+  janusfs umount <mountpoint-or-src>
+
+  This asks the running daemon to unmount (and prunes stale registry
+  entries). If the daemon isn't running it falls back to an OS-level unmount.
+
+- If a direct kernel mount remains, use the system unmount tools as a fallback:
+
+  diskutil unmount <mountpoint>
+  # or, if that fails:
+  diskutil unmount force <mountpoint>
+
+- To inspect mounts and pidfiles, use:
+
+  janusfs paths
+  janusfs doctor
+
+  The `doctor` output includes any stale pidfiles and other runtime health
+  indicators.
+
+- If you prefer a manual cleanup, check for a backing registry entry:
+
+  cat ~/.janusfs/mounts.json
+
+  and remove a stale entry with `janusfs umount <mountpoint>` (daemon will
+  prune it) or by editing the registry with care.
+
+
+## First-run checklist
+
+Before mounting for the first time, run this quick checklist to reduce friction:
+
+1. Install and approve macFUSE (System Settings → Privacy & Security), then
+   reboot if required.
+2. Configure a mount root (recommended default is `~/.janusfs/mounts`) with:
+
+   janusfs install
+
+3. Seed secure defaults in your repo (or in `~/.janusfs/config`):
+
+   cd my-project
+   janusfs init
+
+4. Lint rules and preview effects before mounting:
+
+   janusfs check
+   janusfs explain .env
+
+5. Start the daemon and bring the mount up:
+
+   janusfs daemon &
+   janusfs mount .
+
+
 ## The three faces
 
 | State       | Appears in listing | `getattr` size | `read` | `write` |

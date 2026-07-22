@@ -146,6 +146,13 @@ tidy:
 .PHONY: verify ## Full pre-push check: fmt-check + vet + test-race
 verify: fmt-check vet test-race
 
+## --- generate ----------------------------------------------------------
+
+.PHONY: generate ## Run code generators (go generate ./...)
+generate:
+	@echo "running generators..."
+	$(GO) generate ./...
+
 ## --- release ------------------------------------------------------------
 
 .PHONY: release-snapshot ## Build a local snapshot release (no publish)
@@ -164,6 +171,12 @@ release-check:
 	  exit 1; \
 	}
 	goreleaser check
+
+## --- ci ---------------------------------------------------------------
+
+.PHONY: ci ## Run CI-style verification (verify + lint if available)
+ci: verify
+	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || echo "golangci-lint not installed; skipping lint"
 
 ## --- housekeeping -------------------------------------------------------
 
