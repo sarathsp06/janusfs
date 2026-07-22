@@ -1,9 +1,9 @@
 # JanusFS
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
-[![Platform: macOS (macFUSE)](https://img.shields.io/badge/platform-macOS%20%28macFUSE%29-lightgrey.svg)](https://osxfuse.github.io/)
+[![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/sarathsp06/janusfs)
 [![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
-[![License TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **JanusFS gives AI agents a safe view of your files.** It mounts a sanitized mirror of a project directory, then enforces your rules at the filesystem boundary: normal files pass through, sensitive spans are replaced with `*`, and forbidden files return `EACCES`.
 
@@ -37,7 +37,7 @@ The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stan
 - [CLI reference](#cli-reference)
 - [Security model](#security-model)
 - [Comparison to alternatives](#comparison-to-alternatives)
-- [Building and hacking](#building-and-hacking)
+- [Development Guide](docs/DEVELOPMENT.md)
 - [Status](#status)
 - [License](#license)
 
@@ -47,45 +47,9 @@ The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stan
 
 Janus watches doors and thresholds — places where context changes. The repository root is a kind of threshold: it contains both code the agent should reason about and secrets the agent must never see. JanusFS treats that boundary strictly. It decides, per-path and per-read, whether to hand the agent the real bytes, a redacted version, or nothing at all. This mirrors the myth: Janus decides what can pass and what cannot.
 
-## What happens to a file (quick diagram)
+## How it works (flow diagram)
 
-Here's a compact, layered view of exactly what JanusFS does when an agent reads a file.
-
-```mermaid
-flowchart LR
-  A["Agent (untrusted)"] -->|read / open / readdir| J["JanusFS<br/>(policy snapshot)"]
-  subgraph JanusFS_Decisions [JanusFS Decisions]
-    direction TB
-    JA["ALLOWED<br/>(passthrough)"]
-    JM["MASKED<br/>(redaction)"]
-    JH["HIDDEN<br/>(deny EACCES)"]
-  end
-  J --> JA
-  J --> JM
-  J --> JH
-  JA --> D["Real files on disk<br/>(trusted)"]
-  JM --> R["Redaction layer<br/>(RAM cache / re-redact)"]
-  R --> A
-  D --> A
-  JH --> X((Denied))
-```
-
-If your renderer does not support Mermaid diagrams, here's a plain-text fallback:
-
-```text
-Agent -> JanusFS (policy snapshot)
-  - ALLOWED -> passthrough to disk -> agent sees raw bytes
-  - MASKED  -> redaction layer (RAM cache) -> agent sees redacted bytes (same length)
-  - HIDDEN  -> deny (EACCES) -> agent cannot read
-```
-
-Examples (behavior):
-
-- Allowed file: agent sees raw bytes.
-- Masked file: agent sees the same file size, but sensitive spans replaced by `*` (byte-length preserving).
-- Hidden file: agent gets `EACCES` on open; file may still appear in listings with its real size.
-
-## Visual layer diagram
+Here is a layered view of exactly what JanusFS does when an agent reads a file:
 
 ```mermaid
 flowchart LR
@@ -105,10 +69,12 @@ flowchart LR
 
 If your renderer does not support Mermaid diagrams, here is a plain-text fallback:
 
+```text
 Agent -> JanusFS -> decision:
 - ALLOWED -> passthrough to disk -> agent sees raw bytes
-- MASKED -> redaction layer (RAM cache) -> agent sees redacted bytes (same length)
-- HIDDEN -> deny (EACCES) -> agent cannot read
+- MASKED  -> redaction layer (RAM cache) -> agent sees redacted bytes (same length)
+- HIDDEN  -> deny (EACCES) -> agent cannot read
+```
 
 
 ## How it works
@@ -159,17 +125,25 @@ The rule engine reads `.janusignore` and `.janusmask` from the mount root down (
 
 ## Quickstart
 
+### 1) Install FUSE and JanusFS
+
+#### Install FUSE runtime (Required)
+- **macOS:** Install macFUSE: `brew install --cask macfuse`
+- **Linux (Ubuntu/Debian):** `sudo apt-get install -y fuse3 libfuse3-dev`
+- **Linux (RedHat/CentOS):** `sudo dnf install -y fuse3 fuse3-devel`
+
+*Note for Apple Silicon users:* The macFUSE system extension must be approved once in *System Settings → Privacy & Security*, followed by a reboot. (See `SPEC.md` for why JanusFS uses macFUSE rather than FUSE-T).
+
+#### Install JanusFS binary
+- **Via Precompiled Release Binaries:** Download the latest tarball for your OS and architecture from the [GitHub Releases](https://github.com/sarathsp06/janusfs/releases) page, extract the `janusfs` binary, and move it to a directory in your `$PATH` (e.g., `/usr/local/bin`).
+- **Via Go Toolchain:**
+  ```bash
+  go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
+  ```
+
+### 2) Quickstart Setup & Usage
+
 ```bash
-# 1) install
-brew install --cask macfuse     # macOS FUSE implementation (kernel extension)
-go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
-
-# On Apple Silicon, macFUSE's system extension must be approved once:
-#   System Settings → Privacy & Security → allow the "macFUSE" extension,
-#   then reboot (a reduced-security reboot is required for third-party kexts).
-# See docs/SPEC_AMENDMENTS.md (2026-07-18) for why janusfs uses macFUSE
-# (hanwen/go-fuse) rather than the earlier, unreliable FUSE-T stack.
-
 # 2) one-time setup: pick a mount root (where sanitized mirrors appear)
 janusfs install                 # saves ~/.janusfs/settings.json; --global-rules also seeds machine-wide defaults
 
@@ -469,37 +443,9 @@ See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / ass
 | Custom LLM tool wrappers that filter file reads | ⚠️ (per-tool, easily bypassed) | ⚠️ (per-tool discipline) | ⚠️ | ⚠️ |
 | **JanusFS** | ✅ (per-span, byte-length preserving) | ✅ (FS boundary, per-read) | ✅ machine-wide via `~/.janusfs/config/` | ✅ (steady-state cache) |
 
-## Building and hacking
+## Development Guide
 
-```bash
-# build the binary (macOS arm64/amd64)
-make build
-
-# unit tests
-make test
-make test-race        # -race
-make coverage         # writes coverage.out + coverage.html, prints summary
-
-# format / lint
-make fmt              # gofmt + goimports
-make vet              # go vet
-make lint             # golangci-lint (optional)
-
-# integration (requires macFUSE installed + approved)
-make integration      # -tags fuseintegration
-make leak-oracle      # sentinel-secret scan through real mount
-
-# releases (goreleaser; produces darwin-universal tarballs + checksums + SBOM)
-make release-snapshot # local build, no publish
-make release-check    # goreleaser config validation
-```
-
-`make help` (default target) prints every available target with descriptions.
-
-Full engineering contract, phased build plan, and normative Go interfaces: **[`SPEC.md`](SPEC.md)**.
-Product-level plan and non-goals: **[`PLAN.md`](PLAN.md)**.
-Conventions for anyone (agents included) writing JanusFS code: **[`AGENTS.md`](AGENTS.md)**.
-Amendment log for anything the spec didn't cover: **[`docs/SPEC_AMENDMENTS.md`](docs/SPEC_AMENDMENTS.md)**.
+For details on building, formatting, running unit and FUSE integration tests, and validating the release configuration locally, see the **[Development Guide](docs/DEVELOPMENT.md)**.
 
 ## Status
 
@@ -518,4 +464,4 @@ MVP (Phases 0–4) is complete.
 
 ## License
 
-TBD. Please open an issue if you want to use JanusFS in production before this is decided.
+JanusFS is licensed under the [MIT License](LICENSE).

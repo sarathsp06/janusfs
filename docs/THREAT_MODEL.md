@@ -37,7 +37,7 @@ Copy this into the phase's exit review:
 - [ ] New leak channels introduced this phase identified and added to the table above.
 - [ ] Fail-closed behavior verified for every new error path (does an internal error in this phase's code resolve to Hidden/EACCES, or could it leak?).
 - [ ] Leak oracle (if it exists yet) extended with sentinels relevant to this phase's new masking/parsing surface.
-- [ ] No new dependency outside SPEC §20.4's allowlist without a `docs/SPEC_AMENDMENTS.md` entry.
+- [ ] No new dependency outside SPEC §20.4's allowlist without a `SPEC.md` entry.
 - [ ] Logging/error-handling conventions (§21) followed: no raw bytes logged, sentinel errors only, single `ToErrno` translation point untouched.
 
 ## Phase entries
