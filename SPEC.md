@@ -3,7 +3,7 @@
 **Version:** 2.0 (consolidated from SPEC v1.1 + all resolved amendments)
 **Platform:** macOS only (macFUSE kernel extension). Linux deferred behind the OS-abstraction seam.
 **Language:** Go (≥ 1.26).
-**Companion docs:** `PLAN.md` (product-level plan), `AGENTS.md` (condensed conventions), `README.md` (pitch), `docs/THREAT_MODEL.md` (living threat model). This spec is the engineering contract.
+**Companion docs:** `AGENTS.md` (condensed conventions), `README.md` (pitch), `docs/THREAT_MODEL.md` (living threat model). This spec is the engineering contract.
 
 **How to read this spec:** Part I says *what* must be built (requirements, numbered FR-x/NFR-x — these numbers are referenced in code comments, commits, and tests). Part II says *how* (architecture; the Go interfaces in §7–§9 are normative). Part III says *in what order* (phases with hard exit criteria). Part IV is the rulebook for whoever writes the code — read it in full before your first commit.
 

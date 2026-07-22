@@ -19,11 +19,11 @@ builds:
   - id: janusfs
     main: ./cmd/janusfs
     binary: janusfs
-    # NFR-7: macOS only (FUSE-T). No CGO in the janusfs binary itself
-    # (SPEC §20.4's dependency policy forbids cgo except the approved
-    # FUSE-T fallback, which isn't in play here).
+    # Build for both macOS and Linux. No CGO in the janusfs binary itself
+    # (SPEC §20.4's dependency policy forbids cgo).
     goos:
       - darwin
+      - linux
     goarch:
       - amd64
       - arm64
@@ -54,7 +54,6 @@ archives:
       - LICENSE*
       - README.md
       - SPEC.md
-      - PLAN.md
       - AGENTS.md
       - docs/**/*
 

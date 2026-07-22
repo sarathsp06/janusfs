@@ -1,9 +1,9 @@
 # JanusFS
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
-[![Platform: macOS (macFUSE)](https://img.shields.io/badge/platform-macOS%20%28macFUSE%29-lightgrey.svg)](https://osxfuse.github.io/)
+[![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/sarathsp06/janusfs)
 [![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
-[![License TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **JanusFS gives AI agents a safe view of your files.** It mounts a sanitized mirror of a project directory, then enforces your rules at the filesystem boundary: normal files pass through, sensitive spans are replaced with `*`, and forbidden files return `EACCES`.
 
@@ -167,8 +167,8 @@ go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
 # On Apple Silicon, macFUSE's system extension must be approved once:
 #   System Settings → Privacy & Security → allow the "macFUSE" extension,
 #   then reboot (a reduced-security reboot is required for third-party kexts).
-# See docs/SPEC_AMENDMENTS.md (2026-07-18) for why janusfs uses macFUSE
-# (hanwen/go-fuse) rather than the earlier, unreliable FUSE-T stack.
+# See SPEC.md for why janusfs uses macFUSE (hanwen/go-fuse) rather than the
+# earlier, unreliable FUSE-T stack.
 
 # 2) one-time setup: pick a mount root (where sanitized mirrors appear)
 janusfs install                 # saves ~/.janusfs/settings.json; --global-rules also seeds machine-wide defaults
@@ -497,9 +497,7 @@ make release-check    # goreleaser config validation
 `make help` (default target) prints every available target with descriptions.
 
 Full engineering contract, phased build plan, and normative Go interfaces: **[`SPEC.md`](SPEC.md)**.
-Product-level plan and non-goals: **[`PLAN.md`](PLAN.md)**.
 Conventions for anyone (agents included) writing JanusFS code: **[`AGENTS.md`](AGENTS.md)**.
-Amendment log for anything the spec didn't cover: **[`docs/SPEC_AMENDMENTS.md`](docs/SPEC_AMENDMENTS.md)**.
 
 ## Status
 
@@ -518,4 +516,4 @@ MVP (Phases 0–4) is complete.
 
 ## License
 
-TBD. Please open an issue if you want to use JanusFS in production before this is decided.
+JanusFS is licensed under the [MIT License](LICENSE).

@@ -7,8 +7,9 @@ on:
 
 jobs:
   goreleaser:
-    # NFR-7: macOS-only binary; must build on a macOS runner.
-    runs-on: macos-14
+    # Build on a standard Linux runner. Since CGO_ENABLED=0 is used,
+    # goreleaser can cross-compile to all target platforms.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:

@@ -3,7 +3,6 @@
 ## First reads
 
 - `SPEC.md` is the binding engineering contract — requirements (FR/NFR numbers), architecture, phased plan, and **Part IV: operating instructions for the coding agent**. Read it before writing code; every behavior must trace to an FR/NFR.
-- `PLAN.md` is the product-level plan (why, not how) — read it for context, not for requirements.
 - `README.md` explains the name and the pitch, for humans.
 - `docs/THREAT_MODEL.md` is the living threat model — check it before assuming a behavior isn't specified.
 

@@ -7,17 +7,23 @@ on:
 
 jobs:
   build-and-test:
-    # Per SPEC.md (macOS-only, FUSE-T): build and unit tests run on a macOS
-    # runner. Mounted integration tests (`make integration`) need FUSE-T
-    # installed and are not run here yet — they're wired in once Phase 0's
-    # spike is complete (SPEC.md §24).
-    runs-on: macos-14
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+
+      - name: Install FUSE on Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse3 libfuse3-dev
 
       - name: gofmt check
         run: |
@@ -31,3 +37,7 @@ jobs:
 
       - name: unit tests
         run: make test
+
+      - name: FUSE integration tests (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: make integration
