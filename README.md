@@ -1,10 +1,23 @@
 # JanusFS
 
+[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
+[![Platform: macOS (macFUSE)](https://img.shields.io/badge/platform-macOS%20%28macFUSE%29-lightgrey.svg)](https://osxfuse.github.io/)
+[![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
+[![License TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
+
 **JanusFS gives AI agents a safe view of your files.** It mounts a sanitized mirror of a project directory, then enforces your rules at the filesystem boundary: normal files pass through, sensitive spans are replaced with `*`, and forbidden files return `EACCES`.
 
-[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
-[![macOS via macFUSE](https://img.shields.io/badge/platform-macOS%20%28macFUSE%29-lightgrey.svg)](https://osxfuse.github.io/)
-[![License TBD](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
+<!-- Janus ASCII art -->
+
+      ____                    __
+     /\  _`\                /\ \__
+     \ \ \L\_\  _ __    __  \ \ ,_\   __  __  _ __   ___
+      \ \ \L_L /\`'__\ /'__`\ \ \ \/ /'__`\`'__\`\'__\/ __`\
+       \ \ \/, \ \ \/ /\  __/  \ \ \_/\  __/\ \ \/\ \ \/\ \ 
+        \ \____/\ \_\ \ \____\  \ \__\ \____\\ \_\ \_\ \_\ \_\
+         \/___/  \/_/  \/____/   \/__/\/____/ \/_/\/_/\/_/\/_/
+
+> In Roman myth, Janus is the two-faced god of doorways and transitions — he looks both ways. JanusFS stands at the doorway between your code and any untrusted agent, deciding which face of each file to show.
 
 ## In one minute
 
@@ -37,6 +50,49 @@ The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stan
 - [License](#license)
 
 ## Why
+
+(Also: a short Janus backstory)
+
+Janus watches doors and thresholds — places where context changes. The repository root is a kind of threshold: it contains both code the agent should reason about and secrets the agent must never see. JanusFS treats that boundary strictly. It decides, per-path and per-read, whether to hand the agent the real bytes, a redacted version, or nothing at all. This mirrors the myth: Janus decides what can pass and what cannot.
+
+## What happens to a file (quick diagram)
+
+Here's a compact, layered view of exactly what JanusFS does when an agent reads a file.
+
+Agent process (untrusted)
+  |
+  |  read/open/readdir
+  v
++-------------------------+
+| JanusFS (FUSE mount)    |  <-- policy snapshot (compiled from .janusignore/.janusmask)
+|  - Resolve decision     |     • Hidden  -> deny (EACCES)
+|  - If Allowed: passthru |     • Masked  -> serve redacted bytes (same length)
+|  - If Masked: serve from |     • Allowed -> passthrough to real file
+|    RAM cache or re-redact|
++-------------------------+
+  |
+  |  (if allowed) passthrough fd or (if masked) redacted bytes
+  v
+Underlying real files on disk (trusted)
+
+Examples (behavior):
+
+- Allowed file: agent sees raw bytes.
+- Masked file: agent sees the same file size, but sensitive spans replaced by `*` (byte-length preserving).
+- Hidden file: agent gets `EACCES` on open; file may still appear in listings with its real size.
+
+## Visual layer diagram (ASCII)
+
+  [Agent]
+     |
+     v
+  [JanusFS Mountpoint]
+     |-- Decision: HIDDEN --> EACCES
+     |-- Decision: MASKED --> Redaction Layer --> RAM Cache --> Agent
+     `-- Decision: ALLOWED --> Passthrough to OS -> File
+
+
+## How it works
 
 AI coding agents need broad filesystem read access to be useful — and that access routinely includes `.env` files, private keys, credentials, cloud configs, and other things that should never end up in a prompt or a model's context.
 
