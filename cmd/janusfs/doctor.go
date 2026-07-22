@@ -44,21 +44,39 @@ func printDoctorReport(r *health.Report) {
 	fmt.Printf("JanusFS Doctor — %s\n", r.Version)
 	fmt.Println()
 
-	// macFUSE status.
-	fmt.Print("macFUSE: ")
-	if r.MacFUSE.Installed {
-		fmt.Print("installed")
-		if r.MacFUSE.Loaded {
-			fmt.Print(", loaded")
+	// FUSE/macFUSE status.
+	if r.Runtime.OS == "darwin" {
+		fmt.Print("macFUSE: ")
+		if r.MacFUSE.Installed {
+			fmt.Print("installed")
+			if r.MacFUSE.Loaded {
+				fmt.Print(", loaded")
+			} else {
+				fmt.Print(", NOT loaded (run `sudo kextload` or approve in System Settings)")
+			}
+			if r.MacFUSE.Version != "" {
+				fmt.Printf(" (version %s)", r.MacFUSE.Version)
+			}
+			fmt.Println()
 		} else {
-			fmt.Print(", NOT loaded (run `sudo kextload` or approve in System Settings)")
+			fmt.Println("NOT installed (install with `brew install --cask macfuse`)")
 		}
-		if r.MacFUSE.Version != "" {
-			fmt.Printf(" (version %s)", r.MacFUSE.Version)
-		}
-		fmt.Println()
 	} else {
-		fmt.Println("NOT installed (install with `brew install --cask macfuse`)")
+		fmt.Print("FUSE: ")
+		if r.MacFUSE.Installed {
+			fmt.Print("installed")
+			if r.MacFUSE.Loaded {
+				fmt.Print(", loaded")
+			} else {
+				fmt.Print(", NOT loaded")
+			}
+			if r.MacFUSE.Version != "" {
+				fmt.Printf(" (version %s)", r.MacFUSE.Version)
+			}
+			fmt.Println()
+		} else {
+			fmt.Println("NOT installed / /dev/fuse missing (install with `apt-get install fuse3` or your package manager)")
+		}
 	}
 
 	// Runtime.

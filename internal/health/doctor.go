@@ -93,7 +93,11 @@ func Run(pidfileDir string) *Report {
 	}
 
 	if !r.MacFUSE.Installed {
-		r.Warnings = append(r.Warnings, "macFUSE is not installed; mounts require macFUSE (brew install --cask macfuse)")
+		if runtime.GOOS == "darwin" {
+			r.Warnings = append(r.Warnings, "macFUSE is not installed; mounts require macFUSE (brew install --cask macfuse)")
+		} else {
+			r.Warnings = append(r.Warnings, "FUSE is not installed or /dev/fuse is missing; mounts require FUSE")
+		}
 	}
 
 	return r

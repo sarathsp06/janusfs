@@ -5,7 +5,7 @@
 # comment on the same line as `.PHONY: <name>` so they show up automatically.
 
 MODULE  := github.com/sarathsp06/janusfs
-GOOS    := darwin
+GOOS    ?= $(shell go env GOOS)
 ARCH    := $(shell go env GOARCH)
 BIN_DIR := build
 BIN     := $(BIN_DIR)/janusfs-$(GOOS)-$(ARCH)
