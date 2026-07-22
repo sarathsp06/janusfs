@@ -7,15 +7,7 @@
 
 **JanusFS gives AI agents a safe view of your files.** It mounts a sanitized mirror of a project directory, then enforces your rules at the filesystem boundary: normal files pass through, sensitive spans are replaced with `*`, and forbidden files return `EACCES`.
 
-<!-- Janus ASCII art -->
-
-      ____                    __
-     /\  _`\                /\ \__
-     \ \ \L\_\  _ __    __  \ \ ,_\   __  __  _ __   ___
-      \ \ \L_L /\`'__\ /'__`\ \ \ \/ /'__`\`'__\`\'__\/ __`\
-       \ \ \/, \ \ \/ /\  __/  \ \ \_/\  __/\ \ \/\ \ \/\ \ 
-        \ \____/\ \_\ \ \____\  \ \__\ \____\\ \_\ \_\ \_\ \_\
-         \/___/  \/_/  \/____/   \/__/\/____/ \/_/\/_/\/_/\/_/
+![JanusFS — Safe mirror illustration](docs/janus_art.png)
 
 > In Roman myth, Janus is the two-faced god of doorways and transitions — he looks both ways. JanusFS stands at the doorway between your code and any untrusted agent, deciding which face of each file to show.
 
