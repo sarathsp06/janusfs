@@ -81,16 +81,9 @@ Examples (behavior):
 - Masked file: agent sees the same file size, but sensitive spans replaced by `*` (byte-length preserving).
 - Hidden file: agent gets `EACCES` on open; file may still appear in listings with its real size.
 
-## Visual layer diagram (ASCII)
+## Visual layer diagram
 
-  [Agent]
-     |
-     v
-  [JanusFS Mountpoint]
-     |-- Decision: HIDDEN --> EACCES
-     |-- Decision: MASKED --> Redaction Layer --> RAM Cache --> Agent
-     `-- Decision: ALLOWED --> Passthrough to OS -> File
-
+![JanusFS file flow](docs/diagram.svg)
 
 ## How it works
 
