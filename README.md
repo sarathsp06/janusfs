@@ -83,7 +83,29 @@ Examples (behavior):
 
 ## Visual layer diagram
 
-![JanusFS file flow](docs/diagram.svg)
+```mermaid
+flowchart LR
+  Agent[Agent (untrusted)]
+  Janus[JanusFS (FUSE mount)\n(policy snapshot)]
+  Disk[Real files on disk (trusted)]
+  Redact[Redaction Layer\n(RAM cache)]
+  Deny[Denied (EACCES)]
+
+  Agent -->|read/open/readdir| Janus
+  Janus -->|ALLOWED| Disk
+  Janus -->|MASKED| Redact
+  Janus -->|HIDDEN| Deny
+  Redact --> Agent
+  Disk --> Agent
+```
+
+If your renderer does not support Mermaid diagrams, here is a plain-text fallback:
+
+Agent -> JanusFS -> decision:
+- ALLOWED -> passthrough to disk -> agent sees raw bytes
+- MASKED -> redaction layer (RAM cache) -> agent sees redacted bytes (same length)
+- HIDDEN -> deny (EACCES) -> agent cannot read
+
 
 ## How it works
 
