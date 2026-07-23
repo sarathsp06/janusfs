@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -61,7 +62,7 @@ func runUmount(mountpoint string) error {
 			}
 			seen[target] = true
 			if isMountpoint(target) {
-				if uerr := tryUnmount("diskutil", []string{"unmount", "force", target}, 5); uerr == nil {
+				if uerr := unmountKernel(target, true); uerr == nil {
 					fmt.Printf("Also cleared a lingering mount at %s\n", target)
 				}
 			}
@@ -112,12 +113,23 @@ func directUnmount(mountpoint string) error {
 	return nil
 }
 
-var unmountCommand = tryUnmount
+var (
+	unmountCommand = tryUnmount
+	runtimeGOOS    = runtime.GOOS
+)
 
-// unmountKernel tries the stable unmount sequence for a macFUSE mountpoint:
-// diskutil first, umount as a portable fallback, and optionally diskutil's
-// force mode for FR-2 shutdown cleanup and FR-3 stale-mount recovery.
+// unmountKernel tries the stable unmount sequence for the current OS. Darwin
+// uses diskutil/macFUSE fallbacks; Linux uses fusermount before lazy umount so
+// stale FUSE mountpoints with "Transport endpoint is not connected" can be
+// detached without diskutil.
 func unmountKernel(mountpoint string, force bool) error {
+	if runtimeGOOS == "linux" {
+		return unmountKernelLinux(mountpoint, force)
+	}
+	return unmountKernelDarwin(mountpoint, force)
+}
+
+func unmountKernelDarwin(mountpoint string, force bool) error {
 	var errs []string
 	if err := unmountCommand("diskutil", []string{"unmount", mountpoint}, 5); err == nil {
 		return nil
@@ -134,6 +146,36 @@ func unmountKernel(mountpoint string, force bool) error {
 			return nil
 		} else {
 			errs = append(errs, fmt.Sprintf("diskutil unmount force failed: %v", err))
+		}
+	}
+	return fmt.Errorf("%s", strings.Join(errs, "\n  "))
+}
+
+type unmountAttempt struct {
+	name string
+	args []string
+}
+
+func unmountKernelLinux(mountpoint string, force bool) error {
+	attempts := []unmountAttempt{
+		{name: "fusermount3", args: []string{"-u", mountpoint}},
+		{name: "fusermount", args: []string{"-u", mountpoint}},
+		{name: "umount", args: []string{mountpoint}},
+	}
+	if force {
+		attempts = append(attempts,
+			unmountAttempt{name: "fusermount3", args: []string{"-uz", mountpoint}},
+			unmountAttempt{name: "fusermount", args: []string{"-uz", mountpoint}},
+			unmountAttempt{name: "umount", args: []string{"-l", mountpoint}},
+		)
+	}
+
+	var errs []string
+	for _, a := range attempts {
+		if err := unmountCommand(a.name, a.args, 5); err == nil {
+			return nil
+		} else {
+			errs = append(errs, fmt.Sprintf("%s %s failed: %v", a.name, strings.Join(a.args, " "), err))
 		}
 	}
 	return fmt.Errorf("%s", strings.Join(errs, "\n  "))

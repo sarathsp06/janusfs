@@ -52,7 +52,9 @@ func TestRunUmount_RemovesStalePidfile(t *testing.T) {
 
 func TestUnmountKernel_ForceFallbackAfterGracefulFailures(t *testing.T) {
 	old := unmountCommand
-	t.Cleanup(func() { unmountCommand = old })
+	oldGOOS := runtimeGOOS
+	t.Cleanup(func() { unmountCommand = old; runtimeGOOS = oldGOOS })
+	runtimeGOOS = "darwin"
 
 	var calls []string
 	unmountCommand = func(name string, args []string, timeoutSec int) error {
@@ -77,15 +79,50 @@ func TestUnmountKernel_ForceFallbackAfterGracefulFailures(t *testing.T) {
 	}
 }
 
+func TestUnmountKernel_LinuxUsesFuseAndLazyUnmount(t *testing.T) {
+	old := unmountCommand
+	oldGOOS := runtimeGOOS
+	t.Cleanup(func() { unmountCommand = old; runtimeGOOS = oldGOOS })
+	runtimeGOOS = "linux"
+
+	var calls []string
+	unmountCommand = func(name string, args []string, timeoutSec int) error {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "umount" && reflect.DeepEqual(args, []string{"-l", "/mnt/stale"}) {
+			return nil
+		}
+		return fmt.Errorf("busy")
+	}
+
+	if err := unmountKernel("/mnt/stale", true); err != nil {
+		t.Fatalf("unmountKernel() error = %v, want nil after linux lazy fallback", err)
+	}
+
+	want := []string{
+		"fusermount3 -u /mnt/stale",
+		"fusermount -u /mnt/stale",
+		"umount /mnt/stale",
+		"fusermount3 -uz /mnt/stale",
+		"fusermount -uz /mnt/stale",
+		"umount -l /mnt/stale",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("unmount attempts = %v, want %v", calls, want)
+	}
+}
+
 func TestMountRuntimeStop_ForceUnmountsWhenServeLoopDoesNotExit(t *testing.T) {
 	oldGrace := shutdownGrace
 	oldSettle := forceUnmountSettle
 	oldCommand := unmountCommand
+	oldGOOS := runtimeGOOS
 	t.Cleanup(func() {
 		shutdownGrace = oldGrace
 		forceUnmountSettle = oldSettle
 		unmountCommand = oldCommand
+		runtimeGOOS = oldGOOS
 	})
+	runtimeGOOS = "darwin"
 	shutdownGrace = time.Millisecond
 	forceUnmountSettle = time.Millisecond
 

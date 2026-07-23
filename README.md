@@ -246,9 +246,14 @@ recovery steps:
 
 - If a direct kernel mount remains, use the system unmount tools as a fallback:
 
+  # macOS
   diskutil unmount <mountpoint>
-  # or, if that fails:
   diskutil unmount force <mountpoint>
+
+  # Linux / FUSE
+  fusermount3 -u <mountpoint> || fusermount -u <mountpoint> || umount <mountpoint>
+  # if the mount is stale, e.g. "Transport endpoint is not connected":
+  fusermount3 -uz <mountpoint> || fusermount -uz <mountpoint> || umount -l <mountpoint>
 
 - To inspect mounts and pidfiles, use:
 
