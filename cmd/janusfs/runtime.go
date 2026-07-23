@@ -188,7 +188,11 @@ func (rt *mountRuntime) stop() {
 			case <-rt.done:
 			case <-time.After(forceUnmountSettle):
 				if rt.logger != nil {
-					rt.logger.Warn("mount serve loop did not exit after force unmount", "mountpoint", rt.Mountpoint)
+					if mountpointMounted(rt.Mountpoint) {
+						rt.logger.Warn("mount serve loop did not exit after force unmount", "mountpoint", rt.Mountpoint)
+					} else {
+						rt.logger.Debug("mount serve loop still settling after detached force unmount", "mountpoint", rt.Mountpoint)
+					}
 				}
 			}
 		}

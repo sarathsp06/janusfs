@@ -114,8 +114,9 @@ func directUnmount(mountpoint string) error {
 }
 
 var (
-	unmountCommand = tryUnmount
-	runtimeGOOS    = runtime.GOOS
+	unmountCommand    = tryUnmount
+	runtimeGOOS       = runtime.GOOS
+	mountpointMounted = isMountpoint
 )
 
 // unmountKernel tries the stable unmount sequence for the current OS. Darwin

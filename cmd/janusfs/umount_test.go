@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -108,6 +110,45 @@ func TestUnmountKernel_LinuxUsesFuseAndLazyUnmount(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("unmount attempts = %v, want %v", calls, want)
+	}
+}
+
+func TestMountRuntimeStop_NoWarnWhenForceUnmountClearsMountpoint(t *testing.T) {
+	oldGrace := shutdownGrace
+	oldSettle := forceUnmountSettle
+	oldCommand := unmountCommand
+	oldGOOS := runtimeGOOS
+	oldMounted := mountpointMounted
+	t.Cleanup(func() {
+		shutdownGrace = oldGrace
+		forceUnmountSettle = oldSettle
+		unmountCommand = oldCommand
+		runtimeGOOS = oldGOOS
+		mountpointMounted = oldMounted
+	})
+	runtimeGOOS = "linux"
+	shutdownGrace = time.Millisecond
+	forceUnmountSettle = time.Millisecond
+	mountpointMounted = func(string) bool { return false }
+
+	unmountCommand = func(name string, args []string, timeoutSec int) error {
+		if name == "umount" && reflect.DeepEqual(args, []string{"-l", "/mnt/detached"}) {
+			return nil
+		}
+		return fmt.Errorf("busy")
+	}
+
+	var logs bytes.Buffer
+	rt := &mountRuntime{
+		Mountpoint: "/mnt/detached",
+		adapter:    &mount.Adapter{},
+		done:       make(chan struct{}),
+		logger:     slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+	rt.stop()
+
+	if strings.Contains(logs.String(), "mount serve loop did not exit after force unmount") {
+		t.Fatalf("unexpected stale serve-loop warning after mountpoint was detached: %s", logs.String())
 	}
 }
 
