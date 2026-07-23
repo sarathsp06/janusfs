@@ -185,11 +185,15 @@ func (rt *mountRuntime) stop() {
 		case <-rt.done:
 			// graceful unmount completed within the grace window
 		case <-time.After(shutdownGrace):
-			// FR-2: force the unmount, then give the serve loop a moment.
-			_ = rt.adapter.Unmount(rt.Mountpoint)
+			// FR-2: force the unmount at the OS level, then give the serve loop
+			// a moment to observe it. Calling server.Unmount again is not enough
+			// when macFUSE leaves a busy/stale mount behind.
+			if err := unmountKernel(rt.Mountpoint, true); err != nil && rt.logger != nil {
+				rt.logger.Warn("force unmount failed", "mountpoint", rt.Mountpoint, "error", err)
+			}
 			select {
 			case <-rt.done:
-			case <-time.After(2 * time.Second):
+			case <-time.After(forceUnmountSettle):
 				if rt.logger != nil {
 					rt.logger.Warn("mount serve loop did not exit after force unmount", "mountpoint", rt.Mountpoint)
 				}

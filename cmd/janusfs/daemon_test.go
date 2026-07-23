@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -178,6 +179,72 @@ func TestDoMount_MissingSrc_CleanMessage(t *testing.T) {
 	// The internal package prefix and raw syscall noise must not leak.
 	if strings.Contains(resp.Error, "config:") || strings.Contains(resp.Error, "stat ") {
 		t.Errorf("error leaks internal detail to the user: %q", resp.Error)
+	}
+}
+
+func TestDoMount_ResumeCreatesMissingMountpoint(t *testing.T) {
+	oldStart := startMountFunc
+	t.Cleanup(func() { startMountFunc = oldStart })
+	startMountFunc = func(_ context.Context, cfg config.Config, _ bool) (*mountRuntime, error) {
+		return fakeRuntime(cfg.Src, cfg.Mountpoint, "", "uuid", "tok"), nil
+	}
+
+	src := t.TempDir()
+	mp := filepath.Join(t.TempDir(), "missing", "mountpoint")
+	d := &daemon{mounts: map[string]*mountRuntime{}, base: config.Config{}}
+
+	resp := d.doMount(daemonRequest{Cmd: "mount", Src: src, Mountpoint: mp, Resume: true})
+	if !resp.OK {
+		t.Fatalf("resume doMount failed: %+v", resp)
+	}
+	if info, err := os.Stat(mp); err != nil || !info.IsDir() {
+		t.Fatalf("resume did not create missing mountpoint %s: %v", mp, err)
+	}
+}
+
+func TestDoMount_StaleMountpointCleanupRetriesValidation(t *testing.T) {
+	oldValidate := validateMountConfig
+	oldStart := startMountFunc
+	oldCommand := unmountCommand
+	t.Cleanup(func() {
+		validateMountConfig = oldValidate
+		startMountFunc = oldStart
+		unmountCommand = oldCommand
+	})
+
+	var validateCalls int
+	validateMountConfig = func(config.Config) error {
+		validateCalls++
+		if validateCalls == 1 {
+			return fmt.Errorf("checking mountpoint: %w", syscall.ENXIO)
+		}
+		return nil
+	}
+	startMountFunc = func(_ context.Context, cfg config.Config, _ bool) (*mountRuntime, error) {
+		return fakeRuntime(cfg.Src, cfg.Mountpoint, "", "uuid", "tok"), nil
+	}
+	var forced bool
+	unmountCommand = func(name string, args []string, timeoutSec int) error {
+		if name == "diskutil" && len(args) == 3 && args[0] == "unmount" && args[1] == "force" {
+			forced = true
+			return nil
+		}
+		return fmt.Errorf("busy")
+	}
+
+	src := t.TempDir()
+	mp := t.TempDir()
+	d := &daemon{mounts: map[string]*mountRuntime{}, base: config.Config{}}
+
+	resp := d.doMount(daemonRequest{Cmd: "mount", Src: src, Mountpoint: mp})
+	if !resp.OK {
+		t.Fatalf("doMount should recover stale mountpoint and retry, got %+v", resp)
+	}
+	if validateCalls != 2 {
+		t.Fatalf("validate calls = %d, want 2", validateCalls)
+	}
+	if !forced {
+		t.Fatal("doMount did not force-clean stale mountpoint before retrying validation")
 	}
 }
 

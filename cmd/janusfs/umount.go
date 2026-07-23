@@ -96,21 +96,7 @@ func isMountpoint(path string) bool {
 // native tools first, then force, then signals any pidfile owner and clears
 // the mounts registry.
 func directUnmount(mountpoint string) error {
-	var errs []string
-
-	if err := tryUnmount("diskutil", []string{"unmount", mountpoint}, 5); err != nil {
-		errs = append(errs, fmt.Sprintf("diskutil unmount failed: %v", err))
-		if err2 := tryUnmount("umount", []string{mountpoint}, 5); err2 != nil {
-			errs = append(errs, fmt.Sprintf("umount failed: %v", err2))
-			if err3 := tryUnmount("diskutil", []string{"unmount", "force", mountpoint}, 5); err3 != nil {
-				errs = append(errs, fmt.Sprintf("diskutil unmount force failed: %v", err3))
-			} else {
-				errs = nil
-			}
-		} else {
-			errs = nil
-		}
-	}
+	err := unmountKernel(mountpoint, true)
 
 	if pid, pidErr := readPidfile(mountpoint); pidErr == nil && pid > 0 {
 		_ = syscall.Kill(pid, syscall.SIGTERM)
@@ -119,11 +105,38 @@ func directUnmount(mountpoint string) error {
 	_ = removePidfile(mountpoint)
 	_ = config.RemoveMount(mountpoint)
 
-	if len(errs) > 0 {
-		return fmt.Errorf("umount %s:\n  %s", mountpoint, strings.Join(errs, "\n  "))
+	if err != nil {
+		return fmt.Errorf("umount %s:\n  %w", mountpoint, err)
 	}
 	fmt.Printf("Unmounted %s\n", mountpoint)
 	return nil
+}
+
+var unmountCommand = tryUnmount
+
+// unmountKernel tries the stable unmount sequence for a macFUSE mountpoint:
+// diskutil first, umount as a portable fallback, and optionally diskutil's
+// force mode for FR-2 shutdown cleanup and FR-3 stale-mount recovery.
+func unmountKernel(mountpoint string, force bool) error {
+	var errs []string
+	if err := unmountCommand("diskutil", []string{"unmount", mountpoint}, 5); err == nil {
+		return nil
+	} else {
+		errs = append(errs, fmt.Sprintf("diskutil unmount failed: %v", err))
+	}
+	if err := unmountCommand("umount", []string{mountpoint}, 5); err == nil {
+		return nil
+	} else {
+		errs = append(errs, fmt.Sprintf("umount failed: %v", err))
+	}
+	if force {
+		if err := unmountCommand("diskutil", []string{"unmount", "force", mountpoint}, 5); err == nil {
+			return nil
+		} else {
+			errs = append(errs, fmt.Sprintf("diskutil unmount force failed: %v", err))
+		}
+	}
+	return fmt.Errorf("%s", strings.Join(errs, "\n  "))
 }
 
 // tryUnmount runs an unmount command with a timeout, returning nil on success.

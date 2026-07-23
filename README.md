@@ -193,18 +193,22 @@ $ ls -la "$MP"                       # hidden files still LIST (with real sizes)
 client that talks to it over `~/.janusfs/daemon.sock` and exits.
 
 - **Owns every mount.** Each mounted source runs inside the daemon as an OS-level FUSE mount. `janusfs mount <src>` hands the mount to the daemon and returns immediately — your terminal is free.
-- **Reboot-safe.** Every mount is recorded in `~/.janusfs/mounts.json`; on start
-  the daemon remounts all of them (except ones you explicitly `janusfs umount`).
+- **Restart-safe.** `janusfs mount` records every successful mount in
+  `~/.janusfs/mounts.json`. `janusfs umount` removes that entry. If the daemon
+  is stopped or crashes without an explicit unmount, the registry entry remains
+  and the next `janusfs daemon` start remounts it automatically.
 - **One consolidated server and port.** The daemon serves a combined index at
   `http://127.0.0.1:7381/` listing every live mount, and routes individual mount
   dashboards and API/V1 endpoints under subpaths (e.g., `http://127.0.0.1:7381/mounts/<uuid>/`). Change the port with `--ui-port`.
 - **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
-  dashboard.
+  dashboard. If macFUSE does not release a mount cleanly within the grace window,
+  JanusFS falls back to OS-level unmount commands, including `diskutil unmount
+  force`, to avoid stale mountpoints.
 
 ```bash
 janusfs daemon             # start it (add & to background, or use a terminal)
 janusfs mount ~/proj       # hand a mount to the daemon; returns at once
-janusfs mount ~/proj ~/pv  # or mount at a short path you choose (must be empty)
+janusfs mount ~/proj ~/pv  # or mount at a short path you choose (existing empty dirs are OK)
 janusfs update ~/proj      # re-apply edited .janusignore/.janusmask (no remount)
 janusfs path ~/proj        # print the mountpoint:  cd "$(janusfs path ~/proj)"
 janusfs umount ~/proj      # unmount by source path OR mountpoint
@@ -219,20 +223,25 @@ in the dashboard). Reads are always correct regardless: every masked read
 revalidates the file before serving.
 
 If no daemon is running, `janusfs mount` says so; `janusfs umount` falls back to
-a direct OS-level unmount so a stray mount can still be cleaned up.
+a direct OS-level unmount so a stray mount can still be cleaned up. Stopping the
+daemon does **not** remove `mounts.json` entries; only explicit `janusfs umount`
+means "do not resume this mount next time."
 
 ## Recovering a stale or broken mount
 
 If you see errors like "device not configured" or `ENXIO` when opening the
 mountpoint, the kernel may still have a stale macFUSE mount while the daemon
-has no live runtime for it. The CLI supports safe recovery steps:
+has no live runtime for it. On daemon startup, JanusFS now attempts to clear that
+stale mountpoint and retry the recorded mount. The CLI also supports safe manual
+recovery steps:
 
 - Try the daemon-aware unmount first:
 
   janusfs umount <mountpoint-or-src>
 
-  This asks the running daemon to unmount (and prunes stale registry
-  entries). If the daemon isn't running it falls back to an OS-level unmount.
+  This asks the running daemon to unmount and removes the mount from
+  `~/.janusfs/mounts.json`. If the daemon isn't running it falls back to an
+  OS-level unmount and still removes the registry entry.
 
 - If a direct kernel mount remains, use the system unmount tools as a fallback:
 

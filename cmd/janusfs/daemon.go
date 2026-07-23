@@ -33,6 +33,7 @@ type daemonRequest struct {
 	Mountpoint string `json:"mountpoint,omitempty"` // unmount: mountpoint or src; resume: exact recorded mountpoint
 	Label      string `json:"label,omitempty"`      // mount: friendly dashboard name (not a path)
 	NoHistory  bool   `json:"no_history,omitempty"`
+	Resume     bool   `json:"-"` // internal: daemon startup may recreate a recorded mountpoint
 }
 
 type daemonResponse struct {
@@ -73,6 +74,9 @@ func newDaemonCmd() *cobra.Command {
 
 // daemon owns every live mount in one process and multiplexes control
 // commands from `janusfs mount`/`umount` clients onto them.
+var validateMountConfig = func(cfg config.Config) error { return cfg.Validate() }
+var startMountFunc = startMount
+
 type daemon struct {
 	opsMu   sync.Mutex               // serializes mount/unmount so check-then-act is atomic
 	mu      sync.Mutex               // guards the mounts map for concurrent reads
@@ -298,6 +302,11 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	if cfg.Mountpoint == "" {
 		return daemonResponse{Error: hintNoMountRoot}
 	}
+	if req.Resume && req.Mountpoint != "" {
+		if err := os.MkdirAll(cfg.Mountpoint, 0o700); err != nil {
+			return daemonResponse{Error: fmt.Sprintf("creating recorded mountpoint %s: %v", cfg.Mountpoint, err)}
+		}
+	}
 	mpAbs, err := filepath.Abs(cfg.Mountpoint)
 	if err != nil {
 		return daemonResponse{Error: err.Error()}
@@ -311,11 +320,24 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 		return daemonResponse{Error: fmt.Sprintf("%s is already mounted", mpAbs)}
 	}
 
-	if err := cfg.Validate(); err != nil {
-		return daemonResponse{Error: d.mountValidationError(req.Src, mpAbs, err)}
+	if err := validateMountConfig(cfg); err != nil {
+		if errors.Is(err, syscall.ENXIO) {
+			if d.logger != nil {
+				d.logger.Warn("clearing stale or broken mount before retry", "mountpoint", mpAbs, "error", err)
+			}
+			_ = unmountKernel(mpAbs, true)
+			if mkErr := os.MkdirAll(mpAbs, 0o700); mkErr != nil {
+				return daemonResponse{Error: fmt.Sprintf("creating mountpoint %s after stale cleanup: %v", mpAbs, mkErr)}
+			}
+			if retryErr := validateMountConfig(cfg); retryErr != nil {
+				return daemonResponse{Error: d.mountValidationError(req.Src, mpAbs, retryErr)}
+			}
+		} else {
+			return daemonResponse{Error: d.mountValidationError(req.Src, mpAbs, err)}
+		}
 	}
 
-	rt, err := startMount(d.ctx, cfg, d.debug)
+	rt, err := startMountFunc(d.ctx, cfg, d.debug)
 	if err != nil {
 		return daemonResponse{Error: err.Error()}
 	}
@@ -417,7 +439,7 @@ func (d *daemon) resume() {
 		return
 	}
 	for _, rec := range records {
-		resp := d.doMount(daemonRequest{Cmd: "mount", Src: rec.Src, Mountpoint: rec.Mountpoint, Label: rec.Label})
+		resp := d.doMount(daemonRequest{Cmd: "mount", Src: rec.Src, Mountpoint: rec.Mountpoint, Label: rec.Label, Resume: true})
 		if resp.OK {
 			d.logger.Info("resumed mount", "src", rec.Src, "mountpoint", rec.Mountpoint)
 		} else {

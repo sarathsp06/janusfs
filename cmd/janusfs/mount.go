@@ -16,7 +16,11 @@ import (
 
 // shutdownGrace is the FR-2 "≤ 5 s, then force" drain window for a clean
 // unmount.
-const shutdownGrace = 5 * time.Second
+var shutdownGrace = 5 * time.Second
+
+// forceUnmountSettle is the short wait after the FR-2 force-unmount fallback
+// before shutdown gives up on the serve loop.
+var forceUnmountSettle = 2 * time.Second
 
 func newMountCmd() *cobra.Command {
 	var name string

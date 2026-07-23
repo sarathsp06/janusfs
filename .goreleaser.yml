@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 #
-# JanusFS release configuration. Produces one universal (arm64+amd64) darwin
-# binary per release, a tarball with the binary + docs + license, checksums,
-# a CycloneDX SBOM, a source archive, and Conventional-Commits-grouped
-# release notes. Publishing is manual: releases land as drafts (see the
-# `release:` section) so a human reviews the generated notes.
+# JanusFS release configuration. Produces macOS and Linux binaries per release,
+# including one universal (arm64+amd64) darwin archive, tarballs with the binary
+# + docs + license, checksums, a CycloneDX SBOM, a source archive, and
+# Conventional-Commits-grouped release notes. Tag releases are published to the
+# GitHub Releases page by the release workflow.
 
 version: 2
 
@@ -120,10 +120,9 @@ changelog:
       - Merge branch
 
 release:
-  # Draft first: nothing in the JanusFS release process should auto-publish
-  # without a human glancing at the generated notes (consistent with SPEC's
-  # general "no silent/automatic irreversible actions" posture).
-  draft: true
+  # Publish tag builds directly so pushed v* tags create downloadable binaries
+  # on the GitHub Releases page.
+  draft: false
   prerelease: auto
   name_template: "JanusFS {{ .Version }}"
   header: |
@@ -136,9 +135,13 @@ release:
     ## Install
 
     ```bash
-    brew install --cask fuse-t             # macOS FUSE, no kext
-    # then download the darwin_all tarball from the assets below,
-    # or:
+    # macOS:
+    brew install --cask macfuse
+
+    # Ubuntu/Debian:
+    sudo apt-get install -y fuse3 libfuse3-dev
+
+    # Then download the matching archive from the assets below, or:
     go install github.com/sarathsp06/janusfs/cmd/janusfs@{{ .Tag }}
     ```
 
