@@ -202,9 +202,9 @@ client that talks to it over `~/.janusfs/daemon.sock` and exits.
   `http://127.0.0.1:7381/` listing every live mount, and routes individual mount
   dashboards and API/V1 endpoints under subpaths (e.g., `http://127.0.0.1:7381/mounts/<uuid>/`). Change the port with `--ui-port`.
 - **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
-  dashboard. If macFUSE does not release a mount cleanly within the grace window,
-  JanusFS falls back to OS-level unmount commands, including `diskutil unmount
-  force`, to avoid stale mountpoints.
+  dashboard. If FUSE does not release a mount cleanly within the grace window,
+  JanusFS falls back to OS-level unmount commands (`diskutil`/`umount` on macOS,
+  `fusermount3`/`fusermount`/`umount` on Linux) to avoid stale mountpoints.
 
 ```bash
 janusfs daemon             # start it (add & to background, or use a terminal)
@@ -230,45 +230,59 @@ means "do not resume this mount next time."
 
 ## Recovering a stale or broken mount
 
-If you see errors like "device not configured" or `ENXIO` when opening the
-mountpoint, the kernel may still have a stale macFUSE mount while the daemon
-has no live runtime for it. On daemon startup, JanusFS now attempts to clear that
-stale mountpoint and retry the recorded mount. The CLI also supports safe manual
-recovery steps:
+If you see errors like `device not configured`, `ENXIO`, or on Linux
+`Transport endpoint is not connected`, the kernel may still have a stale FUSE
+mount while the daemon has no live runtime for it. On daemon startup, JanusFS
+attempts to clear stale mountpoints and retry recorded mounts. The CLI also
+supports safe manual recovery.
 
-- Try the daemon-aware unmount first:
+### 1. Try JanusFS first
 
-  janusfs umount <mountpoint-or-src>
+```bash
+janusfs umount <mountpoint-or-src>
+```
 
-  This asks the running daemon to unmount and removes the mount from
-  `~/.janusfs/mounts.json`. If the daemon isn't running it falls back to an
-  OS-level unmount and still removes the registry entry.
+This asks the running daemon to unmount and removes the mount from
+`~/.janusfs/mounts.json`. If the daemon is not running, JanusFS falls back to an
+OS-level unmount and still removes the registry entry.
 
-- If a direct kernel mount remains, use the system unmount tools as a fallback:
+### 2. If the kernel mount remains, use OS tools
 
-  # macOS
-  diskutil unmount <mountpoint>
-  diskutil unmount force <mountpoint>
+macOS:
 
-  # Linux / FUSE
-  fusermount3 -u <mountpoint> || fusermount -u <mountpoint> || umount <mountpoint>
-  # if the mount is stale, e.g. "Transport endpoint is not connected":
-  fusermount3 -uz <mountpoint> || fusermount -uz <mountpoint> || umount -l <mountpoint>
+```bash
+diskutil unmount <mountpoint>
+diskutil unmount force <mountpoint>
+# fallback if diskutil is unavailable:
+umount <mountpoint>
+```
 
-- To inspect mounts and pidfiles, use:
+Linux / FUSE:
 
-  janusfs paths
-  janusfs doctor
+```bash
+fusermount3 -u <mountpoint> || fusermount -u <mountpoint> || umount <mountpoint>
+```
 
-  The `doctor` output includes any stale pidfiles and other runtime health
-  indicators.
+If Linux reports `Transport endpoint is not connected`, use lazy detach:
 
-- If you prefer a manual cleanup, check for a backing registry entry:
+```bash
+fusermount3 -uz <mountpoint> || fusermount -uz <mountpoint> || umount -l <mountpoint>
+```
 
-  cat ~/.janusfs/mounts.json
+After the unmount succeeds, the mountpoint directory can be removed normally if
+you no longer need it.
 
-  and remove a stale entry with `janusfs umount <mountpoint>` (daemon will
-  prune it) or by editing the registry with care.
+### 3. Inspect JanusFS state
+
+```bash
+janusfs paths
+janusfs doctor
+cat ~/.janusfs/mounts.json
+```
+
+`doctor` reports stale pidfiles and runtime health. If a stale registry entry
+remains, prefer `janusfs umount <mountpoint>` so JanusFS prunes it; edit
+`~/.janusfs/mounts.json` by hand only as a last resort.
 
 
 ## First-run checklist
