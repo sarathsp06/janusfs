@@ -90,30 +90,29 @@ snapshot:
 changelog:
   # Conventional Commits grouping, matching AGENTS.md's existing
   # "Conventional Commits (feat:, fix:, ...) for changelog hygiene" note.
+  # Regexps must be RE2-compatible: GoReleaser uses Go regexp, not PCRE.
   sort: asc
   groups:
-    - title: Features
-      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+    - title: Added
+      regexp: '^.*?feat(\([[:alnum:]_-]+\))??!?:.+$'
       order: 0
-    - title: Fixes
-      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+    - title: Fixed
+      regexp: '^.*?fix(\([[:alnum:]_-]+\))??!?:.+$'
       order: 1
-    - title: Performance
-      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+    - title: Changed
+      regexp: '^.*?(perf|refactor|style|chore)(\([[:alnum:]_-]+\))??!?:.+$'
       order: 2
-    - title: Security
-      regexp: '^.*?sec(\([[:word:]]+\))??!?:.+$'
+    - title: Documentation
+      regexp: '^.*?docs(\([[:alnum:]_-]+\))??!?:.+$'
       order: 3
-    - title: Others
+    - title: Other
       order: 999
   filters:
     exclude:
-      - "^docs:"
       - "^test:"
-      - "^chore:"
       - "^ci:"
-      - "^style:"
-      - "^refactor(?!:.*breaking)"
+      - "^build:"
+      - "^chore\\(release\\):"
       - "merge conflict"
       - Merge pull request
       - Merge remote-tracking branch
