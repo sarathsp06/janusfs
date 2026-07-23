@@ -264,6 +264,7 @@ func loadMaskLevel(dir string) (MaskLevel, bool, error) {
 // populated) if the glob or any referenced pattern fails to compile, so
 // callers can still report which glob is affected.
 func parseMaskLine(lineNo int, line string) (MaskEntry, error) {
+	line = stripMaskInlineComment(line)
 	globPart, patternsPart, hasColon := splitUnescapedColon(line)
 	glob := strings.TrimSpace(globPart)
 	glob = strings.ReplaceAll(glob, `\:`, ":")
@@ -316,6 +317,23 @@ func splitUnescapedColon(line string) (before, after string, found bool) {
 		}
 	}
 	return line, "", false
+}
+
+func stripMaskInlineComment(line string) string {
+	inSlash := false
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '/':
+			if i == 0 || line[i-1] != '\\' {
+				inSlash = !inSlash
+			}
+		case '#':
+			if !inSlash && (i == 0 || line[i-1] != '\\') {
+				return strings.TrimSpace(line[:i])
+			}
+		}
+	}
+	return line
 }
 
 func splitPatternRefs(s string) []string {

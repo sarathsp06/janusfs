@@ -301,6 +301,16 @@ func TestParseMaskLineMultiplePatterns(t *testing.T) {
 	}
 }
 
+func TestParseMaskLineStripsInlineComment(t *testing.T) {
+	entry, err := parseMaskLine(1, `*.env : env-value # mask env files`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entry.PatternRefs) != 1 || entry.PatternRefs[0] != "env-value" {
+		t.Fatalf("expected inline comment stripped from pattern ref, got %v", entry.PatternRefs)
+	}
+}
+
 func TestParseMaskLineCustomRegexWithComma(t *testing.T) {
 	entry, err := parseMaskLine(1, `f.txt : /a,b/`)
 	if err != nil {
