@@ -206,11 +206,14 @@ func TestDoMount_StaleMountpointCleanupRetriesValidation(t *testing.T) {
 	oldValidate := validateMountConfig
 	oldStart := startMountFunc
 	oldCommand := unmountCommand
+	oldGOOS := runtimeGOOS
 	t.Cleanup(func() {
 		validateMountConfig = oldValidate
 		startMountFunc = oldStart
 		unmountCommand = oldCommand
+		runtimeGOOS = oldGOOS
 	})
+	runtimeGOOS = "darwin"
 
 	var validateCalls int
 	validateMountConfig = func(config.Config) error {
