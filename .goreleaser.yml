@@ -127,7 +127,7 @@ release:
   header: |
     # JanusFS {{ .Version }}
 
-    A sanitized filesystem view for AI agents. See [`README.md`](https://github.com/sarathsp06/janusfs/blob/main/README.md) for the pitch and [`SPEC.md`](https://github.com/sarathsp06/janusfs/blob/main/SPEC.md) for the engineering contract.
+    A policy-enforcing filesystem for AI agents. See [`README.md`](https://github.com/sarathsp06/janusfs/blob/main/README.md) for the pitch and [`SPEC.md`](https://github.com/sarathsp06/janusfs/blob/main/SPEC.md) for the engineering contract.
   footer: |
     ---
 
