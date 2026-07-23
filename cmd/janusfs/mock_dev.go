@@ -37,10 +37,6 @@ func startMockMount(parent context.Context, src, mountpoint, label string) (*mou
 
 	prov := provider.NewRamCache(256<<20, 64<<20, 512<<20)
 
-	eventBus := obs.NewEventBus(4096)
-	metrics := &obs.JanusMetrics{}
-	topN := obs.NewTopN(1000)
-
 	tokenBytes := make([]byte, 16)
 	_, _ = rand.Read(tokenBytes)
 	bearerToken := hex.EncodeToString(tokenBytes)
@@ -53,32 +49,25 @@ func startMockMount(parent context.Context, src, mountpoint, label string) (*mou
 		Label:      label,
 		eng:        eng,
 		prov:       prov,
-		metrics:    metrics,
-		eventBus:   eventBus,
 		done:       make(chan struct{}),
 	}
 
-	metrics.Generation.Store(eng.Generation())
+	recorder := obs.NewRecorder(nil)
+	recorder.SetGeneration(eng.Generation())
+	rt.recorder = recorder
 
-	// Populate some mock ops/bytes/events/topN to look awesome on the dashboard
-	metrics.RecordOp(obs.OpRead, obs.Allowed)
-	metrics.RecordOp(obs.OpRead, obs.Allowed)
-	metrics.RecordOp(obs.OpRead, obs.Masked)
-	metrics.RecordOp(obs.OpOpen, obs.Hidden)
-	metrics.RecordBytes(obs.Allowed, 4500)
-	metrics.RecordBytes(obs.Masked, 1200)
+	recorder.Emit(obs.Event{Op: obs.OpRead, Path: "README.md", Decision: obs.Allowed, Bytes: 3300, LatencyUs: 25, Cache: obs.CacheNA})
+	recorder.Emit(obs.Event{Op: obs.OpRead, Path: "app.env", Decision: obs.Masked, Bytes: 1200, LatencyUs: 80, Cache: obs.CacheHit})
+	recorder.Emit(obs.Event{Op: obs.OpOpen, Path: "db.secret", Decision: obs.Hidden, LatencyUs: 10, Cache: obs.CacheNA})
 
-	topN.Record("app.env", 1200)
-	topN.Record("README.md", 3300)
-
-	apiSrv := api.New(ui.FS, bearerToken, metrics, topN, eventBus, nil)
+	apiSrv := api.New(ui.FS, bearerToken, recorder.Registry(), nil)
 	apiSrv.SetMountInfo(src, mountpoint)
 	apiSrv.SetVFSMeta(src, func() (int, int64, uint64, uint64, uint64) {
 		return 1, 1024, 12, 3, 0
 	}, func(relPath string, isDir bool) (string, []string, string) {
 		res := eng.Resolve(relPath, isDir)
 		return res.Decision.String(), res.PatternNames, res.RuleRef
-	}, func() bool { return true })
+	}, func() bool { return true }, eng.Generation)
 	apiSrv.SetReload(rt.reload)
 	rt.apiSrv = apiSrv
 

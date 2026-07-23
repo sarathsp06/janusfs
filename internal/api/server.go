@@ -1,8 +1,7 @@
-// Package api implements the HTTP server and REST/SSE handlers described in
-// SPEC.md §11: REST endpoints for summary/coverage/top/latency and a
-// Server-Sent Events endpoint for the live event feed. It is a thin adapter —
-// no business logic, no redaction, no SQL — delegating to internal/obs,
-// internal/engine, and internal/provider (SPEC §5's dependency rule).
+// Package api implements the HTTP server and REST handlers described in
+// SPEC.md §11. It is a thin adapter — no business logic, no redaction, no
+// SQL — delegating to internal/engine, internal/provider, and history-backed
+// query methods (SPEC §5's dependency rule).
 //
 // Per SPEC §11 the server binds 127.0.0.1 only, requires a bearer token on
 // all /api/* endpoints, and sets Cache-Control: no-store on all API responses.
@@ -23,7 +22,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sarathsp06/janusfs/internal/history"
-	"github.com/sarathsp06/janusfs/internal/obs"
 	"github.com/sarathsp06/janusfs/internal/vfsmeta"
 )
 
@@ -31,10 +29,7 @@ import (
 type Server struct {
 	mux           *http.ServeMux
 	server        *http.Server
-	metrics       *obs.JanusMetrics
 	promReg       *prometheus.Registry
-	topN          *obs.TopN
-	bus           *obs.EventBus
 	history       *history.Store
 	token         string
 	ui            fs.FS
@@ -43,22 +38,21 @@ type Server struct {
 	providerStats func() (int, int64, uint64, uint64, uint64)
 	resolvePath   func(relPath string, isDir bool) (string, []string, string) // decision, patternNames, ruleRef ("<file>:<line>")
 	watcherAlive  func() bool
+	generation    func() uint64
 	reload        func() error // recompile the rule set on demand (config save / reload button)
 	startTime     time.Time
 }
 
 // New constructs an API server. uiFS is the embedded dashboard filesystem
 // (internal/ui.FS). token is the per-mount bearer token minted at startup.
-// bus may be nil (no live feed). hist may be nil (no history persistence).
-func New(uiFS fs.FS, token string, metrics *obs.JanusMetrics, topN *obs.TopN, bus *obs.EventBus, hist *history.Store) *Server {
-	reg := prometheus.NewRegistry()
-	reg.MustRegister(obs.NewCollector(metrics))
+// hist may be nil (no history persistence).
+func New(uiFS fs.FS, token string, reg *prometheus.Registry, hist *history.Store) *Server {
+	if reg == nil {
+		reg = prometheus.NewRegistry()
+	}
 	s := &Server{
 		mux:     http.NewServeMux(),
-		metrics: metrics,
 		promReg: reg,
-		topN:    topN,
-		bus:     bus,
 		history: hist,
 		token:   token,
 		ui:      uiFS,
@@ -69,11 +63,12 @@ func New(uiFS fs.FS, token string, metrics *obs.JanusMetrics, topN *obs.TopN, bu
 
 // SetVFSMeta configures the root path, provider stats, path resolver, and
 // watcher status for vfsmeta and coverage endpoints. Call before Start.
-func (s *Server) SetVFSMeta(root string, providerStats func() (int, int64, uint64, uint64, uint64), resolvePath func(relPath string, isDir bool) (string, []string, string), watcherAlive func() bool) {
+func (s *Server) SetVFSMeta(root string, providerStats func() (int, int64, uint64, uint64, uint64), resolvePath func(relPath string, isDir bool) (string, []string, string), watcherAlive func() bool, generation func() uint64) {
 	s.root = root
 	s.providerStats = providerStats
 	s.resolvePath = resolvePath
 	s.watcherAlive = watcherAlive
+	s.generation = generation
 	if s.startTime.IsZero() {
 		s.startTime = time.Now()
 	}
@@ -99,8 +94,6 @@ func (s *Server) register() {
 	s.mux.HandleFunc("/api/v1/summary", s.withToken(s.handleSummary))
 	s.mux.HandleFunc("/api/v1/coverage", s.withToken(s.handleCoverage))
 	s.mux.HandleFunc("/api/v1/reveal", s.withToken(s.handleReveal))
-	s.mux.HandleFunc("/api/v1/top", s.withToken(s.handleTop))
-	s.mux.HandleFunc("/api/v1/latency", s.withToken(s.handleLatency))
 	s.mux.HandleFunc("/api/v1/config", s.withToken(s.handleConfig))
 	s.mux.HandleFunc("/api/v1/reload", s.withToken(s.handleReload))
 	s.mux.Handle("/metrics", promhttp.HandlerFor(s.promReg, promhttp.HandlerOpts{}))
@@ -193,11 +186,6 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 	if s.watcherAlive != nil {
 		watcherAlive = s.watcherAlive()
 	}
-	snap := s.metrics.Snapshot()
-	opCounts := make(map[string]uint64)
-	for k, v := range snap.Ops {
-		opCounts[k] = v
-	}
 	start := s.startTime
 	if start.IsZero() {
 		start = time.Now()
@@ -209,7 +197,11 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 	if s.providerStats != nil {
 		entries, bytes, hits, misses, rebuilds = s.providerStats()
 	}
-	b := vfsmeta.StatusJSON(start, snap.Generation, snap.ConfigReloads, hits, misses, rebuilds, watcherAlive, entries, bytes, opCounts)
+	var gen uint64
+	if s.generation != nil {
+		gen = s.generation()
+	}
+	b := vfsmeta.StatusJSON(start, gen, watcherAlive, entries, bytes, hits, misses, rebuilds)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
@@ -253,22 +245,32 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
-	snap := s.metrics.Snapshot()
-	// Provider tracks cache hit/miss/rebuild; the obs metrics don't — merge
-	// in provider stats when available.
+	var entries int
+	var bytes int64
+	var hits, misses, rebuilds uint64
 	if s.providerStats != nil {
-		_, _, hits, misses, rebuilds := s.providerStats()
-		snap.CacheHits = hits
-		snap.CacheMisses = misses
-		snap.CacheRebuilds = rebuilds
+		entries, bytes, hits, misses, rebuilds = s.providerStats()
+	}
+	var gen uint64
+	if s.generation != nil {
+		gen = s.generation()
 	}
 	writeJSON(w, map[string]any{
-		"snapshot": snap,
 		"mount": map[string]any{
 			"source":     s.root,
 			"mountpoint": s.mountpoint,
 		},
-		"uptime": time.Now().Unix(),
+		"status": map[string]any{
+			"generation": gen,
+			"uptime":     int64(time.Since(s.startTime).Seconds()),
+			"cache": map[string]any{
+				"entries":  entries,
+				"bytes":    bytes,
+				"hits":     hits,
+				"misses":   misses,
+				"rebuilds": rebuilds,
+			},
+		},
 	})
 }
 
@@ -356,26 +358,6 @@ func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "use GET or POST", http.StatusMethodNotAllowed)
 	}
-}
-
-func (s *Server) handleTop(w http.ResponseWriter, r *http.Request) {
-	n := 50
-	if s.topN == nil {
-		writeJSON(w, map[string]any{"byReads": []obs.TopEntry{}, "byBytes": []obs.TopEntry{}})
-		return
-	}
-	writeJSON(w, map[string]any{
-		"byReads": s.topN.TopReads(n),
-		"byBytes": s.topN.TopBytes(n),
-	})
-}
-
-func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request) {
-	snaps := s.metrics.LatencySnapshots()
-	if snaps == nil {
-		snaps = []obs.LatencySnapshot{}
-	}
-	writeJSON(w, map[string]any{"ops": snaps})
 }
 
 // handleHistory returns aggregated history rollups (FR-46).

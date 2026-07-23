@@ -37,11 +37,10 @@ type mountRuntime struct {
 
 	eng      *engine.Engine
 	prov     *provider.RamCache
-	metrics  *obs.JanusMetrics
+	recorder *obs.Recorder
 	adapter  *mount.Adapter
 	apiSrv   *api.Server
 	hist     *history.Store
-	eventBus *obs.EventBus
 	cancel   context.CancelFunc
 	done     chan struct{} // closed when the FUSE serve loop exits
 	mountErr error
@@ -59,8 +58,9 @@ func (rt *mountRuntime) reload() error {
 	if rt.prov != nil {
 		rt.prov.InvalidateAll()
 	}
-	if rt.metrics != nil {
-		rt.metrics.Generation.Store(rt.eng.Generation())
+	if rt.recorder != nil {
+		rt.recorder.SetGeneration(rt.eng.Generation())
+		rt.recorder.IncConfigReloads()
 	}
 	return err
 }
@@ -85,13 +85,8 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	}
 	prov := provider.NewRamCache(cfg.CacheMaxBytes, cfg.CacheMaxFile, cfg.RedactBufferMax)
 
-	eventBus := obs.NewEventBus(4096)
-	metrics := &obs.JanusMetrics{}
-	topN := obs.NewTopN(1000)
-
 	tokenBytes := make([]byte, 16)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		eventBus.Close()
 		return nil, fmt.Errorf("generating bearer token: %w", err)
 	}
 	bearerToken := hex.EncodeToString(tokenBytes)
@@ -105,14 +100,10 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 		Token:      bearerToken,
 		eng:        eng,
 		prov:       prov,
-		metrics:    metrics,
-		eventBus:   eventBus,
 		cancel:     cancel,
 		done:       make(chan struct{}),
 		logger:     logger,
 	}
-
-	metrics.Generation.Store(eng.Generation())
 
 	if !cfg.NoHistory {
 		hd := historyDBPath(cfg.Src)
@@ -125,7 +116,11 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 		}
 	}
 
-	apiSrv := api.New(ui.FS, bearerToken, metrics, topN, eventBus, rt.hist)
+	recorder := obs.NewRecorder(rt.hist)
+	recorder.SetGeneration(eng.Generation())
+	rt.recorder = recorder
+
+	apiSrv := api.New(ui.FS, bearerToken, recorder.Registry(), rt.hist)
 	apiSrv.SetMountInfo(cfg.Src, cfg.Mountpoint)
 	apiSrv.SetVFSMeta(cfg.Src, func() (int, int64, uint64, uint64, uint64) {
 		ps := prov.Stats()
@@ -133,11 +128,9 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	}, func(relPath string, isDir bool) (string, []string, string) {
 		res := eng.Resolve(relPath, isDir)
 		return res.Decision.String(), res.PatternNames, res.RuleRef
-	}, func() bool { return true }) // no watcher; rules reload on demand
+	}, func() bool { return true }, eng.Generation) // no watcher; rules reload on demand
 	apiSrv.SetReload(rt.reload)
 	rt.apiSrv = apiSrv
-
-	go drainEvents(eventBus, metrics, topN, rt.hist)
 
 	ready := make(chan error, 1)
 	rt.adapter = &mount.Adapter{
@@ -149,7 +142,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 			logger.Info("successfully mounted", "src", cfg.Src, "mountpoint", cfg.Mountpoint)
 			ready <- nil
 		},
-		Observe: makeObserver(eventBus),
+		Observe: makeObserver(recorder),
 	}
 
 	go func() {
@@ -201,46 +194,17 @@ func (rt *mountRuntime) stop() {
 		}
 	}
 
-	if rt.eventBus != nil {
-		rt.eventBus.Close()
+	if rt.recorder != nil {
+		rt.recorder.Close()
 	}
 	if rt.hist != nil {
 		rt.hist.Close()
 	}
 }
 
-// drainEvents fans every FUSE event into the obs components and history store
-// so FUSE handlers never block on observability (FR-22). Returns when the bus
-// is closed.
-func drainEvents(bus *obs.EventBus, metrics *obs.JanusMetrics, topN *obs.TopN, hist *history.Store) {
-	for e := range bus.Events() {
-		metrics.RecordOp(e.Op, e.Decision)
-		if e.Bytes > 0 {
-			metrics.RecordBytes(e.Decision, e.Bytes)
-		}
-		if e.LatencyUs > 0 {
-			metrics.RecordLatency(e.Op, e.LatencyUs)
-		}
-		switch e.Cache {
-		case obs.CacheHit:
-			metrics.CacheHit.Add(1)
-		case obs.CacheMiss:
-			metrics.CacheMiss.Add(1)
-		case obs.CacheRebuild:
-			metrics.CacheRebuild.Add(1)
-		}
-		if e.Decision == obs.Masked || e.Decision == obs.Allowed {
-			topN.Record(e.Path, e.Bytes)
-		}
-		if hist != nil {
-			hist.Record(e)
-		}
-	}
-}
-
 // makeObserver adapts mount.OpEvent (the adapter's wire vocabulary) into
-// obs.Event and emits it on the bus.
-func makeObserver(bus *obs.EventBus) func(mount.OpEvent) {
+// obs.Event and emits it through the recorder.
+func makeObserver(recorder *obs.Recorder) func(mount.OpEvent) {
 	return func(evt mount.OpEvent) {
 		var d obs.Decision
 		switch evt.Decision {
@@ -264,7 +228,7 @@ func makeObserver(bus *obs.EventBus) func(mount.OpEvent) {
 		default:
 			c = obs.CacheNA
 		}
-		bus.Emit(obs.Event{
+		recorder.Emit(obs.Event{
 			TS:        time.Now(),
 			Op:        obs.Op(evt.Op),
 			Path:      evt.Path,

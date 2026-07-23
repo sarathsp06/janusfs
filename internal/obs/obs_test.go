@@ -1,107 +1,140 @@
 package obs
 
 import (
+	"strings"
+	"sync"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	io_prometheus_client "github.com/prometheus/client_model/go"
 )
 
-func TestEventBusEmitAndDrop(t *testing.T) {
-	b := NewEventBus(4)
-	b.Emit(Event{Op: OpRead, Path: "test"})
-	if b.Dropped() != 0 {
-		t.Errorf("expected 0 dropped, got %d", b.Dropped())
+type blockingSink struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingSink() *blockingSink {
+	return &blockingSink{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (s *blockingSink) Record(Event) {
+	select {
+	case <-s.entered:
+	default:
+		close(s.entered)
 	}
-	// Fill the channel (capacity 4) with 5 more events — 2 should drop.
-	for i := 0; i < 5; i++ {
-		b.Emit(Event{})
+	<-s.release
+}
+
+func TestRecorderEmitsPrometheusMetrics(t *testing.T) {
+	r := newRecorder(nil, 0)
+	defer r.Close()
+
+	r.SetGeneration(7)
+	r.IncConfigReloads()
+	r.Emit(Event{Op: OpRead, Decision: Allowed, Bytes: 128, LatencyUs: 42, Cache: CacheHit})
+	r.Emit(Event{Op: OpOpen, Decision: Hidden, LatencyUs: 3, Cache: CacheNA})
+
+	assertMetric(t, r.Registry(), "janusfs_ops_total", map[string]string{"op": "read", "decision": "ALLOWED"}, 1)
+	assertMetric(t, r.Registry(), "janusfs_ops_total", map[string]string{"op": "open", "decision": "HIDDEN"}, 1)
+	assertMetric(t, r.Registry(), "janusfs_bytes_served_total", map[string]string{"decision": "ALLOWED"}, 128)
+	assertMetric(t, r.Registry(), "janusfs_cache_results_total", map[string]string{"result": "hit"}, 1)
+	assertMetric(t, r.Registry(), "janusfs_generation", nil, 7)
+	assertMetric(t, r.Registry(), "janusfs_config_reloads_total", nil, 1)
+}
+
+func TestRecorderHistoryFanoutDropsInsteadOfBlocking(t *testing.T) {
+	sink := newBlockingSink()
+	r := newRecorder(sink, 1)
+	defer r.Close()
+
+	r.Emit(Event{Op: OpRead, Decision: Allowed})
+	<-sink.entered
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.Emit(Event{Op: OpRead, Decision: Allowed})
+		}()
 	}
-	if b.Dropped() != 2 {
-		t.Errorf("expected 2 dropped, got %d", b.Dropped())
+	wg.Wait()
+
+	assertMetric(t, r.Registry(), "janusfs_events_dropped_total", nil, 1)
+	close(sink.release)
+}
+
+func TestRecorderDoesNotUsePathLabels(t *testing.T) {
+	r := newRecorder(nil, 0)
+	defer r.Close()
+
+	r.Emit(Event{Op: OpRead, Decision: Allowed, Path: "/secret/path.env", Bytes: 1})
+
+	families, err := r.Registry().Gather()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Drain the 4 buffered events.
-	for i := 0; i < 4; i++ {
-		<-b.Events()
+	for _, mf := range families {
+		for _, m := range mf.Metric {
+			for _, lp := range m.Label {
+				if lp.GetName() == "path" || strings.Contains(lp.GetValue(), "secret/path.env") {
+					t.Fatalf("metric %s leaked path label %q=%q", mf.GetName(), lp.GetName(), lp.GetValue())
+				}
+			}
+		}
 	}
 }
 
-func TestJanusMetricsRecordOps(t *testing.T) {
-	m := &JanusMetrics{}
-	m.RecordOp(OpRead, Allowed)
-	m.RecordOp(OpRead, Allowed)
-	m.RecordOp(OpRead, Masked)
-	m.RecordOp(OpOpen, Hidden)
-
-	s := m.Snapshot()
-	if s.Ops["read:ALLOWED"] != 2 {
-		t.Errorf("expected 2 ALLOWED reads, got %d", s.Ops["read:ALLOWED"])
-	}
-	if s.Ops["read:MASKED"] != 1 {
-		t.Errorf("expected 1 MASKED read, got %d", s.Ops["read:MASKED"])
-	}
-	if s.Ops["open:HIDDEN"] != 1 {
-		t.Errorf("expected 1 HIDDEN open, got %d", s.Ops["open:HIDDEN"])
+func assertMetric(t *testing.T, reg *prometheus.Registry, name string, labels map[string]string, want float64) {
+	t.Helper()
+	got := metricValue(t, reg, name, labels)
+	if got != want {
+		t.Fatalf("%s%v = %v, want %v", name, labels, got, want)
 	}
 }
 
-func TestJanusMetricsRecordBytes(t *testing.T) {
-	m := &JanusMetrics{}
-	m.RecordBytes(Allowed, 100)
-	m.RecordBytes(Masked, 50)
-	m.RecordBytes(Allowed, 200)
-
-	s := m.Snapshot()
-	if s.Bytes["ALLOWED"] != 300 {
-		t.Errorf("expected 300 ALLOWED bytes, got %d", s.Bytes["ALLOWED"])
+func metricValue(t *testing.T, reg *prometheus.Registry, name string, labels map[string]string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if s.Bytes["MASKED"] != 50 {
-		t.Errorf("expected 50 MASKED bytes, got %d", s.Bytes["MASKED"])
+	for _, mf := range families {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.Metric {
+			if !labelsMatch(m, labels) {
+				continue
+			}
+			if m.Counter != nil {
+				return m.Counter.GetValue()
+			}
+			if m.Gauge != nil {
+				return m.Gauge.GetValue()
+			}
+		}
 	}
+	return 0
 }
 
-func TestTopN(t *testing.T) {
-	tn := NewTopN(100)
-	tn.Record("/a.txt", 100)
-	tn.Record("/a.txt", 50)
-	tn.Record("/b.txt", 200)
-
-	top := tn.TopReads(10)
-	if len(top) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(top))
+func labelsMatch(m *io_prometheus_client.Metric, want map[string]string) bool {
+	if len(want) == 0 {
+		return true
 	}
-	if top[0].Path != "/a.txt" || top[0].Reads != 2 {
-		t.Errorf("expected /a.txt with 2 reads, got %s %d", top[0].Path, top[0].Reads)
+	for k, v := range want {
+		found := false
+		for _, lp := range m.Label {
+			if lp.GetName() == k && lp.GetValue() == v {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
 	}
-	if top[1].Path != "/b.txt" || top[1].Reads != 1 {
-		t.Errorf("expected /b.txt with 1 read, got %s %d", top[1].Path, top[1].Reads)
-	}
-}
-
-func TestTopBytes(t *testing.T) {
-	tn := NewTopN(100)
-	tn.Record("/big.txt", 1000)
-	tn.Record("/small.txt", 100)
-
-	top := tn.TopBytes(10)
-	if len(top) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(top))
-	}
-	if top[0].Path != "/big.txt" || top[0].Bytes != 1000 {
-		t.Errorf("expected /big.txt with 1000 bytes, got %s %d", top[0].Path, top[0].Bytes)
-	}
-}
-
-func TestLatencyHistogram(t *testing.T) {
-	m := &JanusMetrics{}
-	for i := 0; i < 100; i++ {
-		m.RecordLatency(OpRead, int64(i))
-	}
-	snaps := m.LatencySnapshots()
-	if len(snaps) != 1 {
-		t.Fatalf("expected 1 latency snapshot, got %d", len(snaps))
-	}
-	if snaps[0].Op != "read" {
-		t.Errorf("expected 'read' op, got %q", snaps[0].Op)
-	}
-	if snaps[0].Hits != 100 {
-		t.Errorf("expected 100 hits, got %d", snaps[0].Hits)
-	}
+	return true
 }

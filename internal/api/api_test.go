@@ -9,26 +9,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sarathsp06/janusfs/internal/obs"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sarathsp06/janusfs/internal/ui"
 )
 
-func testMetrics() *obs.JanusMetrics {
-	m := &obs.JanusMetrics{}
-	m.RecordOp(obs.OpRead, obs.Allowed)
-	m.RecordOp(obs.OpRead, obs.Masked)
-	m.RecordOp(obs.OpOpen, obs.Hidden)
-	m.RecordBytes(obs.Allowed, 1000)
-	return m
+func testRegistry() *prometheus.Registry {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(prometheus.NewGauge(prometheus.GaugeOpts{Name: "janusfs_test_metric", Help: "test metric"}))
+	return reg
 }
 
 func testServer() *Server {
-	m := testMetrics()
-	return New(nil, "test-token", m, nil, nil, nil)
+	return New(ui.FS, "test-token", testRegistry(), nil)
 }
 
 func TestSummaryEndpoint(t *testing.T) {
 	s := testServer()
+	s.SetVFSMeta("/src/project", func() (int, int64, uint64, uint64, uint64) {
+		return 2, 4096, 3, 4, 5
+	}, nil, nil, func() uint64 { return 9 })
+
 	req := httptest.NewRequest("GET", "/api/v1/summary", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
@@ -37,17 +37,26 @@ func TestSummaryEndpoint(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var resp map[string]any
+	var resp struct {
+		Status struct {
+			Generation uint64 `json:"generation"`
+			Cache      struct {
+				Entries  int    `json:"entries"`
+				Bytes    int64  `json:"bytes"`
+				Hits     uint64 `json:"hits"`
+				Misses   uint64 `json:"misses"`
+				Rebuilds uint64 `json:"rebuilds"`
+			} `json:"cache"`
+		} `json:"status"`
+	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	snap, ok := resp["snapshot"].(map[string]any)
-	if !ok {
-		t.Fatal("expected snapshot in response")
+	if resp.Status.Generation != 9 {
+		t.Fatalf("generation = %d, want 9", resp.Status.Generation)
 	}
-	ops := snap["ops"].(map[string]any)
-	if ops["read:ALLOWED"].(float64) != 1 {
-		t.Errorf("expected 1 read:ALLOWED, got %v", ops["read:ALLOWED"])
+	if resp.Status.Cache.Entries != 2 || resp.Status.Cache.Bytes != 4096 || resp.Status.Cache.Hits != 3 || resp.Status.Cache.Misses != 4 || resp.Status.Cache.Rebuilds != 5 {
+		t.Fatalf("cache status = %+v", resp.Status.Cache)
 	}
 }
 
@@ -98,27 +107,25 @@ func TestAuthQueryParam(t *testing.T) {
 	}
 }
 
-func TestTopEndpoint(t *testing.T) {
+func TestTopEndpointRemoved(t *testing.T) {
 	s := testServer()
 	req := httptest.NewRequest("GET", "/api/v1/top", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed top endpoint, got %d", w.Code)
 	}
 }
 
-func TestLatencyEndpoint(t *testing.T) {
+func TestLatencyEndpointRemoved(t *testing.T) {
 	s := testServer()
 	req := httptest.NewRequest("GET", "/api/v1/latency", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed latency endpoint, got %d", w.Code)
 	}
 }
 
@@ -197,7 +204,7 @@ func TestRevealViewAndEdit(t *testing.T) {
 	}
 
 	s := testServer()
-	s.SetVFSMeta(root, nil, nil, nil)
+	s.SetVFSMeta(root, nil, nil, nil, nil)
 
 	get := func() string {
 		req := httptest.NewRequest("GET", "/api/v1/reveal?path=secret.env&token=test-token", nil)
@@ -257,7 +264,7 @@ func TestReloadEndpoint(t *testing.T) {
 func TestConfigSaveTriggersReload(t *testing.T) {
 	root := t.TempDir()
 	s := testServer()
-	s.SetVFSMeta(root, nil, nil, nil)
+	s.SetVFSMeta(root, nil, nil, nil, nil)
 	called := 0
 	s.SetReload(func() error { called++; return nil })
 
@@ -276,8 +283,26 @@ func TestConfigSaveTriggersReload(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpoint(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	g := prometheus.NewGauge(prometheus.GaugeOpts{Name: "janusfs_test_metric", Help: "test metric"})
+	reg.MustRegister(g)
+	g.Set(12)
+	s := New(nil, "test-token", reg, nil)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "janusfs_test_metric 12") {
+		t.Fatalf("metrics body missing test metric: %s", w.Body.String())
+	}
+}
+
 func TestVendorAssetServed(t *testing.T) {
-	s := New(ui.FS, "test-token", testMetrics(), nil, nil, nil)
+	s := New(ui.FS, "test-token", testRegistry(), nil)
 	req := httptest.NewRequest("GET", "/vendor/cm.js", nil)
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
