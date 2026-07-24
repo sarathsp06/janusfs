@@ -211,6 +211,7 @@ func (rt *mountRuntime) stop() {
 func makeObserver(recorder *obs.Recorder) func(mount.OpEvent) {
 	return func(evt mount.OpEvent) {
 		var d obs.Decision
+		var err error
 		switch evt.Decision {
 		case "ALLOWED":
 			d = obs.Allowed
@@ -218,6 +219,12 @@ func makeObserver(recorder *obs.Recorder) func(mount.OpEvent) {
 			d = obs.Masked
 		case "HIDDEN":
 			d = obs.Hidden
+		case "PANIC":
+			d = obs.Hidden
+			err = fmt.Errorf("janusfs: panic recovered during %s", evt.Op)
+		case "CONFIG_READONLY":
+			d = obs.Hidden
+			err = fmt.Errorf("janusfs: config file is read-only")
 		default:
 			return
 		}
@@ -240,6 +247,7 @@ func makeObserver(recorder *obs.Recorder) func(mount.OpEvent) {
 			Bytes:     evt.Bytes,
 			LatencyUs: evt.LatencyUs,
 			Cache:     c,
+			Err:       err,
 		})
 	}
 }
