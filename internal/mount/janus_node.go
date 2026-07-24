@@ -34,9 +34,10 @@ import (
 // LoopbackNode.
 type JanusRoot struct {
 	fs.LoopbackRoot
-	Engine   *engine.Engine
-	Provider *provider.RamCache
-	Observe  func(OpEvent)
+	Engine    *engine.Engine
+	Provider  *provider.RamCache
+	Observe   func(OpEvent)
+	StartTime time.Time
 }
 
 // JanusNode is one FUSE node: a passthrough LoopbackNode plus the
@@ -59,7 +60,7 @@ func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, obser
 		return nil, err
 	}
 
-	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe}
+	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe, StartTime: time.Now()}
 	jr.LoopbackRoot.Path = src
 	jr.LoopbackRoot.Dev = uint64(st.Dev)
 	jr.LoopbackRoot.NewNode = func(rootData *fs.LoopbackRoot, parent *fs.Inode, name string, st *syscall.Stat_t) fs.InodeEmbedder {
@@ -121,6 +122,9 @@ func (n *JanusNode) absPath() string {
 func (n *JanusNode) resolve() (res engine.Resolution) {
 	defer func() {
 		if r := recover(); r != nil {
+			if n.root.Observe != nil {
+				n.root.Observe(OpEvent{Op: "resolve", Path: n.relPath(), Decision: "PANIC"})
+			}
 			res = engine.Resolution{Decision: engine.Hidden, Poisoned: true}
 		}
 	}()
@@ -140,6 +144,56 @@ func (n *JanusNode) decisionFor(name string) engine.Decision {
 		isDir = fi.IsDir()
 	}
 	return n.root.Engine.Resolve(rel, isDir).Decision
+}
+
+var _ = (fs.NodeLookuper)((*JanusNode)(nil))
+
+// Lookup implements FR-27: synthesizes the virtual .janusfs directory.
+func (n *JanusNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if name == ".janusfs" && (n.relPath() == "" || n.relPath() == ".") {
+		child := &janusVirtualDir{root: n.root}
+		stable := fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+		}
+		ino := n.NewInode(ctx, child, stable)
+		out.Mode = syscall.S_IFDIR | 0555
+		out.SetAttrTimeout(time.Hour)
+		out.SetEntryTimeout(time.Hour)
+		return ino, 0
+	}
+	return n.LoopbackNode.Lookup(ctx, name, out)
+}
+
+var _ = (fs.NodeReaddirer)((*JanusNode)(nil))
+
+// Readdir implements FR-27: injects .janusfs entry inside the root directory.
+func (n *JanusNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	stream, errno := n.LoopbackNode.Readdir(ctx)
+	if errno != 0 {
+		return nil, errno
+	}
+
+	if n.relPath() == "" || n.relPath() == "." {
+		var entries []fuse.DirEntry
+		for stream.HasNext() {
+			entry, err := stream.Next()
+			if err != 0 {
+				stream.Close()
+				return nil, err
+			}
+			entries = append(entries, entry)
+		}
+		stream.Close()
+
+		// Inject .janusfs
+		entries = append(entries, fuse.DirEntry{
+			Mode: syscall.S_IFDIR | 0555,
+			Name: ".janusfs",
+		})
+		return fs.NewListDirStream(entries), 0
+	}
+
+	return stream, errno
 }
 
 var _ = (fs.NodeOpener)((*JanusNode)(nil))
@@ -345,6 +399,26 @@ func (n *JanusNode) Mknod(ctx context.Context, name string, mode, rdev uint32, o
 	return n.LoopbackNode.Mknod(ctx, name, mode, rdev, out)
 }
 
+var _ = (fs.NodeCreater)((*JanusNode)(nil))
+
+// Create implements FR-7's O_CREAT row: denied if the target name is a config
+// file or resolves to HIDDEN or MASKED.
+func (n *JanusNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
+	start := time.Now()
+	childRel := path.Join(n.relPath(), name)
+	if isConfigFile(childRel) {
+		n.observe("create", "CONFIG_READONLY", 0, start)
+		return nil, nil, 0, syscall.EACCES
+	}
+	d := n.decisionFor(name)
+	dec := d.String()
+	defer func() { n.observe("create", dec, 0, start) }()
+	if d != engine.Allowed {
+		return nil, nil, 0, syscall.EACCES
+	}
+	return n.LoopbackNode.Create(ctx, name, flags, mode, out)
+}
+
 var _ = (fs.NodeReadlinker)((*JanusNode)(nil))
 
 // Readlink implements FR-7 (passthrough for Allowed/Masked, EACCES for
@@ -394,6 +468,20 @@ func (n *JanusNode) Getxattr(ctx context.Context, attr string, dest []byte) (uin
 	return n.LoopbackNode.Getxattr(ctx, attr, dest)
 }
 
+var _ = (fs.NodeListxattrer)((*JanusNode)(nil))
+
+// Listxattr implements FR-7's xattr row: denied (EACCES) if HIDDEN.
+func (n *JanusNode) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errno) {
+	start := time.Now()
+	d := n.resolve().Decision
+	dec := d.String()
+	defer func() { n.observe("listxattr", dec, 0, start) }()
+	if d == engine.Hidden {
+		return 0, syscall.EACCES
+	}
+	return n.LoopbackNode.Listxattr(ctx, dest)
+}
+
 var _ = (fs.NodeSetxattrer)((*JanusNode)(nil))
 
 func (n *JanusNode) Setxattr(ctx context.Context, attr string, data []byte, flags uint32) syscall.Errno {
@@ -440,6 +528,9 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 	start := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
+			if h.node.root.Observe != nil {
+				h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "PANIC", LatencyUs: time.Since(start).Microseconds()})
+			}
 			result, errno = nil, apperrors.ToErrno(fmt.Errorf("%w: %v", apperrors.ErrPanic, r))
 		}
 	}()
