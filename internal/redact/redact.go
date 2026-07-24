@@ -50,6 +50,9 @@ func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 
 	var spans []Span
 	for _, p := range pats {
+		if p.PreFilter != nil && !p.PreFilter(buf) {
+			continue
+		}
 		for _, m := range p.Regex.FindAllSubmatchIndex(buf, -1) {
 			start, end := m[0], m[1]
 			if p.GroupIndex > 0 {
@@ -94,8 +97,12 @@ func mergeSpans(spans []Span) []Span {
 // '*' (0x2A), byte-length preserved exactly. Safe to call with an empty or
 // nil pats (returns an unmodified copy).
 func Redact(buf []byte, pats []*patterns.Pattern) []byte {
+	spans := FindSpans(buf, 0, pats)
+	if len(spans) == 0 {
+		return buf
+	}
 	out := bytes.Clone(buf)
-	for _, s := range FindSpans(buf, 0, pats) {
+	for _, s := range spans {
 		for i := s.Off; i < s.Off+s.Len; i++ {
 			out[i] = '*'
 		}

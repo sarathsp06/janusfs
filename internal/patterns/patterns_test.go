@@ -244,3 +244,62 @@ func TestParsePatternRefMalformedCustom(t *testing.T) {
 		t.Fatal("expected error for missing closing slash")
 	}
 }
+
+func TestPreFilters(t *testing.T) {
+	cases := []struct {
+		builtin string
+		input   string
+		want    bool
+	}{
+		{"env-value", "API_KEY=supersecret", true},
+		{"env-value", "plain text no equals", false},
+		{"aws-key", "id = AKIAABCDEFGHIJKLMNOP", true},
+		{"aws-key", "id = ASIAABCDEFGHIJKLMNOP", true},
+		{"aws-key", "id = ABIAABCDEFGHIJKLMNOP", true},
+		{"aws-key", "id = ACCAABCDEFGHIJKLMNOP", true},
+		{"aws-key", "aws_secret_access_key = wJalr", true},
+		{"aws-key", "id = AKIASHORT", true}, // pre-filter for AKIA matches prefix
+		{"aws-key", "just some random text", false},
+		{"private-key", "-----BEGIN RSA PRIVATE KEY-----", true},
+		{"private-key", "just a comment", false},
+		{"jwt", "eyJhbGciOiJIUzI1NiJ9", true},
+		{"jwt", "not_a_jwt", false},
+		{"db-uri", "postgres://admin", true},
+		{"db-uri", "localhost", false},
+		{"github-token", "ghp_12345", true},
+		{"github-token", "gho_12345", true},
+		{"github-token", "ghu_12345", true},
+		{"github-token", "ghs_12345", true},
+		{"github-token", "ghr_12345", true},
+		{"github-token", "glp_12345", false},
+		{"generic-secret", "password: hello", true},
+		{"generic-secret", "passwd=hello", true},
+		{"generic-secret", "secret: hello", true},
+		{"generic-secret", "token: hello", true},
+		{"generic-secret", "api-key: hello", true},
+		{"generic-secret", "api_key: hello", true},
+		{"generic-secret", "apikey: hello", true},
+		{"generic-secret", "password hello", false}, // missing colon/equals
+		{"generic-secret", "just random text", false},
+	}
+
+	for _, tc := range cases {
+		ps, ok := LookupBuiltin(tc.builtin)
+		if !ok {
+			t.Fatalf("builtin %q not found", tc.builtin)
+		}
+		got := false
+		for _, p := range ps {
+			if p.PreFilter == nil {
+				got = true
+				break
+			}
+			if p.PreFilter([]byte(tc.input)) {
+				got = true
+			}
+		}
+		if got != tc.want {
+			t.Errorf("PreFilter(%q) for input %q: got %t, want %t", tc.builtin, tc.input, got, tc.want)
+		}
+	}
+}

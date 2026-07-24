@@ -10,6 +10,7 @@
 package patterns
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -38,6 +39,9 @@ type Pattern struct {
 	// WholeFile is the FR-16 sentinel: mask every byte of the file, no
 	// pattern matching involved.
 	WholeFile bool
+
+	// PreFilter returns true if the pattern might match buf, or false if it definitely cannot.
+	PreFilter func(buf []byte) bool
 }
 
 // WholeFileName is the FR-16 sentinel pattern name.
@@ -91,6 +95,7 @@ func init() {
 		if spec.expr != "" {
 			p.Regex = regexp.MustCompile(spec.expr)
 		}
+		p.PreFilter = getBuiltinPreFilter(spec.name, spec.expr)
 		builtinVariants[spec.name] = append(builtinVariants[spec.name], p)
 		ReservedNames[spec.name] = true
 	}
@@ -99,6 +104,88 @@ func init() {
 	}
 	register(awsSecretKeySpec)
 	ReservedNames[WholeFileName] = true
+}
+
+func containsIgnoreCase(buf []byte, lowerStr string) bool {
+	if len(lowerStr) == 0 {
+		return true
+	}
+	if len(buf) < len(lowerStr) {
+		return false
+	}
+	for i := 0; i <= len(buf)-len(lowerStr); i++ {
+		match := true
+		for j := 0; j < len(lowerStr); j++ {
+			b := buf[i+j]
+			if b >= 'A' && b <= 'Z' {
+				b = b + 32
+			}
+			if b != lowerStr[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func getBuiltinPreFilter(name, expr string) func(buf []byte) bool {
+	switch name {
+	case "env-value":
+		return func(buf []byte) bool {
+			return bytes.Contains(buf, []byte{'='})
+		}
+	case "aws-key":
+		if strings.Contains(expr, "AKIA") {
+			return func(buf []byte) bool {
+				return bytes.Contains(buf, []byte("AKIA")) ||
+					bytes.Contains(buf, []byte("ASIA")) ||
+					bytes.Contains(buf, []byte("ABIA")) ||
+					bytes.Contains(buf, []byte("ACCA"))
+			}
+		}
+		return func(buf []byte) bool {
+			return containsIgnoreCase(buf, "aws_secret_access_key")
+		}
+	case "private-key":
+		return func(buf []byte) bool {
+			return bytes.Contains(buf, []byte("-----BEGIN"))
+		}
+	case "jwt":
+		return func(buf []byte) bool {
+			return bytes.Contains(buf, []byte("eyJ"))
+		}
+	case "db-uri":
+		return func(buf []byte) bool {
+			return bytes.Contains(buf, []byte("://"))
+		}
+	case "github-token":
+		return func(buf []byte) bool {
+			return bytes.Contains(buf, []byte("ghp_")) ||
+				bytes.Contains(buf, []byte("gho_")) ||
+				bytes.Contains(buf, []byte("ghu_")) ||
+				bytes.Contains(buf, []byte("ghs_")) ||
+				bytes.Contains(buf, []byte("ghr_"))
+		}
+	case "generic-secret":
+		return func(buf []byte) bool {
+			if !bytes.Contains(buf, []byte{':'}) && !bytes.Contains(buf, []byte{'='}) {
+				return false
+			}
+			return containsIgnoreCase(buf, "password") ||
+				containsIgnoreCase(buf, "passwd") ||
+				containsIgnoreCase(buf, "secret") ||
+				containsIgnoreCase(buf, "token") ||
+				containsIgnoreCase(buf, "api-key") ||
+				containsIgnoreCase(buf, "api_key") ||
+				containsIgnoreCase(buf, "apikey")
+		}
+	default:
+		return nil
+	}
 }
 
 // LookupBuiltin returns the compiled Pattern(s) for a reserved builtin name.

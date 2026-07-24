@@ -247,3 +247,43 @@ func TestStreamLineModeRedactsAcrossChunks(t *testing.T) {
 		t.Fatal("expected key preserved (group-1-only masking)")
 	}
 }
+
+func BenchmarkRedactDotenvLike(b *testing.B) {
+	// Replicate 1 MB synthetic dotenv-like corpus: 20,000 lines
+	var sb strings.Builder
+	for i := 0; i < 20000; i++ {
+		sb.WriteString("API_KEY=supersecret123\n")
+	}
+	corpus := []byte(sb.String())
+
+	pats, err := patterns.ParsePatternRef("env-value")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = Redact(corpus, pats)
+	}
+}
+
+func BenchmarkRedactNoMatch(b *testing.B) {
+	// 20,000 lines of plain text without any matching env-value pattern
+	var sb strings.Builder
+	for i := 0; i < 20000; i++ {
+		sb.WriteString("This is a clean line of text with some plain content that does not have any env assignments.\n")
+	}
+	corpus := []byte(sb.String())
+
+	pats, err := patterns.ParsePatternRef("env-value")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = Redact(corpus, pats)
+	}
+}
