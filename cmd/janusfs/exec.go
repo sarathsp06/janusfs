@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/sarathsp06/janusfs/internal/execrunner"
+	"github.com/spf13/cobra"
 )
 
 func newExecCmd() *cobra.Command {
