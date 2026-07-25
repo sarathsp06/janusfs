@@ -14,7 +14,7 @@ import (
 
 func TestRunMockE2E(t *testing.T) {
 	// Create temp home directory for the test.
-	tmpHome, err := os.MkdirTemp("", "janusfs-test-home")
+	tmpHome, err := os.MkdirTemp("/tmp", "janus-test-home")
 	if err != nil {
 		t.Fatalf("failed to create temp home: %v", err)
 	}
@@ -249,7 +249,7 @@ func main() {
 
 func TestRunDaemonNotRunning(t *testing.T) {
 	// Create temp home directory without starting a daemon.
-	tmpHome, err := os.MkdirTemp("", "janusfs-test-home")
+	tmpHome, err := os.MkdirTemp("/tmp", "janus-test-home")
 	if err != nil {
 		t.Fatalf("failed to create temp home: %v", err)
 	}
