@@ -191,21 +191,69 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 		}
 	}
 
-	// Set up command
-	cmd := exec.CommandContext(ctx, finalArgs[0], finalArgs[1:]...)
-	cmd.Dir = hijackedCWD
-	cmd.Env = scrubbedEnv
-	cmd.Stdin = os.Stdin
-
 	// Streaming outputs
 	stdoutRewriter := NewStreamRewriter(os.Stdout, mountpoint, src)
 	stderrRewriter := NewStreamRewriter(os.Stderr, mountpoint, src)
-	cmd.Stdout = stdoutRewriter
-	cmd.Stderr = stderrRewriter
 
-	// Start command
-	if err := cmd.Start(); err != nil {
-		return 125, fmt.Errorf("exec: failed to start process: %w", err)
+	// Determine the relative path for Dir if we chroot
+	relDir := "/"
+	if realCWD, err := filepath.Abs(cwd); err == nil {
+		if srcAbs, err1 := filepath.Abs(src); err1 == nil {
+			if realCWD != srcAbs && strings.HasPrefix(realCWD, srcAbs+string(filepath.Separator)) {
+				if rel, err := filepath.Rel(srcAbs, realCWD); err == nil {
+					relDir = "/" + filepath.ToSlash(rel)
+				}
+			}
+		}
+	}
+
+	attempts := []struct {
+		name        string
+		sysProcAttr *syscall.SysProcAttr
+		dir         string
+	}{
+		{
+			name:        "Mount namespaces + Chroot",
+			sysProcAttr: getSysProcAttr(mountpoint, true),
+			dir:         relDir,
+		},
+		{
+			name:        "Mount namespaces",
+			sysProcAttr: getSysProcAttr(mountpoint, false),
+			dir:         hijackedCWD,
+		},
+		{
+			name:        "Standard fallback",
+			sysProcAttr: nil,
+			dir:         hijackedCWD,
+		},
+	}
+
+	var cmd *exec.Cmd
+	var startErr error
+
+	for _, attempt := range attempts {
+		// skip non-fallback attempts on non-Linux platforms (where getSysProcAttr returns nil)
+		if attempt.sysProcAttr == nil && attempt.name != "Standard fallback" {
+			continue
+		}
+
+		cmd = exec.CommandContext(ctx, finalArgs[0], finalArgs[1:]...)
+		cmd.Dir = attempt.dir
+		cmd.Env = scrubbedEnv
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = stdoutRewriter
+		cmd.Stderr = stderrRewriter
+		cmd.SysProcAttr = attempt.sysProcAttr
+
+		startErr = cmd.Start()
+		if startErr == nil {
+			break
+		}
+	}
+
+	if startErr != nil {
+		return 125, fmt.Errorf("exec: failed to start process: %w", startErr)
 	}
 
 	// Signal forwarding
