@@ -51,7 +51,7 @@ later blocks anything earlier.
 | 03 | [Decision cache](03-decision-cache.md) | — | S | done |
 | 04 | [Linux namespace exec](04-linux-namespace-exec.md) | — | L | done, **unverified on real Linux** — see below |
 | 05 | [Dirfd backing layer](05-dirfd-backing-layer.md) | — | L | read path done; mutations still via LoopbackNode |
-| 06 | [Process identity](06-process-identity.md) | 05 | M | not started |
+| 06 | [Process identity](06-process-identity.md) | 05 | M | Tasks 1-2 done; 3-4 deferred pending 07 |
 | 07 | macOS path-preserving mode | 05, 06 | **not written** | — |
 | 08 | Reload revocation of open handles | 03 | **not written** | — |
 
