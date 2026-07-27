@@ -18,3 +18,34 @@ BenchmarkRedactDotenvLike-12    22  50616491 ns/op  22.13 MB/s  5964739 B/op  20
 ```
 
 **Below NFR-3's 100 MB/s single-threaded target.** The dominant cost is `regexp.FindAllSubmatchIndex`'s one-slice-per-match allocation (≈1 alloc/line on this corpus) — inherent to the stdlib API as currently used, not an obvious quick fix. Per SPEC.md §17, NFR-3 gate verification against this baseline is explicitly a **Phase 4** task ("Latency budget verification... against Phase 0 baselines"); this number is recorded now, honestly, rather than silently deferred. Real-world `.env`/config files are typically a few KB (not 1 MB / 20k lines), so this gap is not expected to be user-visible before Phase 4 — revisit then, or sooner if a real workload shows it matters.
+
+## PRP 03 — decision cache (measured, both NFR-3 targets met)
+
+`internal/engine.Engine.Resolve`, Apple M3 Pro, `go test -bench`, `-benchtime=200000x`:
+
+```
+BenchmarkResolveCacheHit-12     200000    55.13 ns/op
+BenchmarkResolveCacheMiss-12    200000    90523 ns/op    (ten-level hierarchy)
+```
+
+NFR-3 budgets ≤ 5 µs (5000 ns) for a cache-hit decision and ≤ 200 µs (200000 ns) for a ten-level miss. Both are met with wide margin: the hit path is ~90x under budget, the miss path is ~55% of budget. Before this PRP there was no decision cache at all, so the "cache hit" figure was previously unmeasurable — every call was a miss.
+
+## PRP 06 — process identity Task 1 gate (measured, PASS)
+
+`internal/procid`, darwin/arm64 (Apple M3 Pro), `go test -bench . -benchtime=200ms`:
+
+```
+BenchmarkStartTime-12          23122     9217 ns/op    784 B/op   3 allocs/op
+BenchmarkIsAgentCacheHit-12    26241     9125 ns/op    784 B/op   3 allocs/op
+BenchmarkAncestryWalk-12        5410    45647 ns/op   3920 B/op  15 allocs/op
+```
+
+Task 1's gate is 250 µs per-op p99 for an allowed operation, with identity
+sitting inside a fraction of that. `KERN_PROC_PID` on darwin runs at ~9 µs;
+the cache-hit path (map lookup + one start-time revalidation) is ~9 µs; the
+depth-5 ancestry walk (cold path, before memoization) is ~46 µs. All
+comfortably under budget — PRP 06 continues past Task 1's gate.
+
+Linux was not measured on this darwin-only development machine; `/proc/<pid>/stat`
+is a page cache hit and should be similar-or-faster, but that is an
+assumption until captured on a real Linux host.
