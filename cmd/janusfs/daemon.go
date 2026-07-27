@@ -148,15 +148,8 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 	}()
 	logger.Info("daemon dashboard listening", "url", fmt.Sprintf("http://%s/", indexAddr))
 
-	if os.Getenv("JANUSFS_MOCK_DEV") == "1" {
-		rt1, _ := startMockMount(ctx, "/tmp/janus_test_src", "/home/jules/.janusfs/mounts/mock-project-1", "My Mock Project 1")
-		rt2, _ := startMockMount(ctx, "/tmp/janus_test_src_2", "/home/jules/.janusfs/mounts/mock-project-2", "My Mock Project 2")
-		d.mounts[rt1.Mountpoint] = rt1
-		d.mounts[rt2.Mountpoint] = rt2
-	} else {
-		// Resume recorded mounts before accepting new commands.
-		d.resume()
-	}
+	// Resume recorded mounts before accepting new commands.
+	d.resume()
 
 	lc, err := net.Listen("unix", sock)
 	if err != nil {
