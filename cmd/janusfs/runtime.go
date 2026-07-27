@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +19,7 @@ import (
 	"github.com/sarathsp06/janusfs/internal/config"
 	"github.com/sarathsp06/janusfs/internal/engine"
 	"github.com/sarathsp06/janusfs/internal/history"
+	"github.com/sarathsp06/janusfs/internal/identity"
 	"github.com/sarathsp06/janusfs/internal/logging"
 	"github.com/sarathsp06/janusfs/internal/mount"
 	"github.com/sarathsp06/janusfs/internal/obs"
@@ -70,7 +75,7 @@ func (rt *mountRuntime) reload() error {
 // goroutine, and returns once the mount is live (OnMounted fired) or errors
 // if the mount could not be established. Per-mount HTTP listeners are removed
 // because all routing is now consolidated within the single daemon server.
-func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRuntime, error) {
+func startMount(parent context.Context, cfg config.Config, reg *identity.Registry, debug bool) (*mountRuntime, error) {
 	logger := logging.New("mount")
 
 	errLog := log.New(logWriter{logger, slog.LevelError}, "", 0)
@@ -136,6 +141,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 	rt.adapter = &mount.Adapter{
 		Engine:      eng,
 		Provider:    prov,
+		Registry:    reg,
 		ErrorLogger: errLog,
 		DebugLogger: dbgLog,
 		OnMounted: func() {
@@ -162,6 +168,20 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 		rt.stop()
 		return nil, fmt.Errorf("mounting %s: %w", cfg.Src, err)
 	}
+
+	// Spawn supervisor watchdog on macOS (PRP §4.2 / §6)
+	if runtime.GOOS == "darwin" {
+		cmdWatch := exec.Command(os.Args[0], "watchdog", "--pid", strconv.Itoa(os.Getpid()), "--mount", cfg.Mountpoint)
+		cmdWatch.Stdin = nil
+		cmdWatch.Stdout = nil
+		cmdWatch.Stderr = nil
+		if err := cmdWatch.Start(); err != nil {
+			logger.Warn("failed to start supervisor watchdog", "error", err)
+		} else {
+			logger.Info("started supervisor watchdog", "pid", cmdWatch.Process.Pid, "target_pid", os.Getpid())
+		}
+	}
+
 	return rt, nil
 }
 

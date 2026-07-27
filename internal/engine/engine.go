@@ -13,6 +13,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/sarathsp06/janusfs/internal/patterns"
@@ -75,6 +77,21 @@ func New(root string) (*Engine, error) {
 // root), against whichever rule-set generation is current at call time.
 func (e *Engine) Resolve(relPath string, isDir bool) Resolution {
 	rs := e.rs.Load()
+
+	// Canonical Symlink Resolution (PRP Section 3.2 Tier 3)
+	// Resolve Physical Target via realpath() / O_PATH DirFD
+	absPath := filepath.Join(rs.Root, relPath)
+	resolvedAbsPath, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		if fi, errStat := os.Stat(resolvedAbsPath); errStat == nil {
+			isDir = fi.IsDir()
+		}
+		newRelPath, relErr := filepath.Rel(rs.Root, resolvedAbsPath)
+		if relErr == nil {
+			relPath = newRelPath
+		}
+	}
+
 	res := rs.Resolve(relPath, isDir)
 	return Resolution{
 		Decision:     res.Decision,

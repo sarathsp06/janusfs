@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/sarathsp06/janusfs/internal/config"
+	"github.com/sarathsp06/janusfs/internal/identity"
 )
 
 // fakeRuntime builds a mountRuntime with just the fields the daemon's
@@ -185,7 +186,7 @@ func TestDoMount_MissingSrc_CleanMessage(t *testing.T) {
 func TestDoMount_ResumeCreatesMissingMountpoint(t *testing.T) {
 	oldStart := startMountFunc
 	t.Cleanup(func() { startMountFunc = oldStart })
-	startMountFunc = func(_ context.Context, cfg config.Config, _ bool) (*mountRuntime, error) {
+	startMountFunc = func(_ context.Context, cfg config.Config, _ *identity.Registry, _ bool) (*mountRuntime, error) {
 		return fakeRuntime(cfg.Src, cfg.Mountpoint, "", "uuid", "tok"), nil
 	}
 
@@ -223,7 +224,7 @@ func TestDoMount_StaleMountpointCleanupRetriesValidation(t *testing.T) {
 		}
 		return nil
 	}
-	startMountFunc = func(_ context.Context, cfg config.Config, _ bool) (*mountRuntime, error) {
+	startMountFunc = func(_ context.Context, cfg config.Config, _ *identity.Registry, _ bool) (*mountRuntime, error) {
 		return fakeRuntime(cfg.Src, cfg.Mountpoint, "", "uuid", "tok"), nil
 	}
 	var forced bool

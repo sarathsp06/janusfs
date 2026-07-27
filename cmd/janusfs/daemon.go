@@ -22,18 +22,23 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sarathsp06/janusfs/internal/config"
+	"github.com/sarathsp06/janusfs/internal/identity"
 	"github.com/sarathsp06/janusfs/internal/logging"
 )
 
 // daemonRequest is one command sent by a `janusfs mount`/`umount`/`daemon
 // status` client over the control socket. One JSON object per connection.
 type daemonRequest struct {
-	Cmd        string `json:"cmd"`                  // "mount" | "unmount" | "list"
-	Src        string `json:"src,omitempty"`        // mount: source tree
-	Mountpoint string `json:"mountpoint,omitempty"` // unmount: mountpoint or src; resume: exact recorded mountpoint
-	Label      string `json:"label,omitempty"`      // mount: friendly dashboard name (not a path)
-	NoHistory  bool   `json:"no_history,omitempty"`
-	Resume     bool   `json:"-"` // internal: daemon startup may recreate a recorded mountpoint
+	Cmd            string `json:"cmd"`                  // "mount" | "unmount" | "list" | "register_agent"
+	Src            string `json:"src,omitempty"`        // mount: source tree
+	Mountpoint     string `json:"mountpoint,omitempty"` // unmount: mountpoint or src; resume: exact recorded mountpoint
+	Label          string `json:"label,omitempty"`      // mount: friendly dashboard name (not a path)
+	NoHistory      bool   `json:"no_history,omitempty"`
+	Resume         bool   `json:"-"` // internal: daemon startup may recreate a recorded mountpoint
+	AgentPID       int    `json:"agent_pid,omitempty"`
+	AgentStartTime int64  `json:"agent_start_time,omitempty"`
+	AgentPPIDHash  string `json:"agent_ppid_hash,omitempty"`
+	AgentBootUUID  string `json:"agent_boot_uuid,omitempty"`
 }
 
 type daemonResponse struct {
@@ -75,19 +80,22 @@ func newDaemonCmd() *cobra.Command {
 // daemon owns every live mount in one process and multiplexes control
 // commands from `janusfs mount`/`umount` clients onto them.
 var validateMountConfig = func(cfg config.Config) error { return cfg.Validate() }
-var startMountFunc = startMount
+var startMountFunc = func(ctx context.Context, cfg config.Config, reg *identity.Registry, debug bool) (*mountRuntime, error) {
+	return startMount(ctx, cfg, reg, debug)
+}
 
 type daemon struct {
-	opsMu   sync.Mutex               // serializes mount/unmount so check-then-act is atomic
-	mu      sync.Mutex               // guards the mounts map for concurrent reads
-	mounts  map[string]*mountRuntime // keyed by absolute mountpoint
-	base    config.Config            // resolved defaults (mount root, cache sizing, …)
-	debug   bool
-	ctx     context.Context
-	logger  *slog.Logger
-	uiPort  int
-	indexLn net.Listener
-	indexer *http.Server
+	opsMu    sync.Mutex               // serializes mount/unmount so check-then-act is atomic
+	mu       sync.Mutex               // guards the mounts map for concurrent reads
+	mounts   map[string]*mountRuntime // keyed by absolute mountpoint
+	base     config.Config            // resolved defaults (mount root, cache sizing, …)
+	debug    bool
+	ctx      context.Context
+	logger   *slog.Logger
+	uiPort   int
+	indexLn  net.Listener
+	indexer  *http.Server
+	Registry *identity.Registry
 }
 
 func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error {
@@ -136,12 +144,13 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 	defer cancel()
 
 	d := &daemon{
-		mounts: map[string]*mountRuntime{},
-		base:   base,
-		debug:  debug,
-		ctx:    ctx,
-		logger: logger,
-		uiPort: indexPort,
+		mounts:   map[string]*mountRuntime{},
+		base:     base,
+		debug:    debug,
+		ctx:      ctx,
+		logger:   logger,
+		uiPort:   indexPort,
+		Registry: identity.NewRegistry(),
 	}
 
 	// Combined dashboard (127.0.0.1 only: it links to per-mount dashboards).
@@ -224,9 +233,25 @@ func (d *daemon) handleConn(conn net.Conn) {
 		writeResp(conn, daemonResponse{OK: true, Mounts: d.snapshot()})
 	case "reload":
 		writeResp(conn, d.doReload(req))
+	case "register_agent":
+		writeResp(conn, d.doRegisterAgent(req))
 	default:
 		writeResp(conn, daemonResponse{Error: "unknown command: " + req.Cmd})
 	}
+}
+
+func (d *daemon) doRegisterAgent(req daemonRequest) daemonResponse {
+	if req.AgentPID <= 0 {
+		return daemonResponse{Error: "agent_pid is required"}
+	}
+	id := identity.Identity{
+		PID:           req.AgentPID,
+		StartTime:     req.AgentStartTime,
+		PPIDChainHash: req.AgentPPIDHash,
+		BootUUID:      req.AgentBootUUID,
+	}
+	d.Registry.Register(req.AgentPID, id)
+	return daemonResponse{OK: true, Message: fmt.Sprintf("registered agent PID %d", req.AgentPID)}
 }
 
 // doReload recompiles the rule set for the mount matching req.Mountpoint (by
@@ -337,7 +362,7 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 		}
 	}
 
-	rt, err := startMountFunc(d.ctx, cfg, d.debug)
+	rt, err := startMountFunc(d.ctx, cfg, d.Registry, d.debug)
 	if err != nil {
 		return daemonResponse{Error: err.Error()}
 	}

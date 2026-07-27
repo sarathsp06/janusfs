@@ -131,3 +131,37 @@ func TestEngineGenerationBumpsOnReload(t *testing.T) {
 		t.Fatalf("expected Hidden after reload picked up new rule, got %v", got)
 	}
 }
+
+func TestEngineSymlinkTraversal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+
+	// Create a secret file outside the project root
+	outsideDir := t.TempDir()
+	secretFile := filepath.Join(outsideDir, "id_rsa")
+	if err := os.WriteFile(secretFile, []byte("private key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// In project root, define security rules:
+	// We want to hide/mask id_rsa files
+	writeFile(t, filepath.Join(root, ".janusignore"), "id_rsa\n")
+
+	// Create a symlink in the project root pointing to the outside secret file
+	symlinkPath := filepath.Join(root, "symkey")
+	if err := os.Symlink(secretFile, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When we resolve "symkey" (which is a symlink to outside/id_rsa),
+	// it should resolve to the canonical physical target, evaluate against the rules, and hide it!
+	res := e.Resolve("symkey", false)
+	if res.Decision != Hidden {
+		t.Errorf("expected symlink target outside root to be Hidden, got %v", res.Decision)
+	}
+}

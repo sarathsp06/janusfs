@@ -244,6 +244,9 @@ func isGlobalOrAncestor(rs *RuleSet, levelDir, full string) bool {
 	if rs.GlobalDir != "" && levelDir == rs.GlobalDir {
 		return true
 	}
+	if levelDir == rs.Root {
+		return true
+	}
 	if levelDir == full {
 		return true
 	}

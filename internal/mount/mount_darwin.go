@@ -21,6 +21,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/sarathsp06/janusfs/internal/engine"
+	"github.com/sarathsp06/janusfs/internal/identity"
 	"github.com/sarathsp06/janusfs/internal/provider"
 )
 
@@ -42,6 +43,8 @@ type Adapter struct {
 	Engine *engine.Engine
 	// Provider serves redacted bytes for Masked reads (SPEC §8.3); required.
 	Provider *provider.RamCache
+	// Registry tracks verified processes.
+	Registry *identity.Registry
 
 	// ErrorLogger receives go-fuse diagnostic messages: conditions where the
 	// server cannot return an error to the caller but wants to signal that
@@ -79,7 +82,7 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 		return errors.New("mount: Engine and Provider are required")
 	}
 
-	root, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe)
+	root, err := newJanusRoot(src, a.Engine, a.Provider, a.Registry, a.Observe)
 	if err != nil {
 		return err
 	}

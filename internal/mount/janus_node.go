@@ -24,6 +24,7 @@ import (
 
 	"github.com/sarathsp06/janusfs/internal/apperrors"
 	"github.com/sarathsp06/janusfs/internal/engine"
+	"github.com/sarathsp06/janusfs/internal/identity"
 	"github.com/sarathsp06/janusfs/internal/provider"
 )
 
@@ -36,6 +37,7 @@ type JanusRoot struct {
 	fs.LoopbackRoot
 	Engine    *engine.Engine
 	Provider  *provider.RamCache
+	Registry  *identity.Registry
 	Observe   func(OpEvent)
 	StartTime time.Time
 }
@@ -54,13 +56,13 @@ type JanusNode struct {
 // Mirrors fs.NewLoopbackRoot's construction, but with NewNode set to
 // produce JanusNode instead of the library's default LoopbackNode (SPEC §6:
 // "embedding fs.LoopbackNode and overriding only the decision ops").
-func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, observe func(OpEvent)) (fs.InodeEmbedder, error) {
+func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, reg *identity.Registry, observe func(OpEvent)) (fs.InodeEmbedder, error) {
 	var st syscall.Stat_t
 	if err := syscall.Stat(src, &st); err != nil {
 		return nil, err
 	}
 
-	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe, StartTime: time.Now()}
+	jr := &JanusRoot{Engine: eng, Provider: prov, Registry: reg, Observe: observe, StartTime: time.Now()}
 	jr.LoopbackRoot.Path = src
 	jr.LoopbackRoot.Dev = uint64(st.Dev)
 	jr.LoopbackRoot.NewNode = func(rootData *fs.LoopbackRoot, parent *fs.Inode, name string, st *syscall.Stat_t) fs.InodeEmbedder {
@@ -115,11 +117,25 @@ func (n *JanusNode) absPath() string {
 	return filepath.Join(n.root.LoopbackRoot.Path, n.relPath())
 }
 
+func (n *JanusNode) isAgent(ctx context.Context) bool {
+	if n.root.Registry == nil {
+		return true // legacy fallback
+	}
+	caller, ok := fuse.FromContext(ctx)
+	if !ok {
+		return false
+	}
+	return n.root.Registry.Verify(int(caller.Pid))
+}
+
 // resolve returns this node's own Decision (FR-5..FR-9), recovering from
 // any panic in the engine call into a fail-closed Hidden result (NFR-6) —
 // the one piece of that invariant this package is responsible for, since
 // go-fuse's own dispatch loop does not know about internal/engine.
-func (n *JanusNode) resolve() (res engine.Resolution) {
+func (n *JanusNode) resolve(ctx context.Context) (res engine.Resolution) {
+	if !n.isAgent(ctx) {
+		return engine.Resolution{Decision: engine.Allowed, Generation: n.root.Engine.Generation()}
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			if n.root.Observe != nil {
@@ -137,7 +153,10 @@ func (n *JanusNode) resolve() (res engine.Resolution) {
 // Mkdir, Rmdir). isDir is taken from a real lstat when the target already
 // exists (Rename/Unlink/Rmdir), defaulting to false for an about-to-be-created
 // name (Symlink/Link/Mknod never create directories).
-func (n *JanusNode) decisionFor(name string) engine.Decision {
+func (n *JanusNode) decisionFor(ctx context.Context, name string) engine.Decision {
+	if !n.isAgent(ctx) {
+		return engine.Allowed
+	}
 	rel := path.Join(n.relPath(), name)
 	isDir := false
 	if fi, err := os.Lstat(filepath.Join(n.root.LoopbackRoot.Path, filepath.FromSlash(rel))); err == nil {
@@ -161,7 +180,17 @@ func (n *JanusNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		out.SetEntryTimeout(time.Hour)
 		return ino, 0
 	}
-	return n.LoopbackNode.Lookup(ctx, name, out)
+	ino, errno := n.LoopbackNode.Lookup(ctx, name, out)
+	if errno == 0 {
+		if n.isAgent(ctx) {
+			out.SetAttrTimeout(0)
+			out.SetEntryTimeout(0)
+		} else {
+			out.SetAttrTimeout(time.Second)
+			out.SetEntryTimeout(time.Second)
+		}
+	}
+	return ino, errno
 }
 
 var _ = (fs.NodeReaddirer)((*JanusNode)(nil))
@@ -220,7 +249,7 @@ func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, f
 		n.observe("open", "CONFIG_READONLY", 0, start)
 		return nil, 0, syscall.EACCES
 	}
-	res := n.resolve()
+	res := n.resolve(ctx)
 	dec := res.Decision.String()
 	defer func() { n.observe("open", dec, 0, start) }()
 	switch res.Decision {
@@ -253,7 +282,7 @@ var _ = (fs.NodeOpendirHandler)((*JanusNode)(nil))
 // parent's Readdir, untouched here — only descending into it is denied).
 func (n *JanusNode) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	start := time.Now()
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("readdir", dec, 0, start) }()
 	if d == engine.Hidden {
@@ -272,7 +301,7 @@ func (n *JanusNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 		n.observe("setattr", "CONFIG_READONLY", 0, start)
 		return syscall.EACCES
 	}
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("setattr", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -290,7 +319,7 @@ func (n *JanusNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		n.observe("unlink", "CONFIG_READONLY", 0, start)
 		return syscall.EACCES
 	}
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("unlink", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -303,7 +332,7 @@ var _ = (fs.NodeMkdirer)((*JanusNode)(nil))
 
 func (n *JanusNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	start := time.Now()
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("mkdir", dec, 0, start) }()
 	if d == engine.Hidden {
@@ -316,7 +345,7 @@ var _ = (fs.NodeRmdirer)((*JanusNode)(nil))
 
 func (n *JanusNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	start := time.Now()
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("rmdir", dec, 0, start) }()
 	if d == engine.Hidden {
@@ -346,14 +375,14 @@ func (n *JanusNode) Rename(ctx context.Context, name string, newParent fs.InodeE
 		}
 	}
 
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("rename", dec, 0, start) }()
 	if d != engine.Allowed {
 		return syscall.EACCES
 	}
 	if np, ok := newParent.(*JanusNode); ok {
-		if np.decisionFor(newName) != engine.Allowed {
+		if np.decisionFor(ctx, newName) != engine.Allowed {
 			return syscall.EACCES
 		}
 	}
@@ -364,7 +393,7 @@ var _ = (fs.NodeSymlinker)((*JanusNode)(nil))
 
 func (n *JanusNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	start := time.Now()
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("symlink", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -377,7 +406,7 @@ var _ = (fs.NodeLinker)((*JanusNode)(nil))
 
 func (n *JanusNode) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	start := time.Now()
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("link", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -390,7 +419,7 @@ var _ = (fs.NodeMknoder)((*JanusNode)(nil))
 
 func (n *JanusNode) Mknod(ctx context.Context, name string, mode, rdev uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	start := time.Now()
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("mknod", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -410,13 +439,23 @@ func (n *JanusNode) Create(ctx context.Context, name string, flags uint32, mode 
 		n.observe("create", "CONFIG_READONLY", 0, start)
 		return nil, nil, 0, syscall.EACCES
 	}
-	d := n.decisionFor(name)
+	d := n.decisionFor(ctx, name)
 	dec := d.String()
 	defer func() { n.observe("create", dec, 0, start) }()
 	if d != engine.Allowed {
 		return nil, nil, 0, syscall.EACCES
 	}
-	return n.LoopbackNode.Create(ctx, name, flags, mode, out)
+	inode, fh, fuseFlags, errno = n.LoopbackNode.Create(ctx, name, flags, mode, out)
+	if errno == 0 {
+		if n.isAgent(ctx) {
+			out.SetAttrTimeout(0)
+			out.SetEntryTimeout(0)
+		} else {
+			out.SetAttrTimeout(time.Second)
+			out.SetEntryTimeout(time.Second)
+		}
+	}
+	return
 }
 
 var _ = (fs.NodeReadlinker)((*JanusNode)(nil))
@@ -427,7 +466,7 @@ var _ = (fs.NodeReadlinker)((*JanusNode)(nil))
 // mount can never become an escape hatch to an unprotected path.
 func (n *JanusNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	start := time.Now()
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("readlink", dec, 0, start) }()
 	if d == engine.Hidden {
@@ -459,7 +498,7 @@ var _ = (fs.NodeGetxattrer)((*JanusNode)(nil))
 
 func (n *JanusNode) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, syscall.Errno) {
 	start := time.Now()
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("getxattr", dec, 0, start) }()
 	if d == engine.Hidden {
@@ -473,7 +512,7 @@ var _ = (fs.NodeListxattrer)((*JanusNode)(nil))
 // Listxattr implements FR-7's xattr row: denied (EACCES) if HIDDEN.
 func (n *JanusNode) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errno) {
 	start := time.Now()
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("listxattr", dec, 0, start) }()
 	if d == engine.Hidden {
@@ -486,7 +525,7 @@ var _ = (fs.NodeSetxattrer)((*JanusNode)(nil))
 
 func (n *JanusNode) Setxattr(ctx context.Context, attr string, data []byte, flags uint32) syscall.Errno {
 	start := time.Now()
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("setxattr", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -499,7 +538,7 @@ var _ = (fs.NodeRemovexattrer)((*JanusNode)(nil))
 
 func (n *JanusNode) Removexattr(ctx context.Context, attr string) syscall.Errno {
 	start := time.Now()
-	d := n.resolve().Decision
+	d := n.resolve(ctx).Decision
 	dec := d.String()
 	defer func() { n.observe("removexattr", dec, 0, start) }()
 	if d != engine.Allowed {
@@ -538,7 +577,7 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 	// Re-resolve on every read so policy changes (FR-18 / FR-20) are picked
 	// up immediately — the pattern set at open time may be stale after a
 	// config-file reload.
-	res := h.node.resolve()
+	res := h.node.resolve(ctx)
 	switch res.Decision {
 	case engine.Hidden:
 		if h.node.root.Observe != nil {
