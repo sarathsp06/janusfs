@@ -52,8 +52,8 @@ later blocks anything earlier.
 | 04 | [Linux namespace exec](04-linux-namespace-exec.md) | — | L | done, **unverified on real Linux** — see below |
 | 05 | [Dirfd backing layer](05-dirfd-backing-layer.md) | — | L | read path done; mutations still via LoopbackNode |
 | 06 | [Process identity](06-process-identity.md) | 05 | M | Tasks 1-2 done; 3-4 deferred pending 07 |
-| 07 | macOS path-preserving mode | 05, 06 | **not written** | — |
-| 08 | Reload revocation of open handles | 03 | **not written** | — |
+| 07 | [macOS path-preserving mode](07-macos-path-preserving.md) | 05, 06 | L | design captured; implementation gated on PRP 06 Tasks 3-4 |
+| 08 | [Reload revocation of open handles](08-reload-revocation.md) | 03 | S | done |
 
 **PRP 04 was implemented on a darwin-only development machine**, where the
 Linux-only mechanisms it depends on (`CLONE_NEWNS`/`CLONE_NEWUSER`,
@@ -72,12 +72,12 @@ shadow bind mount instead (see
 implemented" section for the full reasoning). Run the isolation test suite on
 a real Linux machine before treating PRP 04 as validated.
 
-07 and 08 are deliberately unwritten. 07's viability depends on the benchmark
-that is 06's first task: if a per-operation identity lookup does not fit the
-latency budget, macOS path-preserving mode does not ship and 07 never gets
-written. 08 should be designed after 03's cache exists, because the cache
-determines whether re-checking a decision per read is affordable at all. Writing
-either now would be guesswork dressed as a plan.
+07 and 08 were deliberately unwritten until their prerequisites landed. 08
+implemented after PRP 03's cache made per-read re-checks essentially free
+(~55 ns cache-hit resolve). 07 written after PRP 06 Task 1 confirmed the
+identity-lookup path fits inside NFR-3's budget; its implementation waits on
+PRP 06 Tasks 3 and 4, which sequence more cleanly inside 07 than as a
+separate branch (Task 4 explicitly gates on path-preserving mode existing).
 
 ## Requirement coverage
 

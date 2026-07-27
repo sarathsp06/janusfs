@@ -263,7 +263,21 @@ func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, f
 		}
 		return &maskedHandle{node: n}, fuse.FOPEN_DIRECT_IO, 0
 	default:
-		return n.LoopbackNode.Open(ctx, flags)
+		fh, ff, errno := n.LoopbackNode.Open(ctx, flags)
+		if errno != 0 {
+			return fh, ff, errno
+		}
+		// Wrap the passthrough handle so a subsequent policy reload can
+		// revoke it: without this, an fd opened while the file was
+		// ALLOWED keeps serving raw bytes after the reload turns it
+		// MASKED or HIDDEN. If the handle is not a *fs.LoopbackFile
+		// (a future go-fuse version might return something else),
+		// return it as-is — the correctness gap is what existed before,
+		// not a regression.
+		if lf, ok := fh.(*fs.LoopbackFile); ok {
+			return &revocableHandle{LoopbackFile: lf, node: n}, ff, 0
+		}
+		return fh, ff, errno
 	}
 }
 
