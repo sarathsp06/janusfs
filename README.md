@@ -457,6 +457,7 @@ $ janusfs check
 - **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
 - **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
 - **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector (there is no file watcher).
+- **Descriptor-relative reads.** The daemon opens the source directory once at mount time and every masked read goes through that retained descriptor with `O_NOFOLLOW`. Swapping a checked path for a symlink between the policy decision and the read cannot make the read follow the swap — the descriptor sees the file the decision was made against, not whatever the path string now resolves to.
 - **`~/.janusfs/` perms:** directory `0700`, files `0600`.
 
 See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / assets / leak-channels table, updated at every phase exit.
