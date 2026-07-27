@@ -24,28 +24,17 @@ Every item below was found by reading source, not by running an exploit. The
 two marked **unverified** need a test to confirm before they are treated as
 fact; the rest are readable directly from the code.
 
-Eight items closed so far — the agent hardlink bypass, the case-folding
+Nine items closed so far — the agent hardlink bypass, the case-folding
 bypass, `exec`'s silent cwd default, the duplicated control-protocol types,
 `doctor`'s unrecoverable mountpoint ([PRP 01](/PRPs/01-correctness-fixes.md)),
 the ungracefully-killed-daemon hang ([PRP 02](/PRPs/02-crash-recovery-watchdog.md)),
 the unmemoized decision engine ([PRP 03](/PRPs/03-decision-cache.md)), the
-read-path TOCTOU window ([PRP 05](/PRPs/05-dirfd-backing-layer.md)), and the
+read-path TOCTOU window ([PRP 05](/PRPs/05-dirfd-backing-layer.md)), the
 open-handle revocation gap
-([PRP 08](/PRPs/08-reload-revocation.md)) — have been removed from this
+([PRP 08](/PRPs/08-reload-revocation.md)), and the hardcoded dev-only mock paths — have been removed from this
 register. See those PRPs and [`log.md`](log.md) for what changed.
 
-# 1. Dev-only mock paths are hardcoded to another machine
-
-`runDaemon` honours `JANUSFS_MOCK_DEV=1` by starting two mock mounts at
-`/home/jules/.janusfs/mounts/mock-project-*` (`cmd/janusfs/daemon.go:162`).
-Harmless — it is behind an env var and only reachable deliberately — but the
-paths belong to someone else's machine and the block bypasses `resume()`
-entirely.
-
-**Fix**: derive the paths from `os.UserHomeDir()`, or delete the block and use a
-test fixture.
-
-# 2. Unverified: xattr as a redaction side channel
+# 1. Unverified: xattr as a redaction side channel
 
 `Getxattr` and `Listxattr` pass through for `Masked` files
 (`internal/mount/janus_node.go:460`, `:474`). On macOS, extended attributes can
@@ -57,7 +46,7 @@ redaction pipeline — which only processes the data fork — never sees.
 masked file and reads it back through the mount. If it comes back plaintext,
 the xattr row of the operation matrix needs to change for masked files.
 
-# 3. Unverified: whether the `readdir` inode-zeroing has a cost
+# 2. Unverified: whether the `readdir` inode-zeroing has a cost
 
 `Getattr` zeroes `out.Ino` on every call (`internal/mount/janus_node.go:209`) so
 go-fuse assigns synthetic inode numbers, avoiding "overriding ino" warnings when
@@ -68,7 +57,7 @@ explains the motivation clearly.
 stable inode identity across a remount — `find -samefile`, hardlink detection in
 `tar`/`rsync`, or `du` deduplication. Worth one test before treating it as free.
 
-# 4. `TestVirtualDir` fails on at least one real macFUSE setup
+# 3. `TestVirtualDir` fails on at least one real macFUSE setup
 
 Found while validating [PRP 01](/PRPs/01-correctness-fixes.md), and confirmed
 **pre-existing** (reproduces identically against a clean checkout of HEAD, with
