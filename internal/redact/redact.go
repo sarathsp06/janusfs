@@ -16,9 +16,10 @@ package redact
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/sarathsp06/janusfs/internal/patterns"
@@ -52,7 +53,11 @@ func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 		if p.PreFilter != nil && !p.PreFilter(buf) {
 			continue
 		}
-		for _, m := range p.Regex.FindAllSubmatchIndex(buf, -1) {
+		matches := p.Regex.FindAllSubmatchIndex(buf, -1)
+		if len(matches) > 0 && spans == nil {
+			spans = make([]Span, 0, len(matches))
+		}
+		for _, m := range matches {
 			start, end := m[0], m[1]
 			if p.GroupIndex > 0 {
 				gi := 2 * p.GroupIndex
@@ -74,22 +79,24 @@ func mergeSpans(spans []Span) []Span {
 	if len(spans) == 0 {
 		return nil
 	}
-	sort.Slice(spans, func(i, j int) bool { return spans[i].Off < spans[j].Off })
+	slices.SortFunc(spans, func(a, b Span) int {
+		return cmp.Compare(a.Off, b.Off)
+	})
 
-	out := make([]Span, 0, len(spans))
-	cur := spans[0]
-	for _, s := range spans[1:] {
-		curEnd := cur.Off + cur.Len
-		if s.Off <= curEnd {
-			if end := s.Off + s.Len; end > curEnd {
-				cur.Len = end - cur.Off
+	writeIdx := 0
+	for i := 1; i < len(spans); i++ {
+		curEnd := spans[writeIdx].Off + spans[writeIdx].Len
+		next := spans[i]
+		if next.Off <= curEnd {
+			if end := next.Off + next.Len; end > curEnd {
+				spans[writeIdx].Len = end - spans[writeIdx].Off
 			}
 			continue
 		}
-		out = append(out, cur)
-		cur = s
+		writeIdx++
+		spans[writeIdx] = next
 	}
-	return append(out, cur)
+	return spans[:writeIdx+1]
 }
 
 // Redact returns a copy of buf with every span pats matches replaced by
