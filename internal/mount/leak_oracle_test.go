@@ -1,15 +1,15 @@
 //go:build fuseintegration
 
-// TestLeakOracle is SPEC.md §14's "leak oracle": sentinel secrets are
+// TestLeakOracle is the leak oracle: sentinel secrets are
 // planted in a real fixture tree, mounted through a real macFUSE mount via
 // the actual Adapter, and every byte successfully read through the mount
 // is scanned for them. It is the security assertion layer for Phase 2 and
-// on (SPEC §22): a new masking feature adds new sentinels here, not a
+// on: a new masking feature adds new sentinels here, not a
 // parallel test mechanism.
 //
 // Requires macFUSE installed and approved (`make leak-oracle` /
-// `make integration`, both behind the fuseintegration build tag per
-// SPEC.md §22.4 and the Makefile). Skips (not fails) if mounting doesn't
+// `make integration`, both behind the fuseintegration build tag). Skips, rather
+// than fails, if mounting doesn't
 // come up within the timeout, so this suite doesn't block CI/dev machines
 // without macFUSE approved.
 package mount
@@ -40,8 +40,8 @@ const (
 
 func mountForTest(t *testing.T, src, mountpoint string) (*Adapter, func()) {
 	t.Helper()
-	// Isolate from any real ~/.janusfs/config on the machine running this
-	// test (a global rule level, docs/SPEC_AMENDMENTS.md 2026-07-17/18) —
+	// Isolate from any real ~/.janusfs/config on the machine running this test,
+	// since that is a live global rule level:
 	// this test's fixtures and assertions are self-contained and must not
 	// depend on the developer's own machine-wide defaults.
 	t.Setenv("HOME", t.TempDir())
@@ -135,7 +135,7 @@ func TestLeakOracle(t *testing.T) {
 		}
 		allReadBytes.Write(data)
 
-		// Byte-length preservation (SPEC §2 "Redaction"): masked content
+		// Byte-length preservation: masked content
 		// must be the exact same size as the real file.
 		realInfo, err := os.Stat(filepath.Join(src, name))
 		if err != nil {
@@ -161,8 +161,7 @@ func TestLeakOracle(t *testing.T) {
 }
 
 // TestLeakOracleOffsetReads exercises dd-style non-zero-offset reads
-// against a masked file, per SPEC.md Phase 2's exit criterion ("dd offset
-// reads line up") — the leak oracle must hold at any read offset, not just
+// against a masked file: the leak oracle must hold at any read offset, not just
 // a single whole-file read from 0.
 func TestLeakOracleOffsetReads(t *testing.T) {
 	src := t.TempDir()
@@ -200,8 +199,8 @@ func TestLeakOracleOffsetReads(t *testing.T) {
 		t.Fatalf("len(full)=%d, want %d", len(full), len(content))
 	}
 	// env-value masks the *value* of every "KEY=value" line by design
-	// (FR-16: it can't tell secrets from non-secrets by key name, so it
-	// redacts every value) — only the key names and '=' survive, not
+	// — it can't tell secrets from non-secrets by key name, so it redacts every
+	// value. Only the key names and '=' survive, not
 	// "nonsecretvalue"/"alsofine" themselves.
 	if !strings.Contains(string(full), "PREFIX_KEY=") || !strings.Contains(string(full), "SUFFIX=") {
 		t.Fatalf("expected key names to survive redaction, got %q", full)

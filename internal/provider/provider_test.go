@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,6 +13,10 @@ import (
 
 	"github.com/sarathsp06/janusfs/internal/patterns"
 )
+
+func opener(path string) Opener {
+	return func() (io.ReadCloser, error) { return os.Open(path) }
+}
 
 func writeFile(t *testing.T, path, content string) ContentKey {
 	t.Helper()
@@ -48,7 +53,7 @@ func TestReadAtBasicHitAndMiss(t *testing.T) {
 
 	c := NewRamCache(1<<20, 1<<20, 1<<20)
 	p := make([]byte, 64)
-	n, err := c.ReadAt(context.Background(), key, pats, p, 0)
+	n, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path))
 	if err != nil {
 		t.Fatalf("ReadAt: %v", err)
 	}
@@ -63,7 +68,7 @@ func TestReadAtBasicHitAndMiss(t *testing.T) {
 	}
 
 	// Second read with the same key is a cache hit.
-	n2, err := c.ReadAt(context.Background(), key, pats, p, 0)
+	n2, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path))
 	if err != nil {
 		t.Fatalf("ReadAt (2nd): %v", err)
 	}
@@ -83,7 +88,7 @@ func TestReadAtOffset(t *testing.T) {
 
 	c := NewRamCache(1<<20, 1<<20, 1<<20)
 	p := make([]byte, 5)
-	n, err := c.ReadAt(context.Background(), key, pats, p, int64(len("API_KEY=***********\n")))
+	n, err := c.ReadAt(context.Background(), key, pats, p, int64(len("API_KEY=***********\n")), opener(key.Path))
 	if err != nil {
 		t.Fatalf("ReadAt: %v", err)
 	}
@@ -93,7 +98,7 @@ func TestReadAtOffset(t *testing.T) {
 }
 
 func TestReadAtStaleKeyServesStaleThenRebuilds(t *testing.T) {
-	// SPEC.md §8.3 / FR-20: a read that finds its key stale is served the
+	// A read that finds its key stale is served the
 	// *previous* redacted bytes immediately (if the pattern set is
 	// unchanged) while a rebuild runs in the background; only a
 	// subsequent read observes the rebuilt content.
@@ -104,7 +109,7 @@ func TestReadAtStaleKeyServesStaleThenRebuilds(t *testing.T) {
 
 	c := NewRamCache(1<<20, 1<<20, 1<<20)
 	p := make([]byte, 64)
-	if _, err := c.ReadAt(context.Background(), key1, pats, p, 0); err != nil {
+	if _, err := c.ReadAt(context.Background(), key1, pats, p, 0, opener(key1.Path)); err != nil {
 		t.Fatalf("ReadAt: %v", err)
 	}
 
@@ -115,7 +120,7 @@ func TestReadAtStaleKeyServesStaleThenRebuilds(t *testing.T) {
 		t.Fatal("test setup: expected key to change after rewrite")
 	}
 
-	n, err := c.ReadAt(context.Background(), key2, pats, p, 0)
+	n, err := c.ReadAt(context.Background(), key2, pats, p, 0, opener(key2.Path))
 	if err != nil {
 		t.Fatalf("ReadAt after change: %v", err)
 	}
@@ -127,7 +132,7 @@ func TestReadAtStaleKeyServesStaleThenRebuilds(t *testing.T) {
 	// for the same (now-cached) key must reflect the new content.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		n, err := c.ReadAt(context.Background(), key2, pats, p, 0)
+		n, err := c.ReadAt(context.Background(), key2, pats, p, 0, opener(key2.Path))
 		if err != nil {
 			t.Fatalf("ReadAt (waiting for rebuild): %v", err)
 		}
@@ -150,7 +155,7 @@ func TestReadAtOversizeBypassesCache(t *testing.T) {
 
 	c := NewRamCache(1<<20, 4 /* tiny maxFile */, 1<<20)
 	p := make([]byte, 64)
-	n, err := c.ReadAt(context.Background(), key, pats, p, 0)
+	n, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path))
 	if err != nil {
 		t.Fatalf("ReadAt (oversize): %v", err)
 	}
@@ -170,7 +175,7 @@ func TestInvalidateDropsEntry(t *testing.T) {
 
 	c := NewRamCache(1<<20, 1<<20, 1<<20)
 	p := make([]byte, 64)
-	if _, err := c.ReadAt(context.Background(), key, pats, p, 0); err != nil {
+	if _, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path)); err != nil {
 		t.Fatal(err)
 	}
 	if stats := c.Stats(); stats.Entries != 1 {
@@ -190,7 +195,7 @@ func TestInvalidateAllDropsEverything(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		key := writeFile(t, filepath.Join(dir, string(rune('a'+i))+".env"), "API_KEY=value12345678\n")
 		p := make([]byte, 64)
-		if _, err := c.ReadAt(context.Background(), key, pats, p, 0); err != nil {
+		if _, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -214,7 +219,7 @@ func TestEvictionRespectsMaxBytes(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		key := writeFile(t, filepath.Join(dir, string(rune('a'+i))+".env"), content)
 		p := make([]byte, len(content))
-		if _, err := c.ReadAt(context.Background(), key, pats, p, 0); err != nil {
+		if _, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path)); err != nil {
 			t.Fatal(err)
 		}
 		lastKey = key
@@ -229,7 +234,7 @@ func TestEvictionRespectsMaxBytes(t *testing.T) {
 	// The most recently used entry must have survived eviction (LRU evicts
 	// from the back, not the just-inserted front).
 	p := make([]byte, len(content))
-	n, err := c.ReadAt(context.Background(), lastKey, pats, p, 0)
+	n, err := c.ReadAt(context.Background(), lastKey, pats, p, 0, opener(lastKey.Path))
 	if err != nil {
 		t.Fatalf("ReadAt for most-recent entry: %v", err)
 	}
@@ -254,7 +259,7 @@ func TestConcurrentReadsSinglePathNoRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			p := make([]byte, 64)
-			n, err := c.ReadAt(context.Background(), key, pats, p, 0)
+			n, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path))
 			if err != nil {
 				errs <- err
 				return

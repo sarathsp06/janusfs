@@ -1,14 +1,14 @@
 //go:build darwin
 
-// Package mount implements the FUSE adapter described in SPEC.md §6/§7, as
-// amended by docs/SPEC_AMENDMENTS.md (2026-07-18): the adapter is built on
-// github.com/hanwen/go-fuse/v2 over macFUSE, replacing the earlier
-// jacobsa/fuse + FUSE-T stack whose NFS transport made mounting unreliable.
+// Package mount is the FUSE adapter, built on github.com/hanwen/go-fuse/v2 over
+// macFUSE. It replaces an earlier jacobsa/fuse + FUSE-T stack whose NFS
+// transport made mounting unreliable.
 //
 // The decision-bearing filesystem (JanusRoot/JanusNode, janus_node.go)
-// embeds go-fuse's fs.LoopbackRoot/LoopbackNode and overrides only the ops
-// FR-7's ALLOWED/MASKED/HIDDEN matrix says must differ — everything else
-// (Lookup, Getattr, Statfs, …) is inherited passthrough behavior.
+// embeds go-fuse's fs.LoopbackRoot/LoopbackNode and overrides only the
+// operations whose behaviour must differ between ALLOWED, MASKED, and HIDDEN.
+// Everything else (Lookup, Getattr, Statfs, …) is inherited passthrough
+// behaviour.
 package mount
 
 import (
@@ -16,6 +16,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -25,7 +26,7 @@ import (
 )
 
 // OpEvent carries the observable fields of a single FUSE operation
-// for the adapter's Observe callback (FR-22).
+// for the adapter's Observe callback.
 type OpEvent struct {
 	Op        string
 	Path      string
@@ -36,11 +37,11 @@ type OpEvent struct {
 }
 
 // Adapter mounts a decision-bearing (Allowed/Masked/Hidden) view of a
-// source directory via macFUSE (SPEC.md §6/§7).
+// source directory via macFUSE.
 type Adapter struct {
-	// Engine resolves each path's Decision (SPEC §7); required.
+	// Engine resolves each path's Decision; required.
 	Engine *engine.Engine
-	// Provider serves redacted bytes for Masked reads (SPEC §8.3); required.
+	// Provider serves redacted bytes for Masked reads; required.
 	Provider *provider.RamCache
 
 	// ErrorLogger receives go-fuse diagnostic messages: conditions where the
@@ -54,12 +55,12 @@ type Adapter struct {
 	// OnMounted, if set, is called once the mount is established and serving
 	// — after fs.Mount has returned and the kernel handshake has completed —
 	// but before Mount blocks waiting for unmount. This lets a caller (e.g.
-	// the CLI's FR-31 status block) know exactly when it's safe to report the
+	// the CLI's success status block) know exactly when it's safe to report the
 	// mount as up, without changing Mount's blocking contract.
 	OnMounted func()
 
 	// Observe, if set, is called with an OpEvent for every FUSE operation the
-	// adapter processes (FR-22). It must not block — the FUSE op calls it
+	// adapter processes. It must not block — the FUSE op calls it
 	// synchronously.
 	Observe func(OpEvent)
 
@@ -79,10 +80,11 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 		return errors.New("mount: Engine and Provider are required")
 	}
 
-	root, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe)
+	root, jr, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe)
 	if err != nil {
 		return err
 	}
+	defer jr.Backing.Close()
 
 	opts := &fs.Options{
 		// fs.Options.Logger is the filesystem-level diagnostic sink; it
@@ -95,6 +97,19 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	// reported mode bits rather than having go-fuse do it — avoids spurious
 	// EACCES for root vs. user ownership mismatches on the loopback.
 	opts.NullPermissions = true
+
+	// Zero attribute, entry, and negative-lookup timeouts: a policy reload
+	// must take effect on the very next lookup, so the kernel is never allowed
+	// to answer from a cached dentry or attribute — otherwise a file freshly
+	// tightened from Allowed to Masked/Hidden could keep serving real bytes
+	// through a still-cached lookup. This costs an upcall per lookup; that is
+	// the intended trade, not an oversight. (Synthetic .janusfs nodes are
+	// unaffected — they set their own longer timeouts directly, since their
+	// content isn't policy-governed.)
+	zeroTimeout := time.Duration(0)
+	opts.AttrTimeout = &zeroTimeout
+	opts.EntryTimeout = &zeroTimeout
+	opts.NegativeTimeout = &zeroTimeout
 
 	// macFUSE holds a volume busy by default: Spotlight (mdworker) indexes it
 	// and Finder browses it, so a graceful unmount fails with EBUSY forever.
@@ -127,7 +142,7 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	return nil
 }
 
-// Unmount requests a clean unmount (FR-2/FR-3).
+// Unmount requests a clean unmount.
 func (a *Adapter) Unmount(mountpoint string) error {
 	if a.server == nil {
 		return errors.New("mount: no active mount to unmount")

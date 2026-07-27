@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestCreateGating(t *testing.T) {
@@ -125,6 +126,33 @@ func TestVirtualDir(t *testing.T) {
 	}
 }
 
+func TestLinkDeniesLaunderingMaskedFile(t *testing.T) {
+	src := t.TempDir()
+	mountpoint := t.TempDir()
+
+	writeFixture(t, filepath.Join(src, ".janusmask"), "secret.env : env-value\n")
+	writeFixture(t, filepath.Join(src, "secret.env"), "API_KEY=super-secret-value\n")
+
+	_, cleanup := mountForTest(t, src, mountpoint)
+	defer cleanup()
+
+	// Attempt to hardlink the masked file to an unmasked name. Without the fix,
+	// this succeeds because Link only checked the new name's decision, never the
+	// existing (masked) inode's own decision — one syscall away from reading the
+	// plaintext through the new name.
+	err := os.Link(filepath.Join(mountpoint, "secret.env"), filepath.Join(mountpoint, "copy.txt"))
+	if err == nil {
+		t.Fatal("expected EACCES hardlinking a masked file to a new name, but Link succeeded")
+	}
+	if !os.IsPermission(err) {
+		t.Errorf("expected permission error, got %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(src, "copy.txt")); statErr == nil {
+		t.Fatal("copy.txt should not have been created on disk")
+	}
+}
+
 func TestListxattrGating(t *testing.T) {
 	src := t.TempDir()
 	mountpoint := t.TempDir()
@@ -135,13 +163,56 @@ func TestListxattrGating(t *testing.T) {
 	_, cleanup := mountForTest(t, src, mountpoint)
 	defer cleanup()
 
-	// macOS / Linux direct syscall listxattr test.
-	// In Go, on macOS or Linux, we can check listxattr using syscall.Listxattr.
-	// But Listxattr might not be supported on all environments, or might return ENOTSUP.
-	// However, if the file is HIDDEN, it must return EACCES instead of whatever it would normally return.
-	// Let's do listxattr on the hidden file:
-	_, err := syscall.Listxattr(filepath.Join(mountpoint, "hidden.txt"), nil)
-	if err != syscall.EACCES && err != syscall.ENOTSUP && err != syscall.ENOSYS {
+	// macOS / Linux direct syscall listxattr test. golang.org/x/sys/unix is used
+	// rather than the stdlib syscall package because syscall.Listxattr isn't
+	// exposed on darwin's syscall package at all (only on linux's), while
+	// unix.Listxattr is defined identically on both.
+	// Listxattr might not be supported on all environments, or might return
+	// ENOTSUP. However, if the file is HIDDEN, it must return EACCES instead of
+	// whatever it would normally return. Let's do listxattr on the hidden file:
+	_, err := unix.Listxattr(filepath.Join(mountpoint, "hidden.txt"), nil)
+	if err != unix.EACCES && err != unix.ENOTSUP && err != unix.ENOSYS {
 		t.Errorf("expected EACCES on Listxattr of hidden file, got %v", err)
+	}
+}
+
+// TestReloadTakesEffectWithoutRemount asserts that a policy tightening (here,
+// a file newly added to .janusignore) is visible on the very next lookup and
+// open of that path, with no remount. This is the behavioural counterpart to
+// the zero attribute/entry/negative-lookup FUSE timeouts set in
+// mount_darwin.go/mount_linux.go: if the kernel were allowed to cache a
+// pre-reload lookup or attribute, a file just tightened to HIDDEN could keep
+// answering from that cache instead of re-consulting the (already reloaded)
+// engine.
+func TestReloadTakesEffectWithoutRemount(t *testing.T) {
+	src := t.TempDir()
+	mountpoint := t.TempDir()
+
+	target := filepath.Join(src, "soon-hidden.txt")
+	writeFixture(t, target, "still readable for now")
+
+	a, cleanup := mountForTest(t, src, mountpoint)
+	defer cleanup()
+
+	mountedPath := filepath.Join(mountpoint, "soon-hidden.txt")
+
+	// Before: readable (no rules at all yet).
+	if _, err := os.ReadFile(mountedPath); err != nil {
+		t.Fatalf("expected the file to be readable before any rule exists, got %v", err)
+	}
+
+	// Tighten policy: add it to .janusignore, then reload the SAME engine the
+	// live mount already uses — no remount, no new Adapter.
+	writeFixture(t, filepath.Join(src, ".janusignore"), "soon-hidden.txt\n")
+	if err := a.Engine.Reload(src); err != nil {
+		t.Fatalf("Engine.Reload: %v", err)
+	}
+
+	// After: a FRESH lookup+open of the same path, with no remount, must see
+	// the new policy immediately.
+	if _, err := os.ReadFile(mountedPath); err == nil {
+		t.Fatal("expected EACCES reading a file just hidden by reload, but the read succeeded")
+	} else if !os.IsPermission(err) {
+		t.Errorf("expected a permission error after reload, got %v", err)
 	}
 }

@@ -1,11 +1,11 @@
 //go:build darwin || linux
 
-// JanusRoot/JanusNode implement SPEC.md §6/§7's decision-bearing FUSE
-// adapter by embedding fs.LoopbackNode and overriding only the ops FR-7's
-// matrix says must differ between ALLOWED/MASKED/HIDDEN — every other op
-// (Lookup, Getattr, Statfs, …) is inherited from LoopbackNode unchanged,
-// which already gives FR-7's "lookup/getattr: real attrs for all three
-// states" for free (no override needed: the real file is always stat'd).
+// JanusRoot and JanusNode are the decision-bearing FUSE adapter: they embed
+// go-fuse's loopback types and override only the operations whose behaviour must
+// differ between ALLOWED, MASKED, and HIDDEN. Every other operation (Lookup,
+// Getattr, Statfs, …) is inherited from LoopbackNode unchanged, which is why
+// lookup and getattr report real attributes for all three decisions with no code
+// of our own: the real file is always stat'd.
 package mount
 
 import (
@@ -21,8 +21,10 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"golang.org/x/sys/unix"
 
 	"github.com/sarathsp06/janusfs/internal/apperrors"
+	"github.com/sarathsp06/janusfs/internal/backing"
 	"github.com/sarathsp06/janusfs/internal/engine"
 	"github.com/sarathsp06/janusfs/internal/provider"
 )
@@ -38,10 +40,22 @@ type JanusRoot struct {
 	Provider  *provider.RamCache
 	Observe   func(OpEvent)
 	StartTime time.Time
+
+	// Backing is a descriptor-relative handle to the source root, acquired
+	// once at construction. contentKey, readRaw, and decisionFor's Lstat use
+	// it instead of resolving a path string against LoopbackRoot.Path on every
+	// call, closing the time-of-check-to-time-of-use window a path-based
+	// re-resolution leaves open: the decision and the I/O now share the same
+	// resolution rather than each re-deriving it. Mutation operations
+	// (Unlink/Rename/Symlink/Link/Mkdir/Setattr's chmod, and the embedded
+	// LoopbackNode's own read/write handle and directory-stream plumbing) are
+	// not yet routed through Backing — see internal/backing's package doc for
+	// why that split is deliberate, not an oversight.
+	Backing *backing.Root
 }
 
 // JanusNode is one FUSE node: a passthrough LoopbackNode plus the
-// decision-bearing overrides SPEC.md FR-7 requires. isDir is captured at
+// decision-bearing overrides. isDir is captured at
 // construction time (from the real file's stat) rather than re-derived,
 // since LoopbackNode's own dir-ness bookkeeping isn't exported.
 type JanusNode struct {
@@ -52,15 +66,25 @@ type JanusNode struct {
 
 // newJanusRoot constructs the FUSE root node for src, wired to eng/prov.
 // Mirrors fs.NewLoopbackRoot's construction, but with NewNode set to
-// produce JanusNode instead of the library's default LoopbackNode (SPEC §6:
-// "embedding fs.LoopbackNode and overriding only the decision ops").
-func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, observe func(OpEvent)) (fs.InodeEmbedder, error) {
+// produce JanusNode instead of the library's default LoopbackNode.
+func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, observe func(OpEvent)) (fs.InodeEmbedder, *JanusRoot, error) {
 	var st syscall.Stat_t
 	if err := syscall.Stat(src, &st); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe, StartTime: time.Now()}
+	// Acquired before anything else touches src: in path-preserving mode this
+	// must happen before the FUSE mount is established over the same path, or
+	// resolving src by string here would already re-enter the not-yet-existing
+	// mount. In the disjoint model (the only one wired up today) there is no
+	// such mount, but acquiring it here regardless means this package has
+	// exactly one way of reaching the backing tree, not two.
+	br, err := backing.Open(src)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mount: opening backing root %q: %w", src, err)
+	}
+
+	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe, StartTime: time.Now(), Backing: br}
 	jr.LoopbackRoot.Path = src
 	jr.LoopbackRoot.Dev = uint64(st.Dev)
 	jr.LoopbackRoot.NewNode = func(rootData *fs.LoopbackRoot, parent *fs.Inode, name string, st *syscall.Stat_t) fs.InodeEmbedder {
@@ -73,7 +97,7 @@ func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, obser
 
 	rootNode := jr.LoopbackRoot.NewNode(&jr.LoopbackRoot, nil, "", &st)
 	jr.LoopbackRoot.RootNode = rootNode
-	return rootNode, nil
+	return rootNode, jr, nil
 }
 
 // isConfigFile reports whether the given relative path is a .janusignore or
@@ -84,7 +108,7 @@ func isConfigFile(relPath string) bool {
 	return base == ".janusignore" || base == ".janusmask"
 }
 
-// observe emits a FR-22 event about this operation if an Observe callback
+// observe emits an event about this operation if an Observe callback
 // is configured on the root. Callers that need to report bytes or latency
 // construct the OpEvent directly.
 func (n *JanusNode) observe(op, decision string, bytes int64, start time.Time) {
@@ -115,8 +139,8 @@ func (n *JanusNode) absPath() string {
 	return filepath.Join(n.root.LoopbackRoot.Path, n.relPath())
 }
 
-// resolve returns this node's own Decision (FR-5..FR-9), recovering from
-// any panic in the engine call into a fail-closed Hidden result (NFR-6) —
+// resolve returns this node's own Decision, recovering from
+// any panic in the engine call into a fail-closed Hidden result —
 // the one piece of that invariant this package is responsible for, since
 // go-fuse's own dispatch loop does not know about internal/engine.
 func (n *JanusNode) resolve() (res engine.Resolution) {
@@ -140,15 +164,23 @@ func (n *JanusNode) resolve() (res engine.Resolution) {
 func (n *JanusNode) decisionFor(name string) engine.Decision {
 	rel := path.Join(n.relPath(), name)
 	isDir := false
-	if fi, err := os.Lstat(filepath.Join(n.root.LoopbackRoot.Path, filepath.FromSlash(rel))); err == nil {
-		isDir = fi.IsDir()
+	// Descriptor-relative, not a path re-join: the decision this feeds is
+	// about to gate a mutation (Unlink/Rename/Symlink/Link/Mkdir/Create), so
+	// resolving isDir through the same retained root the eventual I/O will
+	// (once mutations are routed through Backing too) go through keeps this
+	// check and that I/O looking at the same file, not each re-deriving its
+	// own path resolution.
+	if st, err := n.root.Backing.LstatAt(rel); err == nil {
+		isDir = st.Mode&unix.S_IFMT == unix.S_IFDIR
 	}
 	return n.root.Engine.Resolve(rel, isDir).Decision
 }
 
 var _ = (fs.NodeLookuper)((*JanusNode)(nil))
 
-// Lookup implements FR-27: synthesizes the virtual .janusfs directory.
+// Lookup synthesizes the virtual .janusfs directory. Intercepting the name
+// before any policy lookup is what makes it impossible for a user rule to hide
+// or mask it.
 func (n *JanusNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if name == ".janusfs" && (n.relPath() == "" || n.relPath() == ".") {
 		child := &janusVirtualDir{root: n.root}
@@ -166,7 +198,7 @@ func (n *JanusNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 var _ = (fs.NodeReaddirer)((*JanusNode)(nil))
 
-// Readdir implements FR-27: injects .janusfs entry inside the root directory.
+// Readdir injects the synthetic .janusfs entry inside the root directory.
 func (n *JanusNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	stream, errno := n.LoopbackNode.Readdir(ctx)
 	if errno != 0 {
@@ -198,7 +230,6 @@ func (n *JanusNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 var _ = (fs.NodeOpener)((*JanusNode)(nil))
 
-// Open implements FR-7's open matrix: HIDDEN denies unconditionally;
 // Getattr overrides LoopbackNode to zero the inode number reported to the
 // FUSE bridge. LoopbackNode reports the real filesystem inode, but when files
 // are replaced (git checkout, editor rename-on-save) the same FUSE node gets a
@@ -248,7 +279,7 @@ func (n *JanusNode) Ioctl(ctx context.Context, f fs.FileHandle, cmd uint32, arg 
 
 var _ = (fs.NodeOpendirHandler)((*JanusNode)(nil))
 
-// OpendirHandle implements FR-8: a HIDDEN directory denies opendir/readdir
+// OpendirHandle denies opendir/readdir on a HIDDEN directory
 // of itself (its name still appears in its parent's listing — that's the
 // parent's Readdir, untouched here — only descending into it is denied).
 func (n *JanusNode) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
@@ -264,8 +295,8 @@ func (n *JanusNode) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHan
 
 var _ = (fs.NodeSetattrer)((*JanusNode)(nil))
 
-// Setattr implements FR-7's chmod/chown/utimens/truncate row: passthrough
-// only when this node itself is ALLOWED.
+// Setattr covers chmod, chown, utimens, and truncate: passthrough only when
+// this node itself is ALLOWED.
 func (n *JanusNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	start := time.Now()
 	if isConfigFile(n.relPath()) {
@@ -327,8 +358,8 @@ func (n *JanusNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 var _ = (fs.NodeRenamer)((*JanusNode)(nil))
 
-// Rename implements FR-7's "rename (as source or target)" row: denied if
-// either the source or the destination name resolves non-Allowed.
+// Rename is denied if either the source or the destination name resolves
+// non-Allowed, so a masked file cannot be moved to an unmasked name.
 func (n *JanusNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	start := time.Now()
 
@@ -375,8 +406,25 @@ func (n *JanusNode) Symlink(ctx context.Context, target, name string, out *fuse.
 
 var _ = (fs.NodeLinker)((*JanusNode)(nil))
 
+// Link denies creating a new hardlink unless BOTH the target inode's own path
+// and the new name resolve Allowed. Checking only the new name (as an earlier
+// version of this method did) lets an agent launder a Masked or Hidden file in
+// one syscall: link a masked "secrets.env" to an unmasked "copy.txt", then read
+// copy.txt for plaintext. A target that isn't a *JanusNode (not a node this
+// mount constructed) is denied outright, since its path can't be established as
+// safe.
 func (n *JanusNode) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	start := time.Now()
+	tn, ok := target.(*JanusNode)
+	if !ok {
+		n.observe("link", "HIDDEN", 0, start)
+		return nil, syscall.EACCES
+	}
+	targetDecision := tn.resolve().Decision
+	if targetDecision != engine.Allowed {
+		n.observe("link", targetDecision.String(), 0, start)
+		return nil, syscall.EACCES
+	}
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("link", dec, 0, start) }()
@@ -401,8 +449,8 @@ func (n *JanusNode) Mknod(ctx context.Context, name string, mode, rdev uint32, o
 
 var _ = (fs.NodeCreater)((*JanusNode)(nil))
 
-// Create implements FR-7's O_CREAT row: denied if the target name is a config
-// file or resolves to HIDDEN or MASKED.
+// Create is denied if the target name is a config file or resolves to HIDDEN or
+// MASKED.
 func (n *JanusNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	start := time.Now()
 	childRel := path.Join(n.relPath(), name)
@@ -421,10 +469,10 @@ func (n *JanusNode) Create(ctx context.Context, name string, flags uint32, mode 
 
 var _ = (fs.NodeReadlinker)((*JanusNode)(nil))
 
-// Readlink implements FR-7 (passthrough for Allowed/Masked, EACCES for
-// Hidden) plus FR-10: a target that resolves outside the source tree is
-// served as dangling (ENOENT) rather than handed to the caller, so the
-// mount can never become an escape hatch to an unprotected path.
+// Readlink passes through for Allowed and Masked and returns EACCES for Hidden.
+// A target resolving outside the source tree is served as dangling (ENOENT)
+// rather than handed to the caller, so the mount can never become an escape
+// hatch to an unprotected path.
 func (n *JanusNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	start := time.Now()
 	d := n.resolve().Decision
@@ -444,7 +492,7 @@ func (n *JanusNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 }
 
 // escapesRoot reports whether target (a symlink's raw content, found at
-// symlinkAbsPath) resolves outside rootAbs (FR-10).
+// symlinkAbsPath) resolves outside rootAbs.
 func escapesRoot(rootAbs, symlinkAbsPath, target string) bool {
 	resolved := target
 	if !filepath.IsAbs(resolved) {
@@ -470,7 +518,7 @@ func (n *JanusNode) Getxattr(ctx context.Context, attr string, dest []byte) (uin
 
 var _ = (fs.NodeListxattrer)((*JanusNode)(nil))
 
-// Listxattr implements FR-7's xattr row: denied (EACCES) if HIDDEN.
+// Listxattr is denied (EACCES) if HIDDEN, and passes through otherwise.
 func (n *JanusNode) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errno) {
 	start := time.Now()
 	d := n.resolve().Decision
@@ -508,11 +556,16 @@ func (n *JanusNode) Removexattr(ctx context.Context, attr string) syscall.Errno 
 	return n.LoopbackNode.Removexattr(ctx, attr)
 }
 
-// maskedHandle is the "virtual handle" FR-7's open(O_RDONLY) row promises
-// for a MASKED file: reads are served by internal/provider, never by
+// testRaceHook is a test-only seam (see maskedHandle.Read) for deterministically
+// racing a filesystem change into the window between a read's decision and its
+// backing I/O. Nil in production; only ever set by a test in this package.
+var testRaceHook func()
+
+// maskedHandle is the virtual handle returned for a read-only open of a MASKED
+// file: reads are served by internal/provider, never by
 // passing the real fd through. FOPEN_DIRECT_IO (set in JanusNode.Open) asks
 // the kernel to skip page-cache and call Read on every access, so a
-// content or pattern-set change (FR-20) can never be masked by a stale
+// content or pattern-set change can never be masked by a stale
 // cached page.
 type maskedHandle struct {
 	node *JanusNode
@@ -520,10 +573,10 @@ type maskedHandle struct {
 
 var _ = (fs.FileReader)((*maskedHandle)(nil))
 
-// Read implements FR-7's masked read row and FR-21's backstop: it re-stats
-// the real file on every call (never trusts a handle-lifetime-cached key)
+// Read serves redacted bytes. It re-stats the real file on every call, never
+// trusting a key cached for the handle's lifetime,
 // so a concurrent edit is always caught, and recovers any panic from the
-// provider/redact path into EIO (NFR-6) rather than crashing the mount.
+// provider/redact path into EIO rather than crashing the mount.
 func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result fuse.ReadResult, errno syscall.Errno) {
 	start := time.Now()
 	defer func() {
@@ -535,10 +588,18 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 		}
 	}()
 
-	// Re-resolve on every read so policy changes (FR-18 / FR-20) are picked
+	// Re-resolve on every read so policy changes are picked
 	// up immediately — the pattern set at open time may be stale after a
 	// config-file reload.
 	res := h.node.resolve()
+	if testRaceHook != nil {
+		// Test-only seam: lets a test deterministically race a filesystem
+		// change (e.g. swapping this path for a symlink) into the exact
+		// window between the decision above and the backing I/O below,
+		// rather than relying on a timing-dependent sleep. Always nil in
+		// production.
+		testRaceHook()
+	}
 	switch res.Decision {
 	case engine.Hidden:
 		if h.node.root.Observe != nil {
@@ -559,7 +620,7 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 		}
 		return nil, syscall.EIO
 	}
-	n, err := h.node.root.Provider.ReadAt(ctx, key, res.Patterns, dest, off)
+	n, err := h.node.root.Provider.ReadAt(ctx, key, res.Patterns, dest, off, h.backingOpener())
 	if err != nil {
 		if h.node.root.Observe != nil {
 			h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "MASKED", LatencyUs: time.Since(start).Microseconds()})
@@ -575,35 +636,82 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 // readRaw is a fast-path for files that were masked at open time but are now
 // ALLOWED after a policy reload. It reads directly from the underlying real
 // file, bypassing the redaction pipeline entirely.
+//
+// Opened via the retained backing descriptor rather than a path re-join, with
+// O_NOFOLLOW: this decision was made for exactly this path, so if the final
+// component is now a symlink, the file the decision was about is not the file
+// this call would otherwise open.
 func (h *maskedHandle) readRaw(ctx context.Context, dest []byte, off int64, start time.Time) (result fuse.ReadResult, errno syscall.Errno) {
-	f, err := os.Open(h.node.absPath())
+	rel := h.node.relPath()
+	fd, err := h.node.root.Backing.OpenAt(rel, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		if h.node.root.Observe != nil {
-			h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "ALLOWED", LatencyUs: time.Since(start).Microseconds()})
+			h.node.root.Observe(OpEvent{Op: "read", Path: rel, Decision: "ALLOWED", LatencyUs: time.Since(start).Microseconds()})
 		}
-		return nil, apperrors.ToErrno(fmt.Errorf("readRaw open %q: %w", h.node.absPath(), err))
+		return nil, apperrors.ToErrno(fmt.Errorf("readRaw openat %q: %w", rel, err))
 	}
-	defer f.Close()
-	n, err := f.ReadAt(dest, off)
-	if err != nil && err != io.EOF {
+	defer unix.Close(fd)
+	n, err := preadFull(fd, dest, off)
+	if err != nil {
 		return nil, apperrors.ToErrno(err)
 	}
 	if h.node.root.Observe != nil {
-		h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "ALLOWED", Bytes: int64(n), LatencyUs: time.Since(start).Microseconds(), Cache: "na"})
+		h.node.root.Observe(OpEvent{Op: "read", Path: rel, Decision: "ALLOWED", Bytes: int64(n), LatencyUs: time.Since(start).Microseconds(), Cache: "na"})
 	}
 	return fuse.ReadResultData(dest[:n]), 0
 }
 
+// preadFull reads into dest at offset off via pread(2), looping until dest is
+// full or EOF, matching os.File.ReadAt's "fill the buffer unless EOF or
+// error" contract — a single unix.Pread call may return fewer bytes than
+// requested without that being EOF or an error.
+func preadFull(fd int, dest []byte, off int64) (int, error) {
+	total := 0
+	for total < len(dest) {
+		n, err := unix.Pread(fd, dest[total:], off+int64(total))
+		if n > 0 {
+			total += n
+		}
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			break // EOF
+		}
+	}
+	return total, nil
+}
+
 func (h *maskedHandle) contentKey() (provider.ContentKey, error) {
-	var st syscall.Stat_t
-	if err := syscall.Stat(h.node.absPath(), &st); err != nil {
+	st, err := h.node.root.Backing.StatAt(h.node.relPath())
+	if err != nil {
 		return provider.ContentKey{}, err
 	}
 	return provider.ContentKey{
+		// absPath() is used here only as the cache map's identity key, never
+		// as an access path — every actual read above goes through Backing.
 		Path:    h.node.absPath(),
-		MTimeNS: getMtimeNS(&st),
+		MTimeNS: st.Mtim.Sec*1e9 + st.Mtim.Nsec,
 		Size:    st.Size,
 		Inode:   st.Ino,
 		Gen:     h.node.root.Engine.Generation(),
 	}, nil
+}
+
+// backingOpener returns a provider.Opener that opens this node's real file
+// through the retained descriptor rather than by re-resolving its path —
+// what the provider's rebuild/oversize path reads is now the same resolution
+// contentKey just validated, closing the window a path-string os.Open would
+// leave open between the two. O_NOFOLLOW for the same reason as readRaw: this
+// decision was made for exactly this path, not for whatever a swapped-in
+// symlink might now point to.
+func (h *maskedHandle) backingOpener() provider.Opener {
+	return func() (io.ReadCloser, error) {
+		rel := h.node.relPath()
+		fd, err := h.node.root.Backing.OpenAt(rel, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return nil, err
+		}
+		return os.NewFile(uintptr(fd), rel), nil
+	}
 }

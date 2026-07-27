@@ -14,7 +14,7 @@ import (
 	"github.com/sarathsp06/janusfs/internal/vfsmeta"
 )
 
-// janusVirtualDir represents the synthetic read-only ".janusfs" directory (FR-27).
+// janusVirtualDir represents the synthetic read-only ".janusfs" directory.
 type janusVirtualDir struct {
 	fs.Inode
 	root *JanusRoot
@@ -62,7 +62,7 @@ func (d *janusVirtualDir) Lookup(ctx context.Context, name string, out *fuse.Ent
 	return ino, 0
 }
 
-// janusVirtualFile represents the conflicts.json or status.json synthetic file (FR-27).
+// janusVirtualFile represents the conflicts.json or status.json synthetic file.
 type janusVirtualFile struct {
 	fs.Inode
 	root *JanusRoot

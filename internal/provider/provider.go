@@ -1,17 +1,17 @@
-// Package provider implements SPEC.md §8.3's RedactedContentProvider: the
-// RAM cache of redacted bytes that internal/mount reads Masked files
-// through. It is engine-agnostic (SPEC §5's dependency rule: nothing but
-// mount/api depends on engine) — callers resolve a path's Decision and
-// Patterns themselves (internal/engine) and pass the result in.
+// Package provider is the RAM cache of redacted bytes that internal/mount reads
+// Masked files through. It deliberately does not import internal/engine:
+// callers resolve a path's Decision and pattern set themselves and pass the
+// result in, which keeps this cache testable without a rule tree and stops it
+// from becoming a second policy-resolution path.
 //
-// ContentKey is the cache-validity key (FR-21: "every masked-file read
-// validates (mtime, size, inode) against the cache key before serving" —
-// the watcher is advisory only, this check is authoritative). A read whose
-// key doesn't match the cached entry is treated as stale and triggers a
-// rebuild (FR-20): concurrent readers are served the previous redacted
+// ContentKey is the cache-validity key. Every masked read re-stats the real
+// file and validates (mtime, size, inode, generation) before serving, which
+// makes this check the authoritative change detector — there is no file
+// watcher. A read whose
+// rebuild: concurrent readers are served the previous redacted
 // bytes while the pattern set is unchanged, or block (bounded 10s, then
 // EIO) otherwise. Oversized files (> --cache-max-file) bypass the cache
-// entirely and stream-redact on every read (NFR-4).
+// entirely and stream-redact on every read.
 package provider
 
 import (
@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,14 +29,15 @@ import (
 	"github.com/sarathsp06/janusfs/internal/redact"
 )
 
-// rebuildTimeout is FR-20's bound: a concurrent reader waiting on a
-// rebuild that hasn't produced any usable bytes yet gives up after this
+// rebuildTimeout bounds how long a concurrent reader waits on a
+// rebuild that hasn't produced any usable bytes yet: it gives up after this
 // long and fails closed (EIO via apperrors.ErrRebuildTimeout), rather than
 // blocking a FUSE handler forever on a wedged rebuild.
 const rebuildTimeout = 10 * time.Second
 
 // ContentKey identifies exactly one version of one file's redacted
-// content (SPEC §8.3). Path is the absolute real path on disk. Two reads
+// content. Path is the absolute real path on disk, used ONLY as this cache's
+// map key / identity — never as an access path. Two reads
 // with an identical key are guaranteed to want the same redacted bytes;
 // any field differing means the cache entry (if any) is stale.
 type ContentKey struct {
@@ -48,8 +48,18 @@ type ContentKey struct {
 	Gen     uint64
 }
 
+// Opener returns a fresh, independently readable handle on the content a
+// ContentKey identifies. Callers (internal/mount) back this with a
+// descriptor-relative open (internal/backing) rather than re-resolving
+// ContentKey.Path as a string, so the decision that produced this key and the
+// bytes actually read for it go through the same resolution — closing the
+// window a path re-open would leave between the two. This package calls
+// Opener exactly once per rebuild (or once per readOversize call), always
+// closing what it returns.
+type Opener func() (io.ReadCloser, error)
+
 // ProviderStats is a point-in-time snapshot for janusfs doctor / the future
-// dashboard (FR-23).
+// dashboard.
 type ProviderStats struct {
 	Entries  int
 	Bytes    int64
@@ -58,11 +68,12 @@ type ProviderStats struct {
 	Rebuilds uint64
 }
 
-// RedactedContentProvider serves redacted bytes for a Masked file (SPEC
-// §8.3). ReadAt takes the caller-resolved pattern set directly (rather
-// than looking it up itself) since this package has no engine dependency.
+// RedactedContentProvider serves redacted bytes for a Masked file. ReadAt takes
+// the caller-resolved pattern set directly rather than looking it up itself,
+// since this package has no engine dependency. open is called at most once,
+// only on a genuine cache miss or oversize bypass — never on a cache hit.
 type RedactedContentProvider interface {
-	ReadAt(ctx context.Context, key ContentKey, pats []*patterns.Pattern, p []byte, off int64) (int, error)
+	ReadAt(ctx context.Context, key ContentKey, pats []*patterns.Pattern, p []byte, off int64, open Opener) (int, error)
 	Invalidate(path string)
 	InvalidateAll()
 	Stats() ProviderStats
@@ -74,7 +85,7 @@ type RedactedContentProvider interface {
 // ever writes them, exactly once, before setting built).
 type entry struct {
 	key        ContentKey
-	patternSig string // a stable signature of the pattern set the bytes were built from (FR-20's "pattern set unchanged" check)
+	patternSig string // stable signature of the pattern set the bytes were built from
 	ready      chan struct{}
 	built      bool // guarded by RamCache.mu; true once bytes/rebuildErr are final
 	bytes      []byte
@@ -82,16 +93,15 @@ type entry struct {
 	lruElem    *list.Element
 }
 
-// RamCache implements RedactedContentProvider as a single-mutex-guarded LRU
-// (SPEC §8.3 calls for "sharded"; a single mutex is this MVP's
-// simplification — the lock is only ever held for map/list bookkeeping,
-// never across a rebuild or a redact call, so contention is limited to
-// that bookkeeping, not the expensive work).
+// RamCache implements RedactedContentProvider as a single-mutex-guarded LRU.
+// The lock is only ever held for map and list bookkeeping, never across a
+// rebuild or a redact call, so contention is limited to that bookkeeping rather
+// than the expensive work.
 //
 // ponytail: single mutex, not literally sharded — upgrade to N-way sharding
 // by path hash if profiling ever shows map-lock contention under real
-// concurrent load; NFR-5's actual requirement (no FUSE handler blocks on
-// another's rebuild) is already satisfied since rebuilds run outside this
+// concurrent load. The property that actually matters — no FUSE handler blocks
+// on another's rebuild — is already satisfied, since rebuilds run outside this
 // lock.
 type RamCache struct {
 	mu       sync.Mutex
@@ -107,7 +117,7 @@ type RamCache struct {
 }
 
 // NewRamCache constructs a RamCache. maxBytes/maxFile are --cache-max-bytes
-// /--cache-max-file (NFR-4); redactBufferMax is --redact-buffer-max (§8.2),
+// /--cache-max-file; redactBufferMax is --redact-buffer-max,
 // used by the oversize-bypass streaming path.
 func NewRamCache(maxBytes, maxFile, redactBufferMax int64) *RamCache {
 	return &RamCache{
@@ -120,9 +130,9 @@ func NewRamCache(maxBytes, maxFile, redactBufferMax int64) *RamCache {
 }
 
 // ReadAt implements RedactedContentProvider.ReadAt.
-func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.Pattern, p []byte, off int64) (int, error) {
+func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.Pattern, p []byte, off int64, open Opener) (int, error) {
 	if key.Size > c.maxFile {
-		return c.readOversize(key, pats, p, off)
+		return c.readOversize(pats, p, off, open)
 	}
 
 	sig := patternSignature(pats)
@@ -140,9 +150,9 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 
 	// Stale or absent. Detach any existing (stale) entry from bookkeeping
 	// now — its bytes are superseded by the incoming rebuild either way —
-	// but keep a reference if its pattern set is unchanged (FR-20: serve
-	// those stale-but-still-valid bytes to this caller immediately while
-	// the rebuild runs for the next one).
+	// but keep a reference if its pattern set is unchanged, so those
+	// stale-but-still-redacted bytes can be served to this caller immediately
+	// while the rebuild runs for the next one.
 	var stalePrev *entry
 	if e, ok := c.entries[key.Path]; ok {
 		c.lru.Remove(e.lruElem)
@@ -160,7 +170,7 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 	ne.lruElem = c.lru.PushFront(ne)
 	c.mu.Unlock()
 
-	go c.rebuild(ne, pats)
+	go c.rebuild(ne, pats, open)
 
 	if stalePrev != nil {
 		return copyAt(stalePrev.bytes, p, off), nil
@@ -168,12 +178,12 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 	return c.waitAndServe(ctx, ne, sig, p, off)
 }
 
-// rebuild reads and redacts key.Path's real content, then publishes the
-// result (or error) by closing ready. Runs without holding c.mu: NFR-5
-// requires no FUSE handler block on a rebuild in progress, only on this
-// specific entry's own completion (waitAndServe).
-func (c *RamCache) rebuild(e *entry, pats []*patterns.Pattern) {
-	bytesOut, err := redactFile(e.key, pats)
+// rebuild reads and redacts the real content open provides, then publishes
+// the result (or error) by closing ready. Runs without holding c.mu, so no
+// FUSE handler blocks on a rebuild in progress — only on this specific
+// entry's own completion, in waitAndServe.
+func (c *RamCache) rebuild(e *entry, pats []*patterns.Pattern, open Opener) {
+	bytesOut, err := redactFile(open, pats)
 
 	c.mu.Lock()
 	e.rebuildErr = err
@@ -187,8 +197,8 @@ func (c *RamCache) rebuild(e *entry, pats []*patterns.Pattern) {
 	close(e.ready)
 }
 
-// waitAndServe blocks until e's rebuild completes (bounded by
-// rebuildTimeout, FR-20) and copies the requested range into p.
+// waitAndServe blocks until e's rebuild completes, bounded by rebuildTimeout,
+// and copies the requested range into p.
 func (c *RamCache) waitAndServe(ctx context.Context, e *entry, sig string, p []byte, off int64) (int, error) {
 	select {
 	case <-e.ready:
@@ -210,19 +220,18 @@ func (c *RamCache) waitAndServe(ctx context.Context, e *entry, sig string, p []b
 	}
 }
 
-// readOversize implements NFR-4's "single cached file > --cache-max-file is
-// refused; masked reads for such files use on-the-fly streaming redaction
-// per read." It redacts from the start of the file through off+len(p)
+// readOversize handles a file larger than --cache-max-file, which is refused
+// from the cache entirely and stream-redacted on every read instead. It redacts
+// from the start of the file through off+len(p)
 // (the minimum needed to correctly resolve any match that might start
 // before off) and copies out the requested range.
 //
 // ponytail: reprocesses from byte 0 on every read rather than maintaining a
-// resumable streaming cursor, so cost grows with off — acceptable per
-// NFR-4's own "still correct, slower" framing for this rare oversize case;
-// upgrade path is Phase 6's tmpfs shadow provider, which SPEC.md already
-// plans to replace this bypass with.
-func (c *RamCache) readOversize(key ContentKey, pats []*patterns.Pattern, p []byte, off int64) (int, error) {
-	f, err := os.Open(key.Path)
+// resumable streaming cursor, so cost grows with off. Acceptable because
+// oversize masked files are rare and the result is still correct, just slower;
+// the upgrade path is a tmpfs shadow provider that replaces this bypass.
+func (c *RamCache) readOversize(pats []*patterns.Pattern, p []byte, off int64, open Opener) (int, error) {
+	f, err := open()
 	if err != nil {
 		return 0, err
 	}
@@ -231,13 +240,13 @@ func (c *RamCache) readOversize(key ContentKey, pats []*patterns.Pattern, p []by
 	need := off + int64(len(p))
 	var out bytesSink
 	if err := redact.Stream(&out, io.LimitReader(f, need), pats, c.redactBufferMax); err != nil {
-		return 0, fmt.Errorf("provider: streaming redact %q: %w", key.Path, apperrors.ErrRedactUnsupported)
+		return 0, fmt.Errorf("provider: streaming redact: %w", apperrors.ErrRedactUnsupported)
 	}
 	return copyAt(out.b, p, off), nil
 }
 
-// Invalidate drops path's cache entry (if any), zeroing its bytes first
-// (NFR-1 best-effort). Called on a data-change event (FR-20).
+// Invalidate drops path's cache entry (if any), zeroing its bytes first. The
+// zeroing is best-effort: Go's GC may already have copied the slice.
 func (c *RamCache) Invalidate(path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -257,8 +266,9 @@ func (c *RamCache) invalidateLocked(path string) {
 	}
 }
 
-// InvalidateAll drops every cached entry (FR-19: a generation swap
-// conservatively invalidates everything; also used on watcher overflow).
+// InvalidateAll drops every cached entry. Called on a rule reload, which
+// conservatively invalidates everything rather than working out which entries a
+// generation swap actually affected.
 func (c *RamCache) InvalidateAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -267,7 +277,7 @@ func (c *RamCache) InvalidateAll() {
 	}
 }
 
-// Stats returns a point-in-time snapshot (FR-23).
+// Stats returns a point-in-time snapshot.
 func (c *RamCache) Stats() ProviderStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -287,7 +297,7 @@ func (c *RamCache) touchLocked(e *entry) {
 
 // evictLocked drops least-recently-used, already-built entries until
 // curBytes fits within maxBytes, zeroing each entry's bytes before
-// releasing it (NFR-1 best-effort). Called with c.mu held. An entry still
+// releasing it, best-effort. Called with c.mu held. An entry still
 // being built (not yet e.built) is never evicted — its rebuild goroutine
 // owns it until completion — so eviction may transiently leave curBytes
 // over budget while builds are in flight; it catches up on the next call.
@@ -305,8 +315,8 @@ func (c *RamCache) evictLocked() {
 	}
 }
 
-func redactFile(key ContentKey, pats []*patterns.Pattern) ([]byte, error) {
-	f, err := os.Open(key.Path)
+func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
+	f, err := open()
 	if err != nil {
 		return nil, err
 	}
@@ -319,9 +329,9 @@ func redactFile(key ContentKey, pats []*patterns.Pattern) ([]byte, error) {
 }
 
 // patternSignature gives a pattern set a stable, order-independent identity
-// string for FR-20's "pattern set unchanged" comparison. Pattern.Name is
-// unique per builtin and per distinct custom regex source (SPEC §13's
-// reserved-name rule), so a sorted join of names is a sufficient signature.
+// string, for deciding whether a cached entry's pattern set is unchanged.
+// Pattern.Name is unique per builtin and per distinct custom regex source, so a
+// sorted join of names is a sufficient signature.
 func patternSignature(pats []*patterns.Pattern) string {
 	names := make([]string, len(pats))
 	for i, p := range pats {

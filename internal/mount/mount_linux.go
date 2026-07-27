@@ -1,13 +1,12 @@
 //go:build linux
 
-// Package mount implements the FUSE adapter described in SPEC.md §6/§7, as
-// amended by docs/SPEC_AMENDMENTS.md (2026-07-18): the adapter is built on
-// github.com/hanwen/go-fuse/v2.
+// Package mount is the FUSE adapter, built on github.com/hanwen/go-fuse/v2.
 //
 // The decision-bearing filesystem (JanusRoot/JanusNode, janus_node.go)
-// embeds go-fuse's fs.LoopbackRoot/LoopbackNode and overrides only the ops
-// FR-7's ALLOWED/MASKED/HIDDEN matrix says must differ — everything else
-// (Lookup, Getattr, Statfs, …) is inherited passthrough behavior.
+// embeds go-fuse's fs.LoopbackRoot/LoopbackNode and overrides only the
+// operations whose behaviour must differ between ALLOWED, MASKED, and HIDDEN.
+// Everything else (Lookup, Getattr, Statfs, …) is inherited passthrough
+// behaviour.
 package mount
 
 import (
@@ -15,6 +14,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -24,7 +24,7 @@ import (
 )
 
 // OpEvent carries the observable fields of a single FUSE operation
-// for the adapter's Observe callback (FR-22).
+// for the adapter's Observe callback.
 type OpEvent struct {
 	Op        string
 	Path      string
@@ -35,11 +35,11 @@ type OpEvent struct {
 }
 
 // Adapter mounts a decision-bearing (Allowed/Masked/Hidden) view of a
-// source directory via Linux FUSE (SPEC.md §6/§7).
+// source directory via Linux FUSE.
 type Adapter struct {
-	// Engine resolves each path's Decision (SPEC §7); required.
+	// Engine resolves each path's Decision; required.
 	Engine *engine.Engine
-	// Provider serves redacted bytes for Masked reads (SPEC §8.3); required.
+	// Provider serves redacted bytes for Masked reads; required.
 	Provider *provider.RamCache
 
 	// ErrorLogger receives go-fuse diagnostic messages. Wired to fs.Options.Logger.
@@ -69,16 +69,31 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 		return errors.New("mount: Engine and Provider are required")
 	}
 
-	root, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe)
+	root, jr, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe)
 	if err != nil {
 		return err
 	}
+	defer jr.Backing.Close()
 
 	opts := &fs.Options{
 		Logger: a.ErrorLogger,
 	}
 	opts.FsName = "janusfs" // shown as the source in `df -T`
 	opts.Name = "janusfs"   // the "fuse.<name>" suffix in `df -T`
+
+	// Zero attribute, entry, and negative-lookup timeouts: a policy reload
+	// must take effect on the very next lookup, so the kernel is never allowed
+	// to answer from a cached dentry or attribute — otherwise a file freshly
+	// tightened from Allowed to Masked/Hidden could keep serving real bytes
+	// through a still-cached lookup. This costs an upcall per lookup; that is
+	// the intended trade, not an oversight. (Synthetic .janusfs nodes are
+	// unaffected — they set their own longer timeouts directly, since their
+	// content isn't policy-governed.)
+	zeroTimeout := time.Duration(0)
+	opts.AttrTimeout = &zeroTimeout
+	opts.EntryTimeout = &zeroTimeout
+	opts.NegativeTimeout = &zeroTimeout
+
 	if a.DebugLogger != nil {
 		opts.Debug = true
 		opts.MountOptions.Logger = a.DebugLogger
@@ -104,7 +119,7 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	return nil
 }
 
-// Unmount requests a clean unmount (FR-2/FR-3).
+// Unmount requests a clean unmount.
 func (a *Adapter) Unmount(mountpoint string) error {
 	if a.server == nil {
 		return errors.New("mount: no active mount to unmount")
