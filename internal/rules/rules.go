@@ -1,22 +1,17 @@
 // Package rules discovers, parses, and compiles .janusignore/.janusmask
-// files (SPEC.md §2, FR-12..FR-17) into a RuleSet that Resolve (resolve.go)
+// files into a RuleSet that Resolve (resolve.go)
 // evaluates paths against.
 //
-// Discovery is hierarchical (FR-15): a global level at GlobalDir()
-// (docs/SPEC_AMENDMENTS.md 2026-07-17 — not in SPEC.md itself, added as a
-// machine-wide-defaults level) plus every directory under a mount root that
-// contains either file. Gitignore semantics (FR-12) are implemented
-// directly in glob.go rather than via a third-party library — see
-// docs/SPEC_AMENDMENTS.md (2026-07-17, "gitignore matcher") for why the
-// originally-planned github.com/sabhiram/go-gitignore was dropped, and
-// (2026-07-18, "Rule precedence") for why a later doublestar/no-negation
-// proposal was reviewed and withdrawn in favor of keeping this matcher.
+// Discovery is hierarchical: a machine-wide global level at GlobalDir(), plus
+// every directory under a mount root that contains either file. Gitignore
+// semantics are implemented directly in glob.go rather than via a third-party
+// library; that package's doc explains why.
 //
 // Precedence (resolve.go) is a two-tier floor per the 2026-07-18 amendment:
 // the global level is a fail-closed floor — no in-tree rule (mount root or
 // any subdirectory) may negate a Hidden/Masked verdict the global level set.
-// Within the in-tree tier, gitignore's own deeper-wins/negation precedence
-// is unchanged from FR-12/FR-15 as written.
+// Within the in-tree tier, gitignore's own deeper-wins and negation precedence
+// is unchanged.
 package rules
 
 import (
@@ -31,16 +26,16 @@ import (
 )
 
 // IgnoreFileName and MaskFileName are the two config file names discovered
-// at every level (SPEC §2).
+// at every level.
 const (
 	IgnoreFileName = ".janusignore"
 	MaskFileName   = ".janusmask"
 )
 
-// GlobalDir returns ~/.janusfs/config, the machine-wide rule directory
-// added by docs/SPEC_AMENDMENTS.md (2026-07-17). It mirrors the existing
-// ~/.janusfs/run (pidfiles, FR-3) and ~/.janusfs/history (FR-42)
-// conventions: one root, one subdirectory per concern.
+// GlobalDir returns ~/.janusfs/config, the machine-wide rule directory. It sits
+// outside every source tree, which is what makes it a floor an in-tree rule
+// cannot negate. Layout mirrors ~/.janusfs/run and ~/.janusfs/history: one root,
+// one subdirectory per concern.
 func GlobalDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -49,7 +44,7 @@ func GlobalDir() (string, error) {
 	return filepath.Join(home, ".janusfs", "config"), nil
 }
 
-// Decision is the resolved state of a path (SPEC §2, FR-5).
+// Decision is the resolved state of a path.
 type Decision uint8
 
 const (
@@ -71,16 +66,15 @@ func (d Decision) String() string {
 	}
 }
 
-// IgnoreLevel is one directory's compiled .janusignore (FR-12).
+// IgnoreLevel is one directory's compiled .janusignore.
 type IgnoreLevel struct {
 	Dir      string // absolute directory this level applies to and below
 	File     string // absolute path to the .janusignore
 	Patterns []*ignorePattern
 	RawLines []RawLine
 
-	// Poisoned is true if any line in this file failed to compile. FR-13's
-	// "that file's whole rule set at that level fails closed" is written
-	// about .janusmask, but the same fail-closed reasoning applies here:
+	// Poisoned is true if any line in this file failed to compile, which folds
+	// every path this level covers to Hidden. The reasoning:
 	// since .janusignore lines only ever widen what's Hidden, a line we
 	// couldn't compile could not be evaluated safely, so the conservative
 	// (less-visible) reading is to fold every path this level covers to
@@ -96,15 +90,15 @@ type RawLine struct {
 	Text   string
 }
 
-// MaskEntry is one .janusmask line (FR-13): a glob and the pattern names or
+// MaskEntry is one .janusmask line: a glob and the pattern names or
 // custom regexes that apply to files it matches.
 type MaskEntry struct {
 	LineNo      int
 	Glob        string
-	GlobPattern *ignorePattern // mask globs share the same gitignore-style glob syntax as .janusignore (SPEC §2.2 examples use **; docs/SPEC_AMENDMENTS.md)
+	GlobPattern *ignorePattern // mask globs use the same gitignore-style syntax as .janusignore
 	PatternRefs []string       // raw references, e.g. "env-value" or "/regex/"
 	Patterns    []*patterns.Pattern
-	CompileErr  error // set if the glob or any PatternRefs entry failed to compile (FR-13 fail-closed scoping)
+	CompileErr  error // set if the glob or any PatternRefs entry failed to compile; fails this entry closed
 }
 
 // MaskLevel is one directory's compiled .janusmask.
@@ -114,21 +108,26 @@ type MaskLevel struct {
 	Entries []MaskEntry
 }
 
-// RuleSet is the immutable, compiled result of discovery (SPEC §7's
-// "Compiled rule set"). Levels are ordered shallowest first; the global
-// level (if present) is always index 0.
+// RuleSet is the immutable, compiled result of discovery. Levels are ordered
+// shallowest first; the global level, if present, is always index 0.
 type RuleSet struct {
 	Root         string
 	GlobalDir    string
 	IgnoreLevels []IgnoreLevel
 	MaskLevels   []MaskLevel
 	DiscoverErrs []error // non-fatal discovery errors (unreadable files etc.), reported by janusfs check
+
+	// FoldCase is true when Root's backing volume treats two spellings of a
+	// name as the same file (the APFS/HFS+ default). Every pattern in
+	// IgnoreLevels and MaskLevels is compiled against this same setting, so
+	// glob matching agrees with what the kernel itself would resolve.
+	FoldCase bool
 }
 
 // Discover walks the global config directory and root, compiling every
-// .janusignore/.janusmask found (FR-15). It never returns a nil *RuleSet:
+// .janusignore/.janusmask found. It never returns a nil *RuleSet:
 // per-file errors are collected in DiscoverErrs and also cause that file's
-// affected entries to fail closed (FR-6/FR-13), but discovery itself only
+// affected entries to fail closed, but discovery itself only
 // fails outright if root cannot be walked at all.
 func Discover(root string) (*RuleSet, error) {
 	rootAbs, err := filepath.Abs(root)
@@ -136,7 +135,7 @@ func Discover(root string) (*RuleSet, error) {
 		return nil, fmt.Errorf("rules: resolving root %q: %w", root, err)
 	}
 
-	rs := &RuleSet{Root: rootAbs}
+	rs := &RuleSet{Root: rootAbs, FoldCase: caseInsensitiveVolume(rootAbs)}
 
 	if gd, err := GlobalDir(); err == nil {
 		rs.GlobalDir = gd
@@ -168,13 +167,13 @@ func Discover(root string) (*RuleSet, error) {
 
 // loadLevel loads dir's .janusignore/.janusmask (if present) into rs.
 func (rs *RuleSet) loadLevel(dir string) {
-	if lvl, ok, err := loadIgnoreLevel(dir); ok {
+	if lvl, ok, err := loadIgnoreLevel(dir, rs.FoldCase); ok {
 		rs.IgnoreLevels = append(rs.IgnoreLevels, lvl)
 		rs.DiscoverErrs = append(rs.DiscoverErrs, lvl.LineErrs...)
 	} else if err != nil {
 		rs.DiscoverErrs = append(rs.DiscoverErrs, err)
 	}
-	if lvl, ok, err := loadMaskLevel(dir); ok {
+	if lvl, ok, err := loadMaskLevel(dir, rs.FoldCase); ok {
 		rs.MaskLevels = append(rs.MaskLevels, lvl)
 	} else if err != nil {
 		rs.DiscoverErrs = append(rs.DiscoverErrs, err)
@@ -198,8 +197,7 @@ func readRawLines(path string) ([]RawLine, error) {
 		if trimmed == "" {
 			continue
 		}
-		// FR-12: "#" starts a comment unless escaped ("\#" is a literal
-		// leading hash).
+		// "#" starts a comment unless escaped: "\#" is a literal leading hash.
 		if strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, `\#`) {
 			continue
 		}
@@ -211,7 +209,7 @@ func readRawLines(path string) ([]RawLine, error) {
 	return lines, nil
 }
 
-func loadIgnoreLevel(dir string) (IgnoreLevel, bool, error) {
+func loadIgnoreLevel(dir string, foldCase bool) (IgnoreLevel, bool, error) {
 	file := filepath.Join(dir, IgnoreFileName)
 	if _, err := os.Stat(file); err != nil {
 		return IgnoreLevel{}, false, nil
@@ -223,7 +221,7 @@ func loadIgnoreLevel(dir string) (IgnoreLevel, bool, error) {
 
 	lvl := IgnoreLevel{Dir: dir, File: file, RawLines: raw}
 	for _, l := range raw {
-		p, err := compilePattern(l.LineNo, l.Text)
+		p, err := compilePatternFold(l.LineNo, l.Text, foldCase)
 		if err != nil {
 			lvl.Poisoned = true
 			lvl.LineErrs = append(lvl.LineErrs, fmt.Errorf("%s:%d: %w", file, l.LineNo, err))
@@ -234,7 +232,7 @@ func loadIgnoreLevel(dir string) (IgnoreLevel, bool, error) {
 	return lvl, true, nil
 }
 
-func loadMaskLevel(dir string) (MaskLevel, bool, error) {
+func loadMaskLevel(dir string, foldCase bool) (MaskLevel, bool, error) {
 	file := filepath.Join(dir, MaskFileName)
 	if _, err := os.Stat(file); err != nil {
 		return MaskLevel{}, false, nil
@@ -246,7 +244,7 @@ func loadMaskLevel(dir string) (MaskLevel, bool, error) {
 
 	lvl := MaskLevel{Dir: dir, File: file}
 	for _, l := range raw {
-		entry, err := parseMaskLine(l.LineNo, l.Text)
+		entry, err := parseMaskLine(l.LineNo, l.Text, foldCase)
 		if err != nil && entry.CompileErr == nil {
 			entry.CompileErr = err
 		}
@@ -255,7 +253,7 @@ func loadMaskLevel(dir string) (MaskLevel, bool, error) {
 	return lvl, true, nil
 }
 
-// parseMaskLine parses one .janusmask line per FR-13's grammar:
+// parseMaskLine parses one .janusmask line, whose grammar is:
 //
 //	<file-glob> [: <pattern>[, <pattern>...]]
 //
@@ -263,7 +261,7 @@ func loadMaskLevel(dir string) (MaskLevel, bool, error) {
 // whole-file. Returns an entry with CompileErr set (but still with Glob
 // populated) if the glob or any referenced pattern fails to compile, so
 // callers can still report which glob is affected.
-func parseMaskLine(lineNo int, line string) (MaskEntry, error) {
+func parseMaskLine(lineNo int, line string, foldCase bool) (MaskEntry, error) {
 	line = stripMaskInlineComment(line)
 	globPart, patternsPart, hasColon := splitUnescapedColon(line)
 	glob := strings.TrimSpace(globPart)
@@ -273,7 +271,7 @@ func parseMaskLine(lineNo int, line string) (MaskEntry, error) {
 	if glob == "" {
 		return entry, fmt.Errorf("rules: %d: empty glob", lineNo)
 	}
-	gp, err := compilePattern(lineNo, glob)
+	gp, err := compilePatternFold(lineNo, glob, foldCase)
 	if err != nil {
 		return entry, fmt.Errorf("rules: %d: compiling glob %q: %w", lineNo, glob, err)
 	}

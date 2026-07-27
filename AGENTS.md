@@ -1,85 +1,144 @@
 # AGENTS.md — JanusFS
 
-## First reads
+## First reads, in this order
 
-- `SPEC.md` is the binding engineering contract — requirements (FR/NFR numbers), architecture, phased plan, and **Part IV: operating instructions for the coding agent**. Read it before writing code; every behavior must trace to an FR/NFR.
-- `README.md` explains the name and the pitch, for humans.
-- `docs/THREAT_MODEL.md` is the living threat model — check it before assuming a behavior isn't specified.
+1. **[`docs/knowledge/`](docs/knowledge/index.md)** — an OKF knowledge bundle
+   describing the system *as built*, with `file:line` anchors. Read this instead
+   of re-deriving the architecture from 8k lines of Go. Start at
+   [`architecture.md`](docs/knowledge/architecture.md), then
+   [`known-gaps.md`](docs/knowledge/known-gaps.md) for what is currently broken.
+2. **[`SPEC.md`](SPEC.md)** — the binding contract: requirements, architecture
+   constraints, delivery sequencing, and the rejected designs you should not
+   re-propose.
+3. **[`PRPs/`](PRPs/README.md)** — implementation blueprints for the work that is
+   queued, in execution order, each self-contained. If you were asked to build
+   something, check here first: it may already be planned in detail.
+4. **[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)** — the living threat model.
+5. **[`README.md`](README.md)** — the pitch, for humans.
+
+If the bundle and the code disagree, that is a defect: fix the bundle in the same
+change and append a line to its `log.md`.
 
 ## Quick commands
 
+Prefix with `rtk` for token-reduced output.
+
 | Action | Command | Notes |
 |--------|---------|-------|
-| Build | `make build` | Output: `build/janusfs-darwin-$(ARCH)` |
-| Run (dev) | `make run ARGS="mount <src> <mountpoint>"` | Needs macFUSE installed locally |
-| Run all tests | `make test` | `go test ./...` |
-| Single package test | `go test -v ./internal/rules/...` | |
-| Race tests | `make test-race` | `go test -race ./...` |
-| Mounted integration tests | `make integration` | `-tags fuseintegration`; needs macFUSE, mounts for real |
-| Leak oracle | `make leak-oracle` | Sentinel-secret scan over every mounted read (Phase 1+) |
-| Benchmarks | `make bench` | Compares against `bench/BASELINE.md`; regressions beyond NFR-3 fail |
-| Lint | `make lint` | `golangci-lint` |
-| Format | `make fmt` | `gofmt -w .` + `goimports -local github.com/sarathsp06/janusfs` |
+| Build | `rtk make build` | Output under `build/` |
+| Run (dev) | `rtk make run ARGS="daemon"` | Needs FUSE installed locally |
+| All tests | `rtk make test` | `go test ./...` |
+| One package | `rtk go test -v ./internal/rules/...` | |
+| Race | `rtk make test-race` | |
+| Mounted integration | `rtk make integration` | Tag `fuseintegration`; mounts for real |
+| Leak oracle | `rtk make leak-oracle` | Sentinel-secret scan over every mounted read |
+| Benchmarks | `rtk make bench` | Compared against `bench/BASELINE.md` |
+| Lint | `rtk make lint` | `golangci-lint` |
+| Format | `rtk make fmt` | `gofmt` + `goimports -local github.com/sarathsp06/janusfs` |
+| What CI runs | `rtk make verify` | `fmt-check vet test-race` |
 
-## Architecture (see SPEC.md Part II for full detail)
+## Architecture in six lines
 
-- **Entrypoint**: `cmd/janusfs/main.go` — manual, explicit dependency injection (SPEC §15), no DI framework.
-- **Mount**: `hanwen/go-fuse/v2` over macFUSE (macOS only, requires macFUSE kernel extension).
-- **Core pipeline**: `rules` (compile `.janusignore`/`.janusmask`) → `engine` (resolve Decision) → `provider` (serve redacted bytes) → `mount` (FUSE adapter, thin). `watch` invalidates on change; never authoritative (SPEC §9, FR-21).
-- **Observability**: `obs` (event bus, `JanusMetrics`, ring buffer) feeds both the live dashboard and `internal/history` (SQLite rollups — paths/counts only, never content, SPEC §3.8/§16).
-- **Config**: flags via `internal/config`, single `Config` struct, `Validate()` before anything mounts.
+- One long-lived `janusfs daemon` owns every mount. Mounts are structs inside it,
+  not processes. Other subcommands are short-lived clients over
+  `~/.janusfs/daemon.sock`.
+- Core pipeline: `rules` compiles `.janusignore`/`.janusmask` → `engine` resolves
+  a Decision behind an atomic snapshot → `provider` serves redacted bytes from a
+  RAM cache → `mount` translates the Decision into a kernel answer.
+- Three decisions, strict precedence: `HIDDEN > MASKED > ALLOWED`.
+- There is **no file watcher**. Rule reload is explicit; the read-time cache key
+  `(path, mtime, size, inode, generation)` is the authoritative change detector.
+- Entrypoint `cmd/janusfs/main.go`, manual explicit dependency injection, no DI
+  framework. `startMount` in `runtime.go` is the whole dependency graph.
+- Both macOS (macFUSE) and Linux (FUSE) are supported. Their isolation models
+  differ fundamentally — see
+  [`platform-isolation.md`](docs/knowledge/platform-isolation.md).
 
-## Key packages
+## Packages
 
 | Path | Purpose |
 |------|---------|
-| `cmd/janusfs/` | Entrypoint + manual DI wiring |
-| `internal/config/` | Flags/env → validated `Config` |
-| `internal/logging/` | `slog` wrapper, per-component loggers |
-| `internal/apperrors/` | Canonical error sentinels + `ToErrno` (single translation point) |
-| `internal/rules/` | `.janusignore`/`.janusmask` discovery, parse, compile, generation |
-| `internal/engine/` | Pure decision resolution (Hidden/Masked/Allowed) |
-| `internal/patterns/` | Built-in + custom regex pattern library |
-| `internal/redact/` | Streaming, size-preserving `*`-redaction |
-| `internal/provider/` | `RedactedContentProvider`: RAM cache (MVP), tmpfs shadow (later) |
-| `internal/watch/` | fsevents watcher, advisory only |
-| `internal/mount/` | FUSE adapter (thin — no business logic) |
-| `internal/obs/` | Event bus, `JanusMetrics`, ring buffer, top-N |
-| `internal/history/` | SQLite `Store` — rollups, sessions, coverage snapshots |
-| `internal/health/` | Liveness probe for `/healthz` and `janusfs doctor` |
-| `internal/api/` | HTTP/WebSocket server (thin adapter over engine/provider/history) |
-| `internal/ui/` | Embedded dashboard assets (`embed.FS`) |
-| `internal/vfsmeta/` | `.janusfs` virtual files (`conflicts.json`, `status.json`) |
-| `internal/check/` | Static config linter (shared by `check` and `conflicts.json`) |
-| `internal/platform/` | OS seam (darwin now, linux later) |
+| `cmd/janusfs/` | entrypoint, cobra commands, daemon, DI wiring |
+| `internal/config/` | one `Config` struct; defaults, file/env overlay, `Validate` |
+| `internal/logging/` | `slog` wrapper, one handler, per-component loggers |
+| `internal/apperrors/` | sentinel errors and the single `ToErrno` translation |
+| `internal/rules/` | discovery, parse, compile, resolve; in-house gitignore matcher |
+| `internal/engine/` | atomic rule-set snapshot, generations |
+| `internal/patterns/` | builtin and custom pattern library |
+| `internal/redact/` | length-preserving redaction, streaming modes |
+| `internal/provider/` | `RedactedContentProvider`: RAM cache keyed by `ContentKey` |
+| `internal/mount/` | FUSE adapter — thin, no business logic |
+| `internal/execrunner/` | `janusfs exec` orchestration |
+| `internal/control/` | daemon control-socket protocol types and dial helper, shared by `cmd/janusfs` and `internal/execrunner` |
+| `internal/obs/` | event bus, metrics, ring buffer, top-N |
+| `internal/history/` | SQLite `Store` — rollups, sessions, coverage |
+| `internal/health/` | diagnostics for `doctor` |
+| `internal/check/` | static config linter, shared by `check` and `conflicts.json` |
+| `internal/api/` | HTTP server — thin adapter |
+| `internal/ui/` | embedded dashboard assets (`embed.FS`) |
+| `internal/vfsmeta/` | `.janusfs` virtual file contents |
+
+`internal/watch` and `internal/platform` do not exist and are not planned.
+`internal/backing`, `internal/procid`, and `internal/nsexec` are planned but not
+yet written — see [SPEC.md §18](SPEC.md#18-sequencing).
 
 ## Code conventions
 
-- **Fail-closed is the tiebreak.** Any ambiguity resolves to the option where the agent behind the mount sees *less*. See SPEC §20.2.
+The full list with reasons is in
+[`conventions.md`](docs/knowledge/conventions.md). The rules that get changes
+rejected:
+
+- **Fail closed is the tiebreak.** Any ambiguity resolves to the option where the
+  agent behind the mount sees *less*.
+- **Never log file content.** Not a byte slice from `redact`, not one from
+  `provider`, not at debug level.
+- **Never cite SPEC.md from a code comment.** No `FR-`/`NFR-` numbers, no `§`
+  references, no amendment dates. A comment states the constraint or the reason
+  the code cannot show for itself. Traceability runs from the docs to the code,
+  not back.
+- **No errno construction outside `apperrors.ToErrno`**, called only from
+  `internal/mount`.
 - **No SQL outside `internal/history`'s `Store` methods.**
-- **No errno construction outside `internal/apperrors.ToErrno`**, called only from `internal/mount`.
-- **No flag/env reads outside `internal/config`** and `cmd/janusfs`.
-- **No logging outside `internal/logging.New(component)`.** Never log file content (byte slices from `redact`/`provider`) — this is a hard review-blocking rule (NFR-1).
-- **Thin transport layers**: `internal/mount` and `internal/api` translate and delegate; they don't decide, redact, or query.
-- **Naming**: packages lowercase single word, files `snake_case.go`, exported symbols reference their FR in a doc comment.
-- **Dependency policy** (SPEC §20.4): `hanwen/go-fuse/v2`, `fsnotify`, `modernc.org/sqlite`, `prometheus/client_golang`, one WebSocket lib, stdlib — allowed without asking. Anything else needs a decision record first. Never: cgo (except the approved FUSE fallback), network-calling libs, telemetry SDKs.
+- **No flag or env reads outside `internal/config` and `cmd/janusfs`.**
+- **No logging outside `logging.New(component)`.**
+- **No cgo**, which is why history uses `modernc.org/sqlite` and process
+  inspection must use `golang.org/x/sys/unix`.
+- **Thin transport layers**: `internal/mount` and `internal/api` translate and
+  delegate; they do not decide, redact, or query.
+- Deliberate shortcuts with a known ceiling get a `ponytail:` comment naming the
+  ceiling and the upgrade path.
 
 ## Test nuances
 
-- Unit tests need no external services — SQLite history uses `:memory:`, the engine/provider/watcher are testable without a mount (NFR-8).
-- Mounted integration tests (`-tags fuseintegration`) need macFUSE installed and actually mount — not run by default `make test`.
-- The **leak oracle** is a standing tripwire from Phase 1 onward: sentinel secrets planted in `testdata/` must never appear in any byte read through the mount, under any test, ever.
-- Benchmarks are compared against `bench/BASELINE.md` (captured in Phase 0); a regression past an NFR-3 budget blocks the task, not just a warning.
+- Unit tests need no external services and no mount. History uses `:memory:`.
+- Mounted integration tests need real FUSE and are behind the `fuseintegration`
+  tag, so they are not part of `make test`.
+- The **leak oracle** is a standing tripwire: sentinel secrets in `testdata/`
+  must never appear in any byte read through a mount, in any test, ever. A
+  failure blocks the change.
+- Benchmark regressions past a performance budget block the change rather than
+  warning.
 
 ## Working with SPEC.md
 
-- Phase order is strict (SPEC §20.3) — don't start Phase N+1 before Phase N's exit criteria (including its security and UX checklist items) are met.
-- If you need a behavior the spec doesn't define: implement the fail-closed interpretation, add a decision record, and flag it — don't invent silently and don't block waiting for a human unless it's one of the stop-conditions in SPEC §23.
-- The interfaces in SPEC §7–§9 (`Engine`, `RedactedContentProvider`, `Watcher`) are normative — change them only via a decision record, not incidentally while implementing something else.
+- Sequencing in [§18](SPEC.md#18-sequencing) is deliberate: each step is
+  independently shippable, and nothing later blocks anything earlier.
+- The interfaces in §7, §8, §9, and §11 are normative. Change them through a
+  decision record, not incidentally.
+- Need a behaviour the spec does not define? Implement the fail-closed reading,
+  write a decision record, and flag it. Do not invent silently.
+- Check [§20](SPEC.md#20-risks-and-rejected-designs) before proposing an
+  isolation or identity design — several plausible ones are already rejected
+  there with reasons.
 
 ## Release
 
-- **GoReleaser** (`.goreleaser.yml`) builds and packages releases: darwin amd64 + arm64, combined into a universal binary (NFR-7), tarball archives, sha256 checksums, and a changelog grouped by Conventional Commits (`feat:`/`fix:`/other).
-- `make release-snapshot` builds a local snapshot release (no tag/publish needed) to sanity-check the config; `make release-check` lints `.goreleaser.yml` itself.
-- `.github/workflows/release.yml` runs GoReleaser on `git push --tags` for any `vX.Y.Z` tag, on a macOS runner (NFR-7: this is a macOS-only binary). Releases are created as **drafts** — nothing publishes without a human reviewing the generated notes first.
-- Conventional Commits (`feat:`, `fix:`, …) are what drives the changelog grouping above — not just a style preference.
+- GoReleaser (`.goreleaser.yml`) builds and packages releases; universal binary
+  on darwin, tarballs, sha256 checksums, and a changelog grouped by Conventional
+  Commits.
+- `.github/workflows/release.yml` runs on any `vX.Y.Z` tag and creates **draft**
+  releases, so nothing publishes without a human reading the notes.
+- Conventional Commit prefixes (`feat:`, `fix:`) are required, not preferred:
+  they drive that changelog grouping.
+- `make release-snapshot` builds locally without a tag; `make release-check`
+  lints the GoReleaser config.

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,8 +67,8 @@ func TestEngineRuleSetExposesCurrentSnapshot(t *testing.T) {
 }
 
 func TestEngineConcurrentResolveWithReload(t *testing.T) {
-	// The atomic.Pointer swap is the concurrency contract (SPEC §7:
-	// "readers never lock"); exercise it under -race.
+	// The atomic.Pointer swap is the concurrency contract — readers never lock —
+	// so exercise it under -race.
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.txt"), "x")
@@ -129,5 +130,137 @@ func TestEngineGenerationBumpsOnReload(t *testing.T) {
 	}
 	if got := e.Resolve("a.txt", false).Decision; got != Hidden {
 		t.Fatalf("expected Hidden after reload picked up new rule, got %v", got)
+	}
+}
+
+func TestEngineResolveCacheHitMatchesMiss(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusignore"), "*.pem\n")
+	writeFile(t, filepath.Join(root, ".janusmask"), "*.env : env-value\n")
+	writeFile(t, filepath.Join(root, "server.pem"), "x")
+	writeFile(t, filepath.Join(root, "secret.env"), "API_KEY=x")
+	writeFile(t, filepath.Join(root, "README.md"), "x")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		path string
+		want Decision
+	}{
+		{"README.md", Allowed},
+		{"secret.env", Masked},
+		{"server.pem", Hidden},
+	}
+	for _, c := range cases {
+		miss := e.Resolve(c.path, false) // first call: cache miss
+		hit := e.Resolve(c.path, false)  // second call: cache hit
+		if miss.Decision != c.want {
+			t.Errorf("%s: miss decision = %v, want %v", c.path, miss.Decision, c.want)
+		}
+		if hit.Decision != miss.Decision {
+			t.Errorf("%s: hit decision %v != miss decision %v", c.path, hit.Decision, miss.Decision)
+		}
+		if hit.Generation != miss.Generation {
+			t.Errorf("%s: hit generation %d != miss generation %d", c.path, hit.Generation, miss.Generation)
+		}
+	}
+}
+
+func TestEngineResolveCacheDoesNotGrowUnbounded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.txt"), "x")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve far more distinct (nonexistent) paths than decisionCacheMax, the
+	// way an untrusted caller stat-ing unlimited distinct paths would. This
+	// must not panic, hang, or (once the cache resets past the bound) return a
+	// wrong answer for the one real path that matters.
+	for i := 0; i < decisionCacheMax*2+100; i++ {
+		_ = e.Resolve(fmt.Sprintf("nonexistent-%d.txt", i), false)
+	}
+
+	if got := e.Resolve("a.txt", false).Decision; got != Allowed {
+		t.Errorf("expected Allowed for a.txt after cache overflow, got %v", got)
+	}
+	if e.cacheEntries.Load() > decisionCacheMax {
+		t.Errorf("cacheEntries = %d, want <= %d after overflow reset", e.cacheEntries.Load(), decisionCacheMax)
+	}
+}
+
+func BenchmarkResolveCacheHit(b *testing.B) {
+	home, err := os.MkdirTemp("", "janusfs-bench-home")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	b.Setenv("HOME", home)
+
+	root := b.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	e, err := New(root)
+	if err != nil {
+		b.Fatal(err)
+	}
+	e.Resolve("a.txt", false) // warm the cache
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = e.Resolve("a.txt", false)
+	}
+}
+
+func BenchmarkResolveCacheMiss(b *testing.B) {
+	home, err := os.MkdirTemp("", "janusfs-bench-home")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	b.Setenv("HOME", home)
+
+	root := b.TempDir()
+	// A ten-level directory hierarchy, each with its own .janusignore, so
+	// resolving the deepest path exercises a ten-level miss.
+	dir := root
+	for i := 0; i < 10; i++ {
+		dir = filepath.Join(dir, fmt.Sprintf("level%d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".janusignore"), []byte("*.tmp\n"), 0o644); err != nil {
+			b.Fatal(err)
+		}
+	}
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	e, err := New(root)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Force a fresh generation (and therefore a fresh cache key) every
+		// iteration, so each call is a genuine miss rather than hitting the
+		// entry from the previous iteration.
+		e.gen.Add(1)
+		_ = e.Resolve(rel, false)
 	}
 }

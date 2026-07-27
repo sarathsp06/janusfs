@@ -12,17 +12,16 @@ import (
 )
 
 // errSilentNonZero signals "exit 1, but the report already printed
-// everything the user needs to see" (FR-28/FR-33: findings are the output,
-// not a Go error string). main's top-level error printer special-cases an
+// everything the user needs to see": the findings are the output, not a Go
+// error string. main's top-level error printer special-cases an
 // empty message to avoid an extra blank "janusfs: " line.
 var errSilentNonZero = errors.New("")
 
-// newCheckCmd implements FR-28: statically lint the config tree rooted at
-// [path] (default cwd) — regex/glob errors, zero-match globs, FR-9
-// directory-mask rewrites, FR-8 hidden-dir negation attempts, negations
-// blocked by the global rule floor (docs/SPEC_AMENDMENTS.md 2026-07-18),
-// and exact-duplicate rules — plus the global rule directory
-// (docs/SPEC_AMENDMENTS.md 2026-07-17), always included in the scan.
+// newCheckCmd statically lints the config tree rooted at [path] (default cwd):
+// regex and glob errors, zero-match globs, directory-mask rewrites, negation
+// attempts a hidden ancestor blocks, negations blocked by the global rule floor,
+// and exact-duplicate rules. The global rule directory is always included in the
+// scan, since it participates in every decision.
 func newCheckCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
@@ -73,7 +72,7 @@ func runCheck(dir string, jsonOut bool) error {
 	return nil
 }
 
-// printCheckReport implements FR-33: findings grouped by file (Run already
+// printCheckReport prints findings grouped by file (Run already
 // sorts by severity then file then line), each with file:line and a
 // suggested fix where one exists. Only warnings and errors are shown — info
 // findings (redundancies, etc.) are suppressed since they're not actionable.

@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-// pidfilePath implements FR-3's "pidfile at ~/.janusfs/run/<hash-of-mountpoint>.pid":
+// pidfilePath returns ~/.janusfs/run/<sha256-of-mountpoint>.pid:
 // a stable, filesystem-safe name derived from the mountpoint's absolute path,
 // so umount can find the owning process without the caller having to
 // remember or pass one.
@@ -31,8 +31,15 @@ func pidfilePath(mountpoint string) (string, error) {
 }
 
 // writePidfile records the current process's PID for mountpoint, creating
-// the ~/.janusfs/run directory (mode 0700, per SPEC §14's ~/.janusfs perms
-// invariant) if needed.
+// the ~/.janusfs/run directory if needed. Mode 0700, like everything under
+// ~/.janusfs.
+//
+// The file carries the mountpoint itself as a second line — pidfilePath's own
+// name is a one-way SHA-256 hash, so without this, nothing could recover which
+// mountpoint a pidfile belongs to (the exact problem that made `janusfs
+// doctor` unable to report a real path for a stale pidfile). readPidfile below
+// only ever parses the first line, so a pidfile written by an older build
+// (PID only, no second line) still reads correctly.
 func writePidfile(mountpoint string) error {
 	path, err := pidfilePath(mountpoint)
 	if err != nil {
@@ -41,12 +48,21 @@ func writePidfile(mountpoint string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("pidfile: creating run directory: %w", err)
 	}
-	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600)
+	abs, err := filepath.Abs(mountpoint)
+	if err != nil {
+		abs = mountpoint
+	}
+	content := strconv.Itoa(os.Getpid()) + "\n" + abs + "\n"
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // readPidfile returns the PID recorded for mountpoint, or 0 if no pidfile
-// exists (not itself an error — FR-3's "signals the owning process if
-// discoverable" implies "if not discoverable, proceed with unmount anyway").
+// exists. A missing pidfile is not an error: the owning process is signalled
+// only if it is discoverable, and otherwise the unmount proceeds anyway.
+//
+// Only the first line is parsed, so this reads correctly whether or not the
+// file carries the mountpoint as a second line (see writePidfile and
+// readPidfileMountpoint).
 func readPidfile(mountpoint string) (int, error) {
 	path, err := pidfilePath(mountpoint)
 	if err != nil {
@@ -59,11 +75,29 @@ func readPidfile(mountpoint string) (int, error) {
 		}
 		return 0, fmt.Errorf("pidfile: reading %q: %w", path, err)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	firstLine, _, _ := strings.Cut(string(data), "\n")
+	pid, err := strconv.Atoi(strings.TrimSpace(firstLine))
 	if err != nil {
 		return 0, fmt.Errorf("pidfile: parsing %q: %w", path, err)
 	}
 	return pid, nil
+}
+
+// readPidfileMountpoint reads the real mountpoint recorded on a pidfile's
+// second line, given the pidfile's own path (as found by, e.g., scanning
+// ~/.janusfs/run). Returns "" (not an error) if the file predates this field —
+// an older single-line pidfile — so callers can fall back to reporting the
+// filename hash as unknown rather than presenting it as a path.
+func readPidfileMountpoint(pidfilePath string) string {
+	data, err := os.ReadFile(pidfilePath)
+	if err != nil {
+		return ""
+	}
+	_, rest, found := strings.Cut(string(data), "\n")
+	if !found {
+		return ""
+	}
+	return strings.TrimSpace(rest)
 }
 
 // pruneMirrorDirs removes the now-empty mountpoint and its empty parent

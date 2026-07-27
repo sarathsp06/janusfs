@@ -72,9 +72,8 @@ func TestNegateAndDirOnlyParsing(t *testing.T) {
 }
 
 // TestGitConformance cross-checks translateGlob/compilePattern against real
-// `git check-ignore` (SPEC.md §19 risk: "gitignore library semantic drift
-// from git ... mitigation: conformance fixture suite run against
-// `git check-ignore` as oracle"). Skips if git is unavailable.
+// `git check-ignore` as an oracle, guarding against semantic drift from git.
+// Skips if git is unavailable.
 func TestGitConformance(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

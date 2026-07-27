@@ -1,11 +1,11 @@
-// Command janusfs is the JanusFS CLI entrypoint (SPEC §4, §15, §24).
+// Command janusfs is the JanusFS CLI entrypoint.
 //
 // Subcommand dispatch, flag registration, and help/usage text are handled by
-// spf13/cobra (docs/SPEC_AMENDMENTS.md 2026-07-17); this package wires cobra
+// spf13/cobra; this package wires cobra
 // commands to internal/config, internal/logging, internal/apperrors, and
-// internal/mount, and contains no decision/redaction/SQL logic of its own
-// (SPEC §21's "thin adapters" rule extends to the CLI layer, not just
-// internal/mount and internal/api).
+// internal/mount, and contains no decision, redaction, or SQL logic of its own:
+// the thin-adapter rule applies to the CLI layer too, not just internal/mount
+// and internal/api.
 package main
 
 import (
@@ -26,7 +26,7 @@ var (
 
 func main() {
 	root := newRootCmd()
-	// FR-30: no raw Go errors/stack traces reach the user. cobra prints its
+	// No raw Go error or stack trace reaches the user. cobra prints its
 	// own usage+error by default; we silence both and print a single
 	// one-line "cause" ourselves (SilenceErrors), keeping usage text
 	// available only via --help (SilenceUsage) rather than dumped on every
@@ -66,5 +66,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newCheckCmd())
 	root.AddCommand(newExplainCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newExecCmd())
+	root.AddCommand(newWatchdogCmd())
+	registerPlatformCommands(root)
 	return root
 }

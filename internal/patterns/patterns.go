@@ -1,10 +1,10 @@
 // Package patterns implements the built-in redaction pattern library
-// (SPEC.md FR-16) and the custom-regex wrapper used by .janusmask (FR-13).
+// and the custom-regex wrapper used by .janusmask.
 //
 // This package only compiles and describes patterns; it does not find spans
 // or redact bytes (that's internal/redact, Phase 2) and it is not wired into
 // the mount yet. It exists now because .janusmask lines reference pattern
-// names, and janusfs check/explain (docs/SPEC_AMENDMENTS.md 2026-07-17) must
+// names, and janusfs check/explain must
 // be able to validate those names and report what they mean without waiting
 // for the full masking pipeline.
 package patterns
@@ -18,25 +18,25 @@ import (
 
 // Pattern describes one compiled redaction pattern: a name (builtin or a
 // literal custom regex source), the compiled matcher, and which capture
-// group holds the maskable span (FR-14: group 1 if the regex defines one,
-// else the whole match — group index 0).
+// group holds the maskable span: group 1 if the regex defines one, else the
+// whole match, which is group index 0.
 type Pattern struct {
 	// Name is the builtin's reserved name, or the literal /regex/ source for
 	// a custom pattern (used in reporting; not a stable identity).
 	Name string
 
-	// Builtin is true for one of the FR-16 reserved names.
+	// Builtin is true for one of the reserved builtin names.
 	Builtin bool
 
 	// Regex is nil only for the "whole-file" sentinel, which masks every
-	// byte of a file without any matching (SPEC §8.1).
+	// byte of a file without any matching.
 	Regex *regexp.Regexp
 
-	// GroupIndex is the capture group whose span is masked (FR-14): 0 means
+	// GroupIndex is the capture group whose span is masked: 0 means
 	// "the whole match" (no capture group / regex has no groups).
 	GroupIndex int
 
-	// WholeFile is the FR-16 sentinel: mask every byte of the file, no
+	// WholeFile is the sentinel meaning "mask every byte of the file", with no
 	// pattern matching involved.
 	WholeFile bool
 
@@ -44,22 +44,22 @@ type Pattern struct {
 	PreFilter func(buf []byte) bool
 }
 
-// WholeFileName is the FR-16 sentinel pattern name.
+// WholeFileName is the sentinel pattern name meaning "mask everything".
 const WholeFileName = "whole-file"
 
-// builtinSpec is the declarative source for one row of FR-16's table before
-// compilation (letting registerBuiltins stay a short, obviously-correct
-// loop rather than repeating regexp.MustCompile+field-assignment per entry).
+// builtinSpec is the declarative source for one builtin before compilation,
+// which lets registerBuiltins stay a short, obviously-correct loop rather than
+// repeating regexp.MustCompile and field assignment per entry.
 type builtinSpec struct {
 	name       string
 	expr       string // empty for whole-file
 	groupIndex int
 }
 
-// builtinSpecs is FR-16's table, verbatim. Order matches the spec for easy
-// side-by-side review. Changing any expr here is a breaking change to the
-// pattern library and must bump patternsVersion (reported by `doctor`/UI
-// once those exist — SPEC FR-16's "patterns_version" requirement).
+// builtinSpecs is the builtin pattern library. Changing any expr here is a
+// breaking change to the library and must bump patternsVersion, which `doctor`
+// and the dashboard report so a user can tell which pattern set produced a
+// result.
 var builtinSpecs = []builtinSpec{
 	{name: "env-value", expr: `(?m)^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+?)\s*$`, groupIndex: 1},
 	{name: "aws-key", expr: `\b((?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16})\b`, groupIndex: 1},
@@ -70,9 +70,10 @@ var builtinSpecs = []builtinSpec{
 	{name: "generic-secret", expr: `(?im)\b(?:password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*["']?([^\s"']{6,})`, groupIndex: 1},
 }
 
-// awsSecretKeySpec is aws-key's second regex (FR-16 lists two regexes under
-// one name); modeled as a second builtin entry sharing the "aws-key" name so
-// both are tried (union of matches, same as any two patterns on one glob).
+// awsSecretKeySpec is aws-key's second regex: the name covers both an access
+// key id and a secret key. Modeled as a second builtin entry sharing the
+// "aws-key" name so both are tried, unioning matches like any two patterns on
+// one glob.
 var awsSecretKeySpec = builtinSpec{
 	name:       "aws-key",
 	expr:       `(?i)\baws_secret_access_key\b\s*[=:]\s*([A-Za-z0-9/+=]{40})`,
@@ -85,8 +86,8 @@ var awsSecretKeySpec = builtinSpec{
 // can expand to more than one regex.
 var builtinVariants = map[string][]*Pattern{}
 
-// ReservedNames is the FR-16 "names reserved; user regex may not shadow a
-// builtin name" set, including the whole-file sentinel.
+// ReservedNames is the set of names a user regex may not shadow, including the
+// whole-file sentinel.
 var ReservedNames = map[string]bool{}
 
 func init() {
@@ -189,8 +190,8 @@ func getBuiltinPreFilter(name, expr string) func(buf []byte) bool {
 }
 
 // LookupBuiltin returns the compiled Pattern(s) for a reserved builtin name.
-// Most names resolve to exactly one Pattern; "aws-key" resolves to two (FR-16
-// lists two regexes under that name — matches are unioned per FR-14). The
+// Most names resolve to exactly one Pattern; "aws-key" resolves to two, whose
+// matches are unioned like any other pair of patterns. The
 // "whole-file" sentinel resolves to a single Pattern with WholeFile set and
 // no Regex.
 func LookupBuiltin(name string) ([]*Pattern, bool) {
@@ -201,14 +202,14 @@ func LookupBuiltin(name string) ([]*Pattern, bool) {
 	return ps, ok
 }
 
-// IsReserved reports whether name is a builtin or the whole-file sentinel,
-// per FR-16's "user regex may not shadow a builtin name."
+// IsReserved reports whether name is a builtin or the whole-file sentinel, and
+// therefore may not be shadowed by a user regex.
 func IsReserved(name string) bool {
 	return ReservedNames[name]
 }
 
 // ParsePatternRef parses one comma-separated pattern reference from a
-// .janusmask line (FR-13's grammar: `<builtin-name> | /<RE2-regex>/`) into
+// .janusmask line — `<builtin-name>` or `/<RE2-regex>/` — into
 // either a builtin lookup or a compiled custom Pattern.
 //
 // A custom pattern's Name is set to its literal source ("/regex/", without

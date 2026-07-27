@@ -12,7 +12,10 @@ import "errors"
 
 // errDaemonNotRunning is returned by daemonCall when no daemon is listening on
 // the control socket, so commands can react (mount errors out with a start
-// hint; umount falls back to a direct OS unmount).
+// hint; umount falls back to a direct OS unmount). daemonCall translates
+// internal/control.ErrDaemonNotRunning to this local sentinel at the package
+// boundary, so every existing errors.Is(err, errDaemonNotRunning) call site in
+// this package keeps working unchanged.
 var errDaemonNotRunning = errors.New("no janusfs daemon is running")
 
 const (

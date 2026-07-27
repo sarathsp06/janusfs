@@ -1,7 +1,7 @@
-// Package ui embeds the static dashboard assets via embed.FS (SPEC §11/§20.4).
+// Package ui embeds the static dashboard assets via embed.FS.
 // The dashboard is a single-page HTML application with inline CSS + JS, plus
 // a vendored CodeMirror editor for the config/reveal views — no external
-// dependencies, no CDN requests, fully offline-capable (FR-40).
+// dependencies, no CDN requests, fully offline-capable.
 package ui
 
 import "embed"

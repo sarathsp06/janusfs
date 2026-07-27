@@ -20,8 +20,7 @@ type opDecision struct {
 }
 
 // Recorder records JanusFS events directly into native Prometheus collectors
-// and optionally fans events out to history without blocking FUSE handlers
-// (NFR-5).
+// and optionally fans events out to history without blocking FUSE handlers.
 type Recorder struct {
 	registry *prometheus.Registry
 

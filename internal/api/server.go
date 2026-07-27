@@ -1,10 +1,10 @@
-// Package api implements the HTTP server and REST handlers described in
-// SPEC.md §11. It is a thin adapter — no business logic, no redaction, no
-// SQL — delegating to internal/engine, internal/provider, and history-backed
-// query methods (SPEC §5's dependency rule).
+// Package api is the HTTP server and REST handlers. It is a thin adapter — no
+// business logic, no redaction, no SQL — delegating to injected closures over
+// internal/engine, internal/provider, and the history store, so the dashboard
+// can never become a second policy-resolution path.
 //
-// Per SPEC §11 the server binds 127.0.0.1 only, requires a bearer token on
-// all /api/* endpoints, and sets Cache-Control: no-store on all API responses.
+// The server binds 127.0.0.1 only, requires a bearer token on all /api/*
+// endpoints, and sets Cache-Control: no-store on all API responses.
 package api
 
 import (
@@ -25,7 +25,7 @@ import (
 	"github.com/sarathsp06/janusfs/internal/vfsmeta"
 )
 
-// Server is the localhost HTTP/SSE server (SPEC §11).
+// Server is the localhost HTTP/SSE server.
 type Server struct {
 	mux           *http.ServeMux
 	server        *http.Server
@@ -111,7 +111,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	withSecurity(withHeaders(s.mux)).ServeHTTP(w, r)
 }
 
-// Listen binds to addr (127.0.0.1 only, SPEC §11) and returns the listener,
+// Listen binds to addr, 127.0.0.1 only, and returns the listener,
 // so a port collision fails fast at mount time instead of asynchronously
 // after the dashboard URL has already been printed. Serve the result with
 // Serve.
@@ -360,7 +360,7 @@ func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleHistory returns aggregated history rollups (FR-46).
+// handleHistory returns aggregated history rollups.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if s.history == nil {
 		writeJSON(w, map[string]any{"rollups": []history.OpRollup{}, "enabled": false})
@@ -383,7 +383,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"rollups": rollups, "enabled": true, "since": since.Format(time.RFC3339)})
 }
 
-// handleSessions returns history store stats (FR-46).
+// handleSessions returns history store stats.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if s.history == nil {
 		writeJSON(w, map[string]any{"enabled": false})

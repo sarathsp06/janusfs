@@ -7,30 +7,25 @@ import (
 )
 
 // ignorePattern is one compiled line of a .janusignore file, or one glob
-// half of a .janusmask line (FR-12/FR-13). Implemented from scratch rather
-// than via a third-party gitignore library: see
-// docs/SPEC_AMENDMENTS.md (2026-07-17, "gitignore matcher") for why — in
-// short, the previously-vendored github.com/sabhiram/go-gitignore is
-// low-activity (165 stars, no commits since Feb 2024) and its per-file
-// negation model doesn't compose correctly across the hierarchical levels
-// FR-12 requires (a deeper file's negation must be able to re-include a
-// path a shallower file excluded; that library evaluates each file in
-// isolation and can't express that). Precedence across levels is handled by
+// half of a .janusmask line. Implemented from scratch rather
+// than via a third-party gitignore library. The previously-vendored
+// github.com/sabhiram/go-gitignore is low-activity and its per-file negation
+// model doesn't compose across hierarchical levels: a deeper file's negation
+// must be able to re-include a path a shallower file excluded, and that library
+// evaluates each file in isolation. Precedence across levels is handled by
 // evaluating one ordered, cross-level pattern list (see resolve.go), so
 // this type only needs to compile and match a single line correctly.
 //
-// docs/SPEC_AMENDMENTS.md (2026-07-18, "Rule precedence") considered and
-// withdrew replacing this matcher with bmatcuk/doublestar + a
-// no-negation model: gitignore's "no-slash pattern matches at every depth"
+// Replacing this matcher with bmatcuk/doublestar plus a no-negation model was
+// considered and withdrawn: gitignore's "no-slash pattern matches at every depth"
 // rule is the fail-closed default a secret-hiding tool wants, and a
 // per-level doublestar match would have silently under-matched nested
 // files instead. That amendment kept this matcher and gitignore semantics
 // exactly as documented below, and added one precedence change on top (see
 // resolve.go's global-tier floor) rather than replacing the matcher.
 //
-// Semantics match the gitignore rules summarized in SPEC.md §2.1/FR-12,
-// cross-checked against real `git check-ignore` (see glob_test.go's
-// conformance cases).
+// Semantics are cross-checked against real `git check-ignore`; see glob_test.go's
+// conformance cases.
 type ignorePattern struct {
 	negate  bool
 	dirOnly bool
@@ -39,9 +34,21 @@ type ignorePattern struct {
 	raw     string // original line, unmodified, for reporting
 }
 
-// compilePattern parses and compiles one non-blank, non-comment line (a
-// .janusignore line, or a .janusmask glob) into an ignorePattern.
+// compilePattern parses and compiles one non-blank, non-comment line — a
+// .janusignore line or a .janusmask glob — into an ignorePattern, matching
+// case-sensitively. Used directly only by tests; production callers go through
+// compilePatternFold so matching agrees with the backing volume's own case
+// sensitivity.
 func compilePattern(lineNo int, raw string) (*ignorePattern, error) {
+	return compilePatternFold(lineNo, raw, false)
+}
+
+// compilePatternFold is compilePattern with foldCase controlling whether the
+// compiled regex matches case-insensitively. This must agree with the backing
+// filesystem: on a case-insensitive volume (APFS/HFS+ default), the kernel
+// resolves "SECRET.ENV" and "secret.env" to the same inode, so a
+// case-sensitive glob would let ".ENV" slip past a "*.env" mask rule.
+func compilePatternFold(lineNo int, raw string, foldCase bool) (*ignorePattern, error) {
 	line := raw
 
 	negate := false
@@ -81,15 +88,18 @@ func compilePattern(lineNo int, raw string) (*ignorePattern, error) {
 
 	var full string
 	if anchored || hasInternalSlash {
-		// FR-12: a pattern with a slash anywhere but a trailing one is
+		// A pattern with a slash anywhere but a trailing one is
 		// relative only to its own directory, not re-checked at every
 		// depth (verified against `git check-ignore`: "config/x.yaml" in a
 		// root .gitignore does NOT match "sub/config/x.yaml").
 		full = "^" + core + "$"
 	} else {
 		// A slash-free pattern matches its target at any depth under the
-		// pattern's own directory (SPEC §2.1 rule 6).
+		// pattern's own directory.
 		full = "^(?:.*/)?" + core + "$"
+	}
+	if foldCase {
+		full = "(?i)" + full
 	}
 
 	re, err := regexp.Compile(full)
@@ -101,10 +111,9 @@ func compilePattern(lineNo int, raw string) (*ignorePattern, error) {
 
 // matches reports whether relPath (slash-separated, relative to this
 // pattern's own directory, no leading/trailing slash) is targeted by p.
-// dirOnly patterns only ever match a directory being tested as itself
-// (FR-9's "directories aren't masked" and FR-12's trailing-slash rule);
-// they are not expected to independently express "and everything beneath
-// it" — that is the ancestor short-circuit's job (Resolve, FR-8).
+// dirOnly patterns only ever match a directory being tested as itself. They are
+// not expected to independently express "and everything beneath it" — that is
+// the ancestor short-circuit's job, in Resolve.
 func (p *ignorePattern) matches(relPath string, isDir bool) bool {
 	if p.dirOnly && !isDir {
 		return false
@@ -114,14 +123,14 @@ func (p *ignorePattern) matches(relPath string, isDir bool) bool {
 
 // Matches is matches's exported form, for consumers outside this package
 // that hold a pattern value via IgnoreLevel.Patterns or MaskEntry.GlobPattern
-// (internal/check's static lint, SPEC FR-28) without needing to name the
-// unexported ignorePattern type themselves.
+// — internal/check's static lint — without needing to name the unexported
+// ignorePattern type themselves.
 func (p *ignorePattern) Matches(relPath string, isDir bool) bool { return p.matches(relPath, isDir) }
 
 // LineNo returns the 1-based source line this pattern was compiled from.
 func (p *ignorePattern) LineNo() int { return p.lineNo }
 
-// Negate reports whether this is a "!"-negation pattern (FR-12).
+// Negate reports whether this is a "!"-negation pattern.
 func (p *ignorePattern) Negate() bool { return p.negate }
 
 // Raw returns the original, unmodified source line.
@@ -130,7 +139,7 @@ func (p *ignorePattern) Raw() string { return p.raw }
 // translateGlob compiles one anchor-stripped, dir-marker-stripped gitignore
 // glob into a regex fragment matching a single relative path (using '/' as
 // the component separator). It supports '*', '?', '[...]' character
-// classes, and the four '**' forms (SPEC §2.1 rule 9): bare "**", leading
+// classes, and the four '**' forms: bare "**", leading
 // "**/", trailing "/**", and interior "/**/ ".
 func translateGlob(pattern string) (string, error) {
 	segs := strings.Split(pattern, "/")

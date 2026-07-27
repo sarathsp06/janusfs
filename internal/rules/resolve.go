@@ -10,7 +10,7 @@ import (
 )
 
 // TraceEntry records one rule's contribution to a Resolve call, for
-// janusfs explain (docs/SPEC_AMENDMENTS.md 2026-07-17) and janusfs check.
+// janusfs explain and janusfs check.
 type TraceEntry struct {
 	File    string
 	LineNo  int
@@ -20,10 +20,9 @@ type TraceEntry struct {
 	Negated bool
 }
 
-// Resolution is the resolved state of one path plus the evidence behind it
-// (SPEC §7's Resolution, extended with a Trace for explainability — the
-// normative fields Decision/RuleRef/Patterns/Generation are unaffected;
-// Trace is additive).
+// Resolution is the resolved state of one path plus the evidence behind it. The
+// Trace field carries the derivation, which is what lets `janusfs explain` show
+// how a decision was reached rather than just the verdict.
 type Resolution struct {
 	Decision     Decision
 	RuleRef      string // "<file>:<line>" of the deciding rule, "" if none matched
@@ -33,19 +32,17 @@ type Resolution struct {
 	// internal/provider needs these to redact, not just their names.
 	// Parallel to PatternNames: Patterns[i].Name == PatternNames[i].
 	Patterns []*patterns.Pattern
-	Poisoned bool // true if a config error forced this to Hidden (FR-13)
+	Poisoned bool // true if a config error, not a rule, forced this to Hidden
 	Trace    []TraceEntry
 }
 
-// Resolve implements FR-5..FR-9's precedence (Hidden > Masked > Allowed) for
-// relPath (relative to rs.Root), including the FR-8 ancestor short-circuit:
-// a Hidden ancestor directory forces every descendant Hidden regardless of
-// deeper rules. It never errors: any internal inconsistency (e.g. a path
-// outside Root) folds to Hidden, matching FR-6's fail-closed tiebreak
-// (SPEC §20.2).
+// Resolve applies the precedence Hidden > Masked > Allowed to relPath (relative
+// to rs.Root), including the ancestor short-circuit: a Hidden ancestor directory
+// forces every descendant Hidden regardless of deeper rules. It never errors —
+// any internal inconsistency, such as a path outside Root, folds to Hidden.
 //
-// Directories are never Masked (FR-9): for isDir==true this only ever
-// returns Allowed or Hidden.
+// Directories are never Masked: for isDir==true this only ever returns Allowed
+// or Hidden.
 func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 	relPath = filepath.ToSlash(filepath.Clean(relPath))
 	if relPath == "." {
@@ -126,8 +123,7 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 
 // resolveIgnore evaluates the ignore levels applicable to relPath (global +
 // ancestor-or-self directories), in shallowest-first order, applying
-// gitignore's "later match wins" (FR-12) — with one precedence change on
-// top, per docs/SPEC_AMENDMENTS.md (2026-07-18, "Rule precedence"): the
+// gitignore's "later match wins", with one precedence change on top: the
 // global level is a fail-closed floor. Once the global level's own
 // (self-consistent) evaluation decides a path is Hidden, no in-tree level
 // (mount root or any subdirectory) may negate that verdict — negation
@@ -135,12 +131,13 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 // in-tree file can still override a shallower in-tree file), and *within*
 // the global level itself (a later global line can still override an
 // earlier one there). Only an in-tree actor lifting a global verdict is
-// blocked — this is the cross-trust-boundary property FR-15's read-only
-// config was already protecting; see the amendment for the full rationale.
+// blocked, because in-tree config files live inside the tree the agent can see.
+// This is the same cross-trust-boundary property that makes config files
+// read-only through the mount.
 //
 // A poisoned level (a line that failed to compile) forces Hidden for every
 // path it would otherwise cover, per IgnoreLevel.Poisoned's doc; the
-// poisoned return lets Resolve set Resolution.Poisoned (FR-13) regardless
+// poisoned return lets Resolve set Resolution.Poisoned regardless
 // of which tier the poisoned level belongs to.
 func (rs *RuleSet) resolveIgnore(relPath string, isDir bool) (hidden bool, ruleRef string, poisoned bool, trace []TraceEntry) {
 	floorHidden := false

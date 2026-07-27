@@ -1,7 +1,7 @@
-// Package vfsmeta implements SPEC.md §3.7's .janusfs virtual files:
-// conflicts.json and status.json — reflecting live engine/check state
-// (FR-28/FR-31). Content is served through the API (and eventually through
-// the mount as synthetic inodes).
+// Package vfsmeta builds the content of the .janusfs virtual files,
+// conflicts.json and status.json, which reflect live engine and linter state.
+// The same content is served both through the API and through the mount as
+// synthetic inodes.
 package vfsmeta
 
 import (

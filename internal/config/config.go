@@ -1,14 +1,13 @@
-// Package config is the single source of truth for every JanusFS tunable
-// (SPEC §15): one Config struct, its defaults (Default), env-var overrides
-// (ApplyEnv), and a Validate method that catches conflicts (SPEC §15, FR-1)
-// before any FUSE call is made. CLI flags are registered and parsed by
-// cmd/janusfs (cobra), binding directly to Config fields — see that
-// package's doc comment and docs/SPEC_AMENDMENTS.md (2026-07-17) for why
-// flag parsing isn't owned here.
+// Package config is the single source of truth for every JanusFS tunable: one
+// Config struct, its defaults (Default), file and env-var overrides (ApplyFile,
+// ApplyEnv), and a Validate method that catches conflicts before any FUSE call
+// is made. CLI flags are registered and parsed by cmd/janusfs (cobra), binding
+// directly to Config fields, so that cobra's flag/help machinery stays in the
+// one package that owns the command tree.
 //
-// Per AGENTS.md / SPEC §21, no package other than cmd/janusfs reads a flag or
-// os.Getenv directly; every tunable named anywhere in SPEC.md must have a
-// field here. Env vars are read in ApplyEnv via os.Getenv + strconv.
+// No package other than cmd/janusfs reads a flag or os.Getenv directly, and
+// every tunable has a field here. That is what lets `janusfs paths` and the
+// startup config summary be complete rather than best-effort.
 package config
 
 import (
@@ -22,83 +21,78 @@ import (
 	"strings"
 )
 
-// Default tunable values, per SPEC §11 (--ui-port), §3.8/NFR-4 (cache and
-// redact-buffer sizing), and §3.8/FR-45 (history retention).
+// Default tunable values.
 const (
-	// DefaultUIPort is the default --ui-port (SPEC §11: "<uiPort> (default
-	// 7381, --ui-port)").
+	// DefaultUIPort is the default --ui-port.
 	DefaultUIPort = 7381
 
 	// DefaultCacheMaxBytes is the default --cache-max-bytes RAM-cache budget
-	// in bytes (SPEC NFR-4: "RAM-cache budget default 256 MB").
+	// in bytes.
 	DefaultCacheMaxBytes int64 = 256 * 1024 * 1024
 
 	// DefaultCacheMaxFile is the default --cache-max-file per-entry cap in
-	// bytes (SPEC NFR-4: "single cached file > 64 MB ... is refused").
+	// bytes. A file larger than this is refused from the cache and
+	// stream-redacted on every read instead.
 	DefaultCacheMaxFile int64 = 64 * 1024 * 1024
 
 	// DefaultHistoryRetentionDays is the default --history-retention window
-	// in days (SPEC FR-45: "Retention: 30 days default").
+	// in days.
 	DefaultHistoryRetentionDays = 30
 
 	// DefaultRedactBufferMax is the default --redact-buffer-max whole-file
-	// buffering cap in bytes for unbounded custom regexes (SPEC §8.2:
-	// "--redact-buffer-max, default 512 MB").
+	// buffering cap in bytes, applied when a pattern set contains an
+	// unbounded regex that cannot be matched chunk by chunk.
 	DefaultRedactBufferMax int64 = 512 * 1024 * 1024
 )
 
-// Config holds every tunable named in SPEC.md, plus the positional mount
-// arguments required by FR-1. Flag/env parsing populates a Config elsewhere
-// (cmd/janusfs); this package only defines the struct, its defaults
-// (Default), and validation (Validate).
+// Config holds every JanusFS tunable, plus the positional mount arguments.
+// Flag and env parsing populates a Config elsewhere (cmd/janusfs); this package
+// only defines the struct, its defaults (Default), and validation (Validate).
 type Config struct {
-	// Src is the source tree being protected (SPEC §2 "Source tree";
-	// FR-1's required positional <src>). Positional only: not read from
-	// the environment (SPEC FR-1's positionals have no env equivalent).
+	// Src is the source tree being protected. Positional only: a source path
+	// has no meaningful default, so there is deliberately no env equivalent.
 	Src string
 
-	// Mountpoint is where the sanitized view appears (SPEC §2 "Mount
-	// point"; FR-1's required positional <mountpoint>). Positional only.
+	// Mountpoint is where the sanitized view appears. Positional only, for
+	// the same reason as Src.
 	Mountpoint string
 
 	// UIPort is the localhost port the dashboard/API listens on
-	// (--ui-port, SPEC §11). Env: JANUSFS_UI_PORT.
+	// (--ui-port). Env: JANUSFS_UI_PORT.
 	UIPort int
 
-	// CacheMaxBytes is the RAM-cache budget in bytes (--cache-max-bytes,
-	// SPEC NFR-4). Env: JANUSFS_CACHE_MAX_BYTES.
+	// CacheMaxBytes is the RAM-cache budget in bytes (--cache-max-bytes).
+	// Env: JANUSFS_CACHE_MAX_BYTES.
 	CacheMaxBytes int64
 
 	// CacheMaxFile is the per-entry cache size cap in bytes; files larger
 	// than this are refused from the cache and streamed instead
-	// (--cache-max-file, SPEC NFR-4). Env: JANUSFS_CACHE_MAX_FILE.
+	// (--cache-max-file). Env: JANUSFS_CACHE_MAX_FILE.
 	CacheMaxFile int64
 
 	// HistoryRetentionDays is how many days of history rollups are kept
-	// before pruning (--history-retention, SPEC FR-45).
+	// before pruning (--history-retention).
 	// Env: JANUSFS_HISTORY_RETENTION_DAYS.
 	HistoryRetentionDays int
 
 	// NoHistory disables history persistence entirely when true
-	// (--no-history, SPEC FR-45). Env: JANUSFS_NO_HISTORY.
+	// (--no-history). Env: JANUSFS_NO_HISTORY.
 	NoHistory bool
 
 	// RedactBufferMax is the hard cap, in bytes, on whole-file buffering
 	// for unbounded custom regexes before failing closed to HIDDEN
-	// (--redact-buffer-max, SPEC §8.2). Env: JANUSFS_REDACT_BUFFER_MAX.
+	// (--redact-buffer-max). Env: JANUSFS_REDACT_BUFFER_MAX.
 	RedactBufferMax int64
 
 	// MountRoot is the directory under which a mountpoint is derived when
-	// <mountpoint> is omitted (--mount-root, env JANUSFS_MOUNT_ROOT; SPEC
-	// FR-1 amendment, docs/SPEC_AMENDMENTS.md 2026-07-18). Empty disables
-	// derivation: <mountpoint> stays required, per unamended FR-1.
+	// <mountpoint> is omitted (--mount-root, env JANUSFS_MOUNT_ROOT). Empty
+	// disables derivation, making <mountpoint> required.
 	MountRoot string
 }
 
 // Default returns a Config populated with every tunable's documented default
-// value (SPEC §11, NFR-4, FR-45, §8.2). Src and Mountpoint are left empty:
-// FR-1's positional arguments have no meaningful default and must always be
-// supplied by the caller before Validate is run.
+// value. Src and Mountpoint are left empty: the positional arguments have no
+// meaningful default and must always be supplied before Validate is run.
 func Default() Config {
 	return Config{
 		UIPort:               DefaultUIPort,
@@ -114,8 +108,7 @@ func Default() Config {
 // leaving any field whose env var is unset (or empty) untouched. Callers apply
 // this to a Default() config before registering CLI flags, so a flag's default
 // reflects the env override and an explicit flag still wins if the user passes
-// one — the ordering SPEC §15 requires ("CLI flags ... primary ... env vars
-// are a secondary override").
+// one. The resulting precedence is Default, then file, then env, then flag.
 func ApplyEnv(cfg *Config) error {
 	if err := envInt("JANUSFS_UI_PORT", &cfg.UIPort); err != nil {
 		return err
@@ -363,15 +356,15 @@ func (c *Config) ResolveMountpoint() error {
 	return nil
 }
 
-// Validate implements FR-1: both <src> and <mountpoint> must exist,
-// <mountpoint> must be an empty directory, and neither may be a prefix of
-// the other (checked using absolute, cleaned paths). Any violation must
-// cause the mount attempt to abort before any FUSE call is made (SPEC §15
-// step 1), per the fail-closed tiebreak in SPEC §20.2.
+// Validate checks the mount preconditions: both <src> and <mountpoint> must
+// exist, <mountpoint> must be an empty directory, and neither may be a prefix of
+// the other (checked using absolute, cleaned paths). Any violation aborts the
+// mount attempt before a single FUSE call is made, which is what keeps a
+// half-established mount from ever existing.
 func (c Config) Validate() error {
-	// These are user-facing preconditions surfaced directly by the CLI
-	// (FR-30: a clean one-line cause), so the messages read for an operator —
-	// no "config:" package prefix, no redundant wrapped syscall text.
+	// These are user-facing preconditions surfaced directly by the CLI, so the
+	// messages read for an operator — no "config:" package prefix, no
+	// redundant wrapped syscall text.
 	if c.Src == "" {
 		return fmt.Errorf("source path is required: %w", errEmptyPath)
 	}
@@ -428,7 +421,7 @@ var (
 
 	// ErrMountpointNotEmpty is exported so callers deriving a mountpoint
 	// (ResolveMountpoint) can detect a leaf collision with a live mount and
-	// add a --name/explicit-mountpoint remedy (FR-30) via errors.Is.
+	// add a --name/explicit-mountpoint remedy via errors.Is.
 	ErrMountpointNotEmpty = errors.New("config: directory is not empty")
 )
 
@@ -470,8 +463,9 @@ func isEmptyDir(dir string) (bool, error) {
 
 // pathsOverlap reports whether either of a or b (absolute, cleaned paths) is
 // a prefix of the other in the directory sense (i.e. one path lies on or
-// under the other), or the two are identical. FR-1 requires src and
-// mountpoint to be entirely disjoint.
+// under the other), or the two are identical. In the disjoint mount model src
+// and mountpoint must not overlap at all, or the view would nest inside its own
+// backing tree.
 func pathsOverlap(a, b string) bool {
 	if a == b {
 		return true

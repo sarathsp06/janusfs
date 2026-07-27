@@ -10,7 +10,7 @@ import (
 	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
-// janusignoreTemplate is FR-17's secure-default .janusignore: standard
+// janusignoreTemplate is the secure-default .janusignore: standard
 // secrets, keypairs, and credential stores hidden out of the box.
 const janusignoreTemplate = `# JanusFS — paths listed here are Hidden: they appear in listings but
 # every read/write is denied (EACCES). Syntax mirrors .gitignore exactly.
@@ -25,7 +25,7 @@ id_rsa*
 *.keychain
 `
 
-// janusmaskTemplate is FR-17's secure-default .janusmask: common
+// janusmaskTemplate is the secure-default .janusmask: common
 // secret-bearing file shapes, masked with the built-in pattern library.
 const janusmaskTemplate = `# JanusFS — <glob> : <pattern>[, <pattern>...] masks matched spans with
 # '*', preserving file size. A glob with no pattern masks the whole file.
@@ -61,13 +61,12 @@ func newInitCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing .janusignore/.janusmask files")
-	cmd.Flags().BoolVar(&global, "global", false, "write to ~/.janusfs/config instead, applied to every mount (docs/SPEC_AMENDMENTS.md 2026-07-17)")
+	cmd.Flags().BoolVar(&global, "global", false, "write to ~/.janusfs/config instead, applied to every mount")
 	return cmd
 }
 
-// runInit implements FR-17 (template generation, refuse to overwrite
-// without --force) and FR-32 (explain what was written and why, in ≤ 10
-// lines).
+// runInit writes the secure-default templates, refusing to overwrite without
+// --force, and explains what it wrote and why.
 func runInit(dir string, force bool) error {
 	ignorePath := filepath.Join(dir, ".janusignore")
 	maskPath := filepath.Join(dir, ".janusmask")
@@ -79,7 +78,7 @@ func runInit(dir string, force bool) error {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	// FR-32: ≤ 10 lines, explaining what and why, pointing at `check`.
+	// Keep this short: what was written, why, and where to look next.
 	fmt.Printf("Wrote %s — hides *.pem/*.key/id_rsa*/*.p12/.aws credentials/*.keychain by default.\n", ignorePath)
 	fmt.Printf("Wrote %s — masks .env files and Spring-style application config\n", maskPath)
 	fmt.Printf("  (application*.yml/.yaml/.properties) where secrets commonly live.\n")
@@ -89,9 +88,8 @@ func runInit(dir string, force bool) error {
 	return nil
 }
 
-// runInitGlobal implements the --global variant added by
-// docs/SPEC_AMENDMENTS.md (2026-07-17): the same secure-default templates,
-// written to ~/.janusfs/config so they apply to every mount as the
+// runInitGlobal implements the --global variant: the same secure-default
+// templates, written to ~/.janusfs/config so they apply to every mount as the
 // lowest-precedence level, overridable per-repo as usual.
 func runInitGlobal(force bool) error {
 	dir, err := rules.GlobalDir()

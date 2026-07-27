@@ -1,17 +1,17 @@
-// Package redact implements SPEC.md §8's masking pipeline: finding the
-// byte spans a pattern set matches in a buffer (§8.1) and replacing them
-// with '*' (0x2A) while preserving length exactly (SPEC §2's
-// "byte-length-preserving replacement" definition of Redaction).
+// Package redact is the masking pipeline: it finds the byte spans a pattern set
+// matches in a buffer and replaces them with '*' (0x2A), preserving length
+// exactly. Length preservation is what keeps stat results truthful and stops
+// tools that seek or mmap from being confused.
 //
-// Two entry points cover SPEC §8.2's two cases: Redact operates on a whole
-// in-memory buffer (used directly for anything within --cache-max-file,
-// and as the primitive the streaming path below runs per-chunk). Stream
-// handles files that don't fit the cache (NFR-4) or are populating the
+// Two entry points. Redact operates on a whole in-memory buffer, used directly
+// for anything within --cache-max-file and as the primitive the streaming path
+// runs per chunk. Stream handles files that don't fit the cache or are populating
+// the
 // cache for the first time, bounding peak memory via 256 KiB chunking with
 // a carry-over tail sized from the pattern set's matchable span — falling
 // back to whole-file buffering (capped by maxBufferBytes) for pattern sets
-// that include an unbounded match (the FR-16 whole-file/private-key
-// sentinels, or a custom regex with no computable bound), per §8.2.
+// that include an unbounded match: the whole-file or private-key sentinels, or a
+// custom regex with no computable bound.
 package redact
 
 import (
@@ -24,12 +24,10 @@ import (
 	"github.com/sarathsp06/janusfs/internal/patterns"
 )
 
-// chunkSize is the read granularity for Stream (SPEC §8.2: "Read the
-// source in 256 KiB chunks").
+// chunkSize is the read granularity for Stream.
 const chunkSize = 256 * 1024
 
-// Span is one absolute byte range to mask, per SPEC §8.1's
-// CompiledPattern.FindSpans contract: Off is an absolute offset into the
+// Span is one absolute byte range to mask: Off is an absolute offset into the
 // logical file (base + in-buffer offset), Len is the span's byte length.
 type Span struct {
 	Off int64
@@ -38,9 +36,10 @@ type Span struct {
 
 // FindSpans returns the merged (sorted, coalesced) union of every pattern
 // in pats matching buf, as absolute offsets (base + in-buffer offset) —
-// FR-14: "Overlapping matches from multiple patterns are unioned." A
+// overlapping matches from multiple patterns are unioned, so a byte masked by
+// any pattern stays masked. A
 // WholeFile pattern short-circuits to a single span covering all of buf,
-// since it needs no matching (SPEC §8.1).
+// since it needs no matching.
 func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 	for _, p := range pats {
 		if p.WholeFile {
@@ -70,7 +69,7 @@ func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 }
 
 // mergeSpans sorts spans by offset and coalesces overlapping/adjacent
-// ranges into their union (FR-14).
+// ranges into their union.
 func mergeSpans(spans []Span) []Span {
 	if len(spans) == 0 {
 		return nil
@@ -110,8 +109,7 @@ func Redact(buf []byte, pats []*patterns.Pattern) []byte {
 	return out
 }
 
-// mode classifies how a pattern set must be processed for streaming
-// (SPEC §8.2).
+// mode classifies how a pattern set must be processed for streaming.
 type mode int
 
 const (
@@ -121,17 +119,16 @@ const (
 	// chunk boundary undetected.
 	modeChunked mode = iota
 	// modeLine buffers up to the next newline before processing — used
-	// for a custom line-anchored ("(?m)") regex with no computable bound
-	// (SPEC §8.2).
+	// for a custom line-anchored ("(?m)") regex with no computable bound.
 	modeLine
 	// modeWholeFile buffers the entire input (capped by maxBufferBytes)
-	// before processing — used for the whole-file/private-key sentinels
-	// (SPEC §8.1: "those patterns force whole-file buffering mode") and
-	// any other unbounded, non-line-anchored custom regex.
+	// before processing — used for the whole-file and private-key sentinels,
+	// which cannot be bounded, and any other unbounded, non-line-anchored
+	// custom regex.
 	modeWholeFile
 )
 
-// builtinCarryLen gives each bounded builtin (SPEC FR-16) a generous
+// builtinCarryLen gives each bounded builtin a generous
 // carry-over length: large enough to catch a realistic match of that
 // shape even if it lands right at a chunk boundary. private-key is
 // unbounded (a PEM block can be arbitrarily long) and is handled by
@@ -145,8 +142,8 @@ var builtinCarryLen = map[string]int{
 	"generic-secret": 4096,
 }
 
-// classify picks the streaming mode + carry-over length for a pattern set
-// (SPEC §8.2). The whole set is classified once, using the most
+// classify picks the streaming mode and carry-over length for a pattern set.
+// The whole set is classified once, using the most
 // conservative mode any single pattern requires: a single unbounded,
 // non-line-anchored pattern forces modeWholeFile for the entire set, since
 // chunked/line processing cannot safely bound that pattern's match length.
@@ -179,12 +176,10 @@ func classify(pats []*patterns.Pattern) (m mode, carryLen int) {
 }
 
 // Stream reads all of r, redacts it against pats, and writes size-preserving
-// output to w, per SPEC §8.2. maxBufferBytes bounds whole-file buffering
-// (modeWholeFile / a stalled modeLine scan with no newline in sight):
-// exceeding it returns ErrBufferExceeded rather than buffering unbounded
-// memory (SPEC §8.2: "--redact-buffer-max ... beyond that the file fails
-// closed to HIDDEN + warning" — the caller is responsible for that
-// fail-closed mapping, this function only enforces the cap).
+// output to w. maxBufferBytes bounds whole-file buffering — modeWholeFile, or a
+// stalled modeLine scan with no newline in sight — and exceeding it returns
+// ErrBufferExceeded rather than buffering unbounded memory. Mapping that to a
+// fail-closed HIDDEN is the caller's job; this function only enforces the cap.
 func Stream(w io.Writer, r io.Reader, pats []*patterns.Pattern, maxBufferBytes int64) error {
 	m, carryLen := classify(pats)
 	switch m {
@@ -255,7 +250,7 @@ func flushCompleteLines(w io.Writer, buf *bytes.Buffer, pats []*patterns.Pattern
 	return nil
 }
 
-// streamChunked implements SPEC §8.2's core algorithm: read 256 KiB
+// streamChunked is the bounded-pattern path: read 256 KiB
 // chunks, keep a carryLen-byte tail from the end of each processed region
 // unprocessed so a match cannot straddle a chunk boundary undetected, and
 // redact+flush everything before that tail.

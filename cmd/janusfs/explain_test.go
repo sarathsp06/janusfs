@@ -140,7 +140,7 @@ func TestRunExplain_RootIsFileNotDir_ReturnsError(t *testing.T) {
 }
 
 func TestRunExplain_NonexistentTarget_StillExplainable(t *testing.T) {
-	// FR-7's decisions don't depend on the target existing — explain
+	// A decision doesn't depend on the target existing, so explain
 	// should work against a hypothetical path too.
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()

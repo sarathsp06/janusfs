@@ -13,9 +13,8 @@ import (
 	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
-// newExplainCmd adds a diagnostics subcommand not in SPEC.md itself — see
-// docs/SPEC_AMENDMENTS.md (2026-07-17): the same spirit as `check`/`doctor`,
-// but answering "why does this one path resolve the way it does" directly,
+// newExplainCmd adds a diagnostics subcommand in the same spirit as `check` and
+// `doctor`, but answering "why does this one path resolve the way it does" directly,
 // rather than only as a byproduct of a full-tree lint. It resolves path
 // (relative to [root], default cwd) through the same internal/engine used
 // by the (future) mount, and prints every rule that contributed to the
@@ -78,8 +77,8 @@ func runExplain(root, target string, jsonOut bool) error {
 	if targetFi, err := os.Stat(targetAbs); err == nil {
 		isDir = targetFi.IsDir()
 	}
-	// A nonexistent path is still explainable (FR-7's decisions don't
-	// depend on the target existing) — isDir simply defaults to false, the
+	// A nonexistent path is still explainable, since a decision doesn't depend
+	// on the target existing — isDir simply defaults to false, the
 	// same as any other regular-file resolution.
 
 	eng, err := engine.New(rootAbs)

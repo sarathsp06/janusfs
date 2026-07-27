@@ -14,12 +14,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// shutdownGrace is the FR-2 "≤ 5 s, then force" drain window for a clean
-// unmount.
+// shutdownGrace is how long a clean unmount is given before it is forced.
 var shutdownGrace = 5 * time.Second
 
-// forceUnmountSettle is the short wait after the FR-2 force-unmount fallback
-// before shutdown gives up on the serve loop.
+// forceUnmountSettle is the short wait after the force-unmount fallback before
+// shutdown gives up on the serve loop.
 var forceUnmountSettle = 2 * time.Second
 
 func newMountCmd() *cobra.Command {
@@ -130,7 +129,7 @@ func logLevel(debug bool) slog.Level {
 
 // logWriter adapts an *slog.Logger to io.Writer so stdlib *log.Logger
 // consumers (hanwen/go-fuse's fs.Options logger) route through the single
-// configured slog destination (SPEC §15/§21) instead of a bare file
+// configured slog destination instead of a bare file
 // descriptor.
 type logWriter struct {
 	logger *slog.Logger

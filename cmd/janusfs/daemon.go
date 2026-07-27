@@ -22,33 +22,21 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sarathsp06/janusfs/internal/config"
+	"github.com/sarathsp06/janusfs/internal/control"
 	"github.com/sarathsp06/janusfs/internal/logging"
 )
 
-// daemonRequest is one command sent by a `janusfs mount`/`umount`/`daemon
-// status` client over the control socket. One JSON object per connection.
-type daemonRequest struct {
-	Cmd        string `json:"cmd"`                  // "mount" | "unmount" | "list"
-	Src        string `json:"src,omitempty"`        // mount: source tree
-	Mountpoint string `json:"mountpoint,omitempty"` // unmount: mountpoint or src; resume: exact recorded mountpoint
-	Label      string `json:"label,omitempty"`      // mount: friendly dashboard name (not a path)
-	NoHistory  bool   `json:"no_history,omitempty"`
-	Resume     bool   `json:"-"` // internal: daemon startup may recreate a recorded mountpoint
-}
-
-type daemonResponse struct {
-	OK      bool          `json:"ok"`
-	Error   string        `json:"error,omitempty"`
-	Message string        `json:"message,omitempty"`
-	Mounts  []mountStatus `json:"mounts,omitempty"`
-}
-
-type mountStatus struct {
-	Src        string `json:"src"`
-	Label      string `json:"label,omitempty"`
-	Mountpoint string `json:"mountpoint"`
-	Dashboard  string `json:"dashboard"`
-}
+// daemonRequest, daemonResponse, and mountStatus are the local names for the
+// shared control-socket protocol types (internal/control), kept as aliases so
+// every existing call site in this package (mount.go, umount.go, paths.go,
+// the tests) compiles unchanged. The single source of truth for the protocol
+// itself is internal/control, imported by both this package and
+// internal/execrunner, so the two can no longer drift apart.
+type (
+	daemonRequest  = control.Request
+	daemonResponse = control.Response
+	mountStatus    = control.MountStatus
+)
 
 func newDaemonCmd() *cobra.Command {
 	var debug, noOpen bool
@@ -78,16 +66,17 @@ var validateMountConfig = func(cfg config.Config) error { return cfg.Validate() 
 var startMountFunc = startMount
 
 type daemon struct {
-	opsMu   sync.Mutex               // serializes mount/unmount so check-then-act is atomic
-	mu      sync.Mutex               // guards the mounts map for concurrent reads
-	mounts  map[string]*mountRuntime // keyed by absolute mountpoint
-	base    config.Config            // resolved defaults (mount root, cache sizing, …)
-	debug   bool
-	ctx     context.Context
-	logger  *slog.Logger
-	uiPort  int
-	indexLn net.Listener
-	indexer *http.Server
+	opsMu       sync.Mutex               // serializes mount/unmount so check-then-act is atomic
+	mu          sync.Mutex               // guards the mounts map for concurrent reads
+	mounts      map[string]*mountRuntime // keyed by absolute mountpoint
+	base        config.Config            // resolved defaults (mount root, cache sizing, …)
+	debug       bool
+	ctx         context.Context
+	logger      *slog.Logger
+	uiPort      int
+	indexLn     net.Listener
+	indexer     *http.Server
+	watchdogPID int // 0 if no watchdog was spawned (spawn failure is non-fatal)
 }
 
 func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error {
@@ -179,6 +168,8 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 	if !noOpen {
 		_ = exec.Command("open", fmt.Sprintf("http://%s/", indexAddr)).Start()
 	}
+
+	spawnWatchdog(d, logger)
 
 	// Accept control connections until shutdown.
 	go d.acceptLoop(lc)
@@ -465,6 +456,13 @@ func (d *daemon) shutdown() {
 	}
 	wg.Wait()
 
+	// Every mount above is already unmounted at this point, so a surviving
+	// watchdog's own liveness sweep would find nothing mounted and be a no-op
+	// regardless. Signalling it here is a courtesy that ends it promptly
+	// instead of leaving it polling a PID that's about to vanish — not a
+	// correctness requirement.
+	stopWatchdog(d)
+
 	if d.indexer != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		d.indexer.Shutdown(shutdownCtx)
@@ -603,37 +601,20 @@ func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // socketPath is the daemon control socket, ~/.janusfs/daemon.sock.
 func socketPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolving home directory: %w", err)
-	}
-	return filepath.Join(home, ".janusfs", "daemon.sock"), nil
+	return control.SocketPath()
 }
 
 // daemonCall dials the daemon control socket, sends one request, and returns
 // the response. Returns an error (with errDaemonNotRunning wrapped) if no
 // daemon is listening, so callers can offer a clear next step.
 func daemonCall(req daemonRequest) (daemonResponse, error) {
-	sock, err := socketPath()
-	if err != nil {
-		return daemonResponse{}, err
+	resp, err := control.Call(req)
+	if errors.Is(err, control.ErrDaemonNotRunning) {
+		return resp, errDaemonNotRunning
 	}
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		return daemonResponse{}, errDaemonNotRunning
-	}
-	defer conn.Close()
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return daemonResponse{}, err
-	}
-	var resp daemonResponse
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return daemonResponse{}, err
-	}
-	return resp, nil
+	return resp, err
 }
 
 func writeResp(conn net.Conn, resp daemonResponse) {
-	resp.OK = resp.OK || resp.Error == ""
-	_ = json.NewEncoder(conn).Encode(resp)
+	control.WriteResponse(conn, resp)
 }

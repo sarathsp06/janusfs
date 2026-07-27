@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// TestBuiltinCorpus is the FR-16 "true positives + known false-positive
-// traps" corpus. Each case names a builtin, a haystack, and the substring
+// TestBuiltinCorpus is the builtin-pattern corpus of true positives and known
+// false-positive traps. Each case names a builtin, a haystack, and the substring
 // that must (or must not) end up inside a matched span's capture group.
 func TestBuiltinCorpus(t *testing.T) {
 	cases := []struct {

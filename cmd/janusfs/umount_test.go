@@ -27,7 +27,7 @@ func TestRunUmount_NoMountReturnsError(t *testing.T) {
 
 func TestRunUmount_RemovesStalePidfile(t *testing.T) {
 	// Even when the OS-level unmount fails (no mount here), a stale
-	// pidfile should not survive — the whole point of FR-3's pidfile is
+	// pidfile should not survive — the whole point of the pidfile is
 	// discoverability, and a leftover from a crashed prior run must not
 	// mislead future umount calls.
 	t.Setenv("HOME", t.TempDir())

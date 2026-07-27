@@ -3,6 +3,7 @@ package rules
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -77,9 +78,8 @@ func TestResolveHiddenWinsOverMasked(t *testing.T) {
 }
 
 func TestResolveDeeperIgnoreNegatesShallower(t *testing.T) {
-	// Within the in-tree tier, gitignore's deeper-wins/negation precedence
-	// is unchanged (docs/SPEC_AMENDMENTS.md 2026-07-18: only the global
-	// tier is a fail-closed floor).
+	// Within the in-tree tier, gitignore's deeper-wins and negation precedence
+	// is unchanged; only the global tier is a fail-closed floor.
 	withGlobalDir(t)
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, IgnoreFileName), "*.log\n")
@@ -101,7 +101,7 @@ func TestResolveDeeperIgnoreNegatesShallower(t *testing.T) {
 }
 
 func TestResolveHiddenDirectoryBlocksNegationBeneath(t *testing.T) {
-	// FR-8: a hidden ancestor directory forces every descendant Hidden
+	// A hidden ancestor directory forces every descendant Hidden
 	// regardless of deeper rules — a deeper .janusignore's negation cannot
 	// resurface a path whose ancestor directory is itself Hidden.
 	withGlobalDir(t)
@@ -122,7 +122,7 @@ func TestResolveHiddenDirectoryBlocksNegationBeneath(t *testing.T) {
 
 	fileRes := rs.Resolve("secretdir/keep.txt", false)
 	if fileRes.Decision != Hidden {
-		t.Fatalf("expected FR-8 short-circuit to keep keep.txt Hidden despite the nested negation, got %v", fileRes.Decision)
+		t.Fatalf("expected the ancestor short-circuit to keep keep.txt Hidden despite the nested negation, got %v", fileRes.Decision)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestResolveDirectoryNeverMasked(t *testing.T) {
 	}
 	res := rs.Resolve("secrets", true)
 	if res.Decision == Masked {
-		t.Fatalf("directories must never resolve Masked (FR-9), got %v", res.Decision)
+		t.Fatalf("directories must never resolve Masked, got %v", res.Decision)
 	}
 }
 
@@ -181,8 +181,7 @@ func TestResolveGlobalLevelLowestPrecedence(t *testing.T) {
 }
 
 func TestResolveGlobalFloorCannotBeLiftedByInTreeNegation(t *testing.T) {
-	// docs/SPEC_AMENDMENTS.md 2026-07-18 ("Rule precedence"): the global
-	// tier is a fail-closed floor. An in-tree negation cannot override a
+	// The global tier is a fail-closed floor: an in-tree negation cannot override a
 	// global Hidden verdict, even though the same negation syntax freely
 	// overrides shallower *in-tree* rules (see
 	// TestResolveDeeperIgnoreNegatesShallower).
@@ -282,7 +281,7 @@ func TestMaskWholeFileSentinelNoPattern(t *testing.T) {
 }
 
 func TestParseMaskLineEscapedColon(t *testing.T) {
-	entry, err := parseMaskLine(1, `weird\:name.txt : env-value`)
+	entry, err := parseMaskLine(1, `weird\:name.txt : env-value`, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +291,7 @@ func TestParseMaskLineEscapedColon(t *testing.T) {
 }
 
 func TestParseMaskLineMultiplePatterns(t *testing.T) {
-	entry, err := parseMaskLine(1, `config/*.yaml : generic-secret, db-uri`)
+	entry, err := parseMaskLine(1, `config/*.yaml : generic-secret, db-uri`, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +301,7 @@ func TestParseMaskLineMultiplePatterns(t *testing.T) {
 }
 
 func TestParseMaskLineStripsInlineComment(t *testing.T) {
-	entry, err := parseMaskLine(1, `*.env : env-value # mask env files`)
+	entry, err := parseMaskLine(1, `*.env : env-value # mask env files`, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +311,7 @@ func TestParseMaskLineStripsInlineComment(t *testing.T) {
 }
 
 func TestParseMaskLineCustomRegexWithComma(t *testing.T) {
-	entry, err := parseMaskLine(1, `f.txt : /a,b/`)
+	entry, err := parseMaskLine(1, `f.txt : /a,b/`, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,5 +331,99 @@ func TestDiscoverNoConfigFiles(t *testing.T) {
 	}
 	if res := rs.Resolve("plain.txt", false); res.Decision != Allowed {
 		t.Fatalf("expected Allowed with no config files, got %v", res.Decision)
+	}
+}
+
+func TestResolveCaseFoldMatchesUppercaseVariant(t *testing.T) {
+	withGlobalDir(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, MaskFileName), "*.env : env-value\n")
+
+	rs, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.FoldCase = true
+	for _, lvl := range rs.MaskLevels {
+		for i := range lvl.Entries {
+			gp, err := compilePatternFold(lvl.Entries[i].GlobPattern.LineNo(), lvl.Entries[i].Glob, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lvl.Entries[i].GlobPattern = gp
+		}
+	}
+
+	if res := rs.Resolve("SECRET.ENV", false); res.Decision != Masked {
+		t.Fatalf("with FoldCase, expected SECRET.ENV to match *.env mask, got %v", res.Decision)
+	}
+}
+
+func TestResolveCaseSensitiveDoesNotFoldByDefault(t *testing.T) {
+	withGlobalDir(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, MaskFileName), "*.env : env-value\n")
+
+	rs, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force case-sensitive compilation regardless of the real test volume's own
+	// case sensitivity, so this test's assertion doesn't depend on which
+	// filesystem happens to be running it.
+	rs.FoldCase = false
+	for _, lvl := range rs.MaskLevels {
+		for i := range lvl.Entries {
+			gp, err := compilePatternFold(lvl.Entries[i].GlobPattern.LineNo(), lvl.Entries[i].Glob, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lvl.Entries[i].GlobPattern = gp
+		}
+	}
+
+	if res := rs.Resolve("SECRET.ENV", false); res.Decision == Masked {
+		t.Fatalf("without FoldCase, SECRET.ENV should not match a *.env mask compiled case-sensitively, got %v", res.Decision)
+	}
+}
+
+func TestCompilePatternFoldCaseInsensitive(t *testing.T) {
+	p, err := compilePatternFold(1, "*.env", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.matches("SECRET.ENV", false) {
+		t.Fatalf("expected case-folded pattern to match uppercase spelling")
+	}
+	if !p.matches("secret.env", false) {
+		t.Fatalf("expected case-folded pattern to still match original-case spelling")
+	}
+}
+
+func TestCompilePatternNoFoldIsCaseSensitive(t *testing.T) {
+	p, err := compilePattern(1, "*.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.matches("SECRET.ENV", false) {
+		t.Fatalf("expected non-folded pattern to NOT match uppercase spelling")
+	}
+	if !p.matches("secret.env", false) {
+		t.Fatalf("expected non-folded pattern to still match original-case spelling")
+	}
+}
+
+func TestCaseInsensitiveVolumeDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	// Must not panic regardless of the platform running the test; the actual
+	// answer is platform- and filesystem-dependent so only the darwin default
+	// is asserted here.
+	got := caseInsensitiveVolume(dir)
+	if runtime.GOOS == "darwin" {
+		// Most darwin CI/dev volumes are case-insensitive by default, but this
+		// is not guaranteed (a case-sensitive APFS volume is a supported
+		// configuration), so only check that the probe returns without error
+		// and is a plain bool.
+		_ = got
 	}
 }

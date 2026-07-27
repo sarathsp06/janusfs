@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -69,6 +71,113 @@ func TestWriteReadRemovePidfile_RoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("pidfile still exists after removePidfile()")
+	}
+}
+
+func TestWritePidfile_SecondLineIsMountpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mount := t.TempDir()
+
+	if err := writePidfile(mount); err != nil {
+		t.Fatalf("writePidfile() error = %v", err)
+	}
+
+	path, err := pidfilePath(mount)
+	if err != nil {
+		t.Fatalf("pidfilePath() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading pidfile: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (pid, mountpoint), got %d: %q", len(lines), data)
+	}
+	if lines[0] != strconv.Itoa(os.Getpid()) {
+		t.Errorf("first line = %q, want pid %d", lines[0], os.Getpid())
+	}
+	absMount, _ := filepath.Abs(mount)
+	if lines[1] != absMount {
+		t.Errorf("second line = %q, want absolute mountpoint %q", lines[1], absMount)
+	}
+
+	// readPidfile must still parse only the first line correctly.
+	pid, err := readPidfile(mount)
+	if err != nil {
+		t.Fatalf("readPidfile() error = %v", err)
+	}
+	if pid != os.Getpid() {
+		t.Errorf("readPidfile() = %d, want %d", pid, os.Getpid())
+	}
+}
+
+func TestReadPidfile_LegacySingleLineStillParses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mount := t.TempDir()
+
+	path, err := pidfilePath(mount)
+	if err != nil {
+		t.Fatalf("pidfilePath() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A pidfile written before mountpoint recording existed: PID only, no
+	// trailing newline, no second line.
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pid, err := readPidfile(mount)
+	if err != nil {
+		t.Fatalf("readPidfile() error = %v, want nil for a legacy single-line pidfile", err)
+	}
+	if pid != os.Getpid() {
+		t.Errorf("readPidfile() = %d, want %d", pid, os.Getpid())
+	}
+}
+
+func TestReadPidfileMountpoint_ReadsSecondLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mount := t.TempDir()
+
+	if err := writePidfile(mount); err != nil {
+		t.Fatalf("writePidfile() error = %v", err)
+	}
+	path, err := pidfilePath(mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	absMount, _ := filepath.Abs(mount)
+	if got := readPidfileMountpoint(path); got != absMount {
+		t.Errorf("readPidfileMountpoint() = %q, want %q", got, absMount)
+	}
+}
+
+func TestReadPidfileMountpoint_LegacyFileReturnsEmpty(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mount := t.TempDir()
+
+	path, err := pidfilePath(mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readPidfileMountpoint(path); got != "" {
+		t.Errorf("readPidfileMountpoint() on legacy file = %q, want empty", got)
 	}
 }
 

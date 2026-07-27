@@ -1,7 +1,7 @@
-// Package history implements SPEC.md §16/FR-41…FR-46: a SQLite-backed rollup
+// Package history is the SQLite-backed rollup
 // store that records per-operation counters, session metadata, and coverage
-// snapshots. It is the only package that executes SQL (SPEC §21). File
-// contents are never stored — only paths, counts, and timestamps (NFR-1).
+// snapshots. It is the only package that executes SQL. File
+// contents are never stored — only paths, counts, and timestamps.
 package history
 
 import (
@@ -18,7 +18,7 @@ import (
 	"github.com/sarathsp06/janusfs/internal/obs"
 )
 
-// Store persists event rollups to SQLite (FR-41). Zero value is not usable;
+// Store persists event rollups to SQLite. Zero value is not usable;
 // call Open.
 type Store struct {
 	db           *sqlx.DB
@@ -36,7 +36,7 @@ type Store struct {
 
 // Open creates or opens the history DB at dbPath, runs migrations, and
 // starts the batched writer goroutine. If dbPath is empty, Open returns nil
-// (no-op store, FR-45's --no-history).
+// so --no-history yields a no-op store.
 func Open(root, dbPath string, retentionDays int) (*Store, error) {
 	if dbPath == "" {
 		return nil, nil
@@ -107,9 +107,9 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Record is called by the event-bus fan-out goroutine for every event
-// (FR-42). It buffers events and returns immediately; the batched writer
-// flushes them periodically.
+// Record is called by the event-bus fan-out goroutine for every event. It
+// buffers and returns immediately; the batched writer flushes periodically, so a
+// slow or failed flush never reaches back into a FUSE handler.
 func (s *Store) Record(e obs.Event) {
 	if s == nil {
 		return
@@ -206,7 +206,7 @@ func (s *Store) flush(events []obs.Event) {
 	s.mu.Unlock()
 }
 
-// Stats returns current session counters (FR-46).
+// Stats returns current session counters.
 func (s *Store) Stats(ctx context.Context) map[string]any {
 	if s == nil || s.db == nil {
 		return nil
@@ -248,7 +248,7 @@ type OpRollup struct {
 	AvgLatencyUs float64 `json:"avgLatencyUs" db:"avglatency"`
 }
 
-// Query returns rollup data filtered by time range (FR-46).
+// Query returns rollup data filtered by time range.
 func (s *Store) Query(ctx context.Context, since time.Time) ([]OpRollup, error) {
 	if s == nil || s.db == nil {
 		return nil, nil

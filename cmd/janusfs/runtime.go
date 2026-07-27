@@ -26,8 +26,8 @@ import (
 // per-mount dashboard/API server, and the observability/history machinery
 // behind them. The daemon holds one of these per mounted source and calls
 // stop() to tear it down cleanly. Rule changes are applied on demand via
-// reload() (there is no file watcher — see janusfs update / the dashboard's
-// Reload button; docs/SPEC_AMENDMENTS.md 2026-07-21).
+// reload(). There is no file watcher — see `janusfs update` and the dashboard's
+// Reload button.
 type mountRuntime struct {
 	UUID       string
 	Src        string
@@ -167,7 +167,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 
 // stop tears down the mount: cancels the context (asking go-fuse to unmount),
 // waits up to the grace window for the serve loop to exit, force-unmounts if
-// it drags (FR-2), then closes history/event resources. Nil-safe so it doubles
+// it drags, then closes history/event resources. Nil-safe so it doubles
 // as the cleanup path for a mount that failed partway through startMount.
 func (rt *mountRuntime) stop() {
 	if rt.cancel != nil {
@@ -178,7 +178,7 @@ func (rt *mountRuntime) stop() {
 		case <-rt.done:
 			// graceful unmount completed within the grace window
 		case <-time.After(shutdownGrace):
-			// FR-2: force the unmount at the OS level, then give the serve loop
+			// Force the unmount at the OS level, then give the serve loop
 			// a moment to observe it. Calling server.Unmount again is not enough
 			// when macFUSE leaves a busy/stale mount behind.
 			if err := unmountKernel(rt.Mountpoint, true); err != nil && rt.logger != nil {

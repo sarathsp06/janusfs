@@ -1,8 +1,8 @@
-// Package obs implements SPEC.md §10's observability internals: event bus,
+// Package obs holds the observability internals: event bus,
 // metrics registry, ring buffer, and top-N path tracker. It is the single
 // point where FUSE handlers emit structured events about every decision and
 // read — handlers use non-blocking send so observability never blocks the
-// data path (NFR-5).
+// data path.
 package obs
 
 import (
@@ -33,7 +33,7 @@ func (d Decision) String() string {
 	}
 }
 
-// Op is the FUSE operation type (FR-22).
+// Op is the FUSE operation type.
 type Op string
 
 const (
@@ -54,7 +54,7 @@ const (
 	OpGetxattr Op = "getxattr"
 )
 
-// CacheResult describes how a read was served (FR-22).
+// CacheResult describes how a read was served.
 type CacheResult string
 
 const (
@@ -64,7 +64,7 @@ const (
 	CacheNA      CacheResult = "na"
 )
 
-// Event is emitted on every decision-bearing FUSE op (FR-22).
+// Event is emitted on every decision-bearing FUSE op.
 type Event struct {
 	TS          time.Time
 	Op          Op

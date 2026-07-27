@@ -1,15 +1,14 @@
-// Package check implements FR-28's static config linter: it walks a rule
+// Package check is the static config linter: it walks a rule
 // tree (internal/rules) and a real source tree together and reports
 // findings a human should look at before mounting — regex/glob errors,
 // globs that touch nothing, mask globs that accidentally target a
-// directory (FR-9), negations that can never take effect because an
-// ancestor directory is Hidden (FR-8), and in-tree negations that can never
-// take effect because the global rule floor already hid the path
-// (docs/SPEC_AMENDMENTS.md 2026-07-18).
+// directory, negations that can never take effect because an
+// ancestor directory is Hidden, and in-tree negations that can never
+// take effect because the global rule floor already hid the path.
 //
-// This package is shared, per SPEC.md §3.7/§20.3 (Phase 5), by both
-// `janusfs check` and the future `.janusfs/conflicts.json` virtual file —
-// it has no CLI or FUSE dependencies of its own.
+// This package is shared by both `janusfs check` and the
+// `.janusfs/conflicts.json` virtual file, so it has no CLI or FUSE dependencies
+// of its own.
 package check
 
 import (
@@ -24,7 +23,7 @@ import (
 	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
-// Severity orders findings for display (FR-33: "sorted by severity").
+// Severity orders findings for display, worst first.
 type Severity int
 
 const (
@@ -45,14 +44,13 @@ func (s Severity) String() string {
 }
 
 // MarshalJSON renders Severity as its string form ("error"/"warn"/"info")
-// rather than a bare int, so --json output is self-describing (FR-28's
-// "--json for machine output" shouldn't require the reader to know this
-// package's internal enum ordering).
+// rather than a bare int, so --json output is self-describing and a consumer
+// need not know this package's internal enum ordering.
 func (s Severity) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.String())
 }
 
-// Finding is one FR-28 static-analysis result: file:line, a severity, a
+// Finding is one static-analysis result: file:line, a severity, a
 // human-readable message, and (where applicable) a suggested fix.
 type Finding struct {
 	Severity   Severity `json:"severity"`
@@ -71,8 +69,8 @@ type Report struct {
 	DirCount  int       `json:"dirCount"`
 }
 
-// HasErrors reports whether any finding is SeverityError — FR-28's "exit 1
-// on errors, 0 otherwise."
+// HasErrors reports whether any finding is SeverityError, which is what makes
+// `janusfs check` exit 1.
 func (r Report) HasErrors() bool {
 	for _, f := range r.Findings {
 		if f.Severity == SeverityError {
@@ -92,7 +90,7 @@ type treeEntry struct {
 }
 
 // Run discovers root's rule tree and lints it against root's real
-// contents (FR-28).
+// contents.
 func Run(root string) (Report, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
@@ -175,7 +173,7 @@ func discoverErrorFindings(rs *rules.RuleSet) []Finding {
 	return out
 }
 
-// ignoreLevelFindings reports zero-match .janusignore lines (FR-28).
+// ignoreLevelFindings reports zero-match .janusignore lines.
 func ignoreLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 	var out []Finding
 	for _, lvl := range rs.IgnoreLevels {
@@ -196,7 +194,7 @@ func ignoreLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 	return out
 }
 
-// maskLevelFindings reports FR-9 directory-mask rewrites, zero-match
+// maskLevelFindings reports directory-mask rewrites, zero-match
 // globs, and pattern-reference errors (unknown builtin / bad regex).
 func maskLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 	var out []Finding
@@ -228,7 +226,7 @@ func maskLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 			}
 
 			if matchedDir {
-				// Severity is Warn, not Error: FR-9 already makes this
+				// Severity is Warn, not Error: this is already
 				// harmless at runtime (Resolve never evaluates mask
 				// entries for isDir==true, so a directory-matching glob
 				// can never actually mask anything) — this is a
@@ -237,7 +235,7 @@ func maskLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 					Severity:   SeverityWarn,
 					File:       lvl.File,
 					Line:       e.LineNo,
-					Message:    fmt.Sprintf("mask glob %q also matches a directory, which can never be Masked (FR-9) — the directory match is a harmless no-op", e.Glob),
+					Message:    fmt.Sprintf("mask glob %q also matches a directory, which can never be Masked — the directory match is a harmless no-op", e.Glob),
 					Suggestion: fmt.Sprintf("rewrite to %q if you meant to mask only the files inside", e.Glob+"/**"),
 				})
 			}
@@ -254,8 +252,8 @@ func maskLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 	return out
 }
 
-// hiddenDirNegationFindings reports FR-8 "negation attempts a hidden
-// ancestor directory blocks": a negate pattern that matches a real file
+// hiddenDirNegationFindings reports negations a hidden ancestor directory
+// blocks: a negate pattern that matches a real file
 // whose containing directory (or a shallower ancestor) resolves Hidden.
 func hiddenDirNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries []treeEntry) []Finding {
 	var out []Finding
@@ -281,7 +279,7 @@ func hiddenDirNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries []
 							Severity: SeverityWarn,
 							File:     lvl.File,
 							Line:     p.LineNo(),
-							Message:  fmt.Sprintf("negation %q has no effect: %s is under a Hidden ancestor directory (FR-8)", p.Raw(), te.rel),
+							Message:  fmt.Sprintf("negation %q has no effect: %s is under a Hidden ancestor directory", p.Raw(), te.rel),
 						})
 					}
 				}
@@ -291,14 +289,13 @@ func hiddenDirNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries []
 	return out
 }
 
-// globalFloorNegationFindings reports docs/SPEC_AMENDMENTS.md (2026-07-18,
-// "Rule precedence") "in-tree negation attempts a global-floor block": an
-// in-tree (mount root or subdirectory) negation that matches a real file
+// globalFloorNegationFindings reports in-tree negations the global floor blocks:
+// an in-tree (mount root or subdirectory) negation that matches a real file
 // the global rule level already resolves Hidden has no effect —
 // rules.RuleSet.Resolve's fail-closed floor keeps the path Hidden
-// regardless of the in-tree negation. Distinct from hiddenDirNegationFindings
-// (FR-8, an ancestor-directory block): this is the cross-trust-boundary
-// block between the global level and everything inside <src>.
+// regardless of the in-tree negation. Distinct from hiddenDirNegationFindings,
+// which is an ancestor-directory block: this is the cross-trust-boundary block
+// between the global level and everything inside <src>.
 func globalFloorNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries []treeEntry) []Finding {
 	if rs.GlobalDir == "" {
 		return nil
@@ -339,10 +336,9 @@ func globalFloorNegationFindings(rs *rules.RuleSet, eng *engine.Engine, entries 
 }
 
 // redundancyFindings reports exact-duplicate lines across levels — a rough
-// but honest approximation of FR-28's "redundant pairs (identical
-// effect)": true semantic-equivalence detection (e.g. two differently
-// worded globs matching the same set) is left to a human reviewer per the
-// SPEC's Phase 5 diagnostics-maturity scope.
+// but honest approximation of "redundant pairs". True semantic-equivalence
+// detection — two differently worded globs matching the same set — is left to a
+// human reviewer.
 func redundancyFindings(rs *rules.RuleSet) []Finding {
 	seen := map[string]string{} // raw text -> "file:line" of the first sighting
 	var out []Finding

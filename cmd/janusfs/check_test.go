@@ -13,7 +13,7 @@ import (
 // captureStdout redirects os.Stdout for the duration of fn and returns
 // everything fn wrote there. Used to assert on human-readable command
 // output without wiring cobra's io streams (runCheck writes directly to
-// stdout, since FR-33's output shape is what's being tested).
+// stdout, and the output shape is what's being tested).
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stdout

@@ -23,8 +23,9 @@ func newDoctorCmd() *cobra.Command {
 				return fmt.Errorf("doctor: %w", err)
 			}
 			pidfileDir := filepath.Join(home, ".janusfs", "run")
+			watchdogPidfile := filepath.Join(home, ".janusfs", "watchdog.pid")
 
-			report := health.Run(pidfileDir)
+			report := health.Run(pidfileDir, watchdogPidfile)
 
 			if jsonOut {
 				enc := json.NewEncoder(os.Stdout)
@@ -92,7 +93,25 @@ func printDoctorReport(r *health.Report) {
 		if !m.Alive {
 			status = "STALE"
 		}
-		fmt.Printf("  %s (pid %d) — %s\n", m.Mountpoint, m.PID, status)
+		if m.MountpointKnown {
+			fmt.Printf("  %s (pid %d) — %s\n", m.Mountpoint, m.PID, status)
+		} else {
+			// m.Mountpoint here is a SHA-256 hash of the real path (from an
+			// older pidfile predating mountpoint recording), never a path —
+			// say so rather than printing a hash as if it were actionable.
+			fmt.Printf("  <mountpoint unknown, pidfile hash %s> (pid %d) — %s\n", m.Mountpoint, m.PID, status)
+		}
+	}
+
+	// Watchdog.
+	fmt.Print("Watchdog: ")
+	switch {
+	case !r.Watchdog.Present:
+		fmt.Println("not running (crash recovery is manual — see `janusfs umount` if a mount hangs)")
+	case r.Watchdog.Alive:
+		fmt.Printf("running (pid %d)\n", r.Watchdog.PID)
+	default:
+		fmt.Printf("STALE (pid %d recorded but not alive)\n", r.Watchdog.PID)
 	}
 
 	// Warnings.

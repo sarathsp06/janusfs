@@ -179,7 +179,7 @@ func TestResolveMountpoint_NoOpWhenMountRootUnset(t *testing.T) {
 		t.Fatalf("ResolveMountpoint() error = %v", err)
 	}
 	if c.Mountpoint != "" {
-		t.Errorf("Mountpoint = %q, want empty (feature off, FR-1 unamended)", c.Mountpoint)
+		t.Errorf("Mountpoint = %q, want empty (derivation disabled)", c.Mountpoint)
 	}
 }
 

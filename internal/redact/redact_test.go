@@ -86,7 +86,7 @@ func TestMergeSpansCoalescesOverlap(t *testing.T) {
 	}
 }
 
-// TestRedactLenPreservedProperty is the SPEC §8.2 output invariant:
+// TestRedactLenPreservedProperty asserts the core output invariant:
 // len(out) == len(in), fuzzed across the builtin pattern library and
 // random inputs (including ones with no matches at all).
 func TestRedactLenPreservedProperty(t *testing.T) {
@@ -109,8 +109,7 @@ func TestRedactLenPreservedProperty(t *testing.T) {
 }
 
 // TestRedactIdempotent: redacting already-redacted output changes nothing
-// further (SPEC §22's idempotence property test) — none of the builtin
-// patterns match a run of '*' characters.
+// further, because none of the builtin patterns match a run of '*' characters.
 func TestRedactIdempotent(t *testing.T) {
 	allBuiltins := []string{"env-value", "aws-key", "private-key", "jwt", "db-uri", "github-token", "generic-secret"}
 	pats := mustPatterns(t, allBuiltins...)
@@ -167,9 +166,8 @@ func TestStreamChunkBoundaryTorture(t *testing.T) {
 		t.Run("offset_"+strconv.Itoa(off), func(t *testing.T) {
 			filler := strings.Repeat("x", off)
 			// Splice a multibyte rune right at the filler/secret join so the
-			// boundary region also exercises non-ASCII bytes (torture case
-			// from SPEC §22: "chunk-boundary match torture tests incl.
-			// multibyte UTF-8 straddles").
+			// boundary region also exercises non-ASCII bytes, so a
+			// multibyte UTF-8 sequence straddling the cut is covered.
 			// A space after the secret gives aws-key's trailing \b a
 			// word/non-word transition to fire on — "P" followed directly
 			// by "y" (both word chars) would never match the boundary

@@ -65,7 +65,7 @@ func TestCheckDirectoryMaskRewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !containsSubstr(findMessages(r), "which can never be Masked") {
-		t.Fatalf("expected FR-9 directory-mask message, got %v", findMessages(r))
+		t.Fatalf("expected directory-mask message, got %v", findMessages(r))
 	}
 }
 

@@ -1,8 +1,8 @@
 // Package logging wraps slog to provide the one place JanusFS configures its
-// JSON log handler (SPEC §15/§21: "no bare slog.Default()"), and a per-
-// component constructor so every log line is attributable at a glance.
+// JSON log handler, never a bare slog.Default(), plus a per-component
+// constructor so every log line is attributable at a glance.
 //
-// cmd/janusfs calls SetOutput once during process wiring (SPEC §15 step 2).
+// cmd/janusfs calls SetOutput once during process wiring.
 // Every other package obtains its logger via New(component) and must not
 // configure or call slog.Default() directly.
 package logging
@@ -26,14 +26,14 @@ func init() {
 }
 
 // SetOutput configures the single shared JSON handler that every logger
-// returned by New derives from (SPEC §15's "one JSON handler configured once
-// in cmd/janusfs"). Call it exactly once, early in process wiring, before
+// returned by New derives from. Call it exactly once, early in process wiring,
+// before
 // constructing per-component loggers with New.
 func SetOutput(w io.Writer, level slog.Leveler) {
 	handler.Store(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
 }
 
-// New returns an *slog.Logger tagged with a "component" attribute (SPEC §15),
+// New returns an *slog.Logger tagged with a "component" attribute,
 // deriving from the shared handler configured via SetOutput.
 func New(component string) *slog.Logger {
 	return slog.New(handler.Load().(slog.Handler)).With("component", component)
