@@ -55,6 +55,7 @@ func startChild(t *testing.T, env []string, args ...string) int {
 		if r.err != nil {
 			t.Fatalf("read pid from child: %v", r.err)
 		}
+		time.Sleep(10 * time.Millisecond) // Give the child's exec a tiny moment to complete
 		return r.pid
 	case <-time.After(3 * time.Second):
 		t.Fatal("child did not print pid within 3s")

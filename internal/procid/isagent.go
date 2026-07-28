@@ -78,20 +78,24 @@ func classify(r *MemRegistry, pid int, stime int64) bool {
 	if r.isRegisteredRoot(pid, stime) {
 		return true
 	}
-	cur := pid
+
+	p, _, err := parentAndStartTime(pid)
+	if err != nil || p <= 1 || p == pid {
+		return false
+	}
+
 	for depth := 0; depth < maxAncestryDepth; depth++ {
-		p, err := parent(cur)
-		if err != nil || p <= 1 || p == cur {
-			return false
-		}
-		pst, err := startTime(p)
+		nextP, pst, err := parentAndStartTime(p)
 		if err != nil {
 			return false
 		}
 		if r.isRegisteredRoot(p, pst) {
 			return true
 		}
-		cur = p
+		if nextP <= 1 || nextP == p {
+			return false
+		}
+		p = nextP
 	}
 	return false
 }
