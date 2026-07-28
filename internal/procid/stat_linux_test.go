@@ -9,6 +9,22 @@ import "testing"
 // on the LAST ')' in the line, not tokenize from the start — otherwise a
 // process named "my (weird) cmd" misaligns every subsequent field, and
 // ppid + starttime read off the wrong offsets.
+func TestParseParentAndStartTimeHandlesCommWithSpacesAndParens(t *testing.T) {
+	line := []byte("1234 (my (weird) cmd with spaces) S 4242 1 1 0 -1 1077936128 " +
+		"100 200 0 0 10 20 30 40 20 0 1 0 999888 12345 678 " +
+		"18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0")
+	ppid, start, err := parseParentAndStartTime(line)
+	if err != nil {
+		t.Fatalf("parseParentAndStartTime: %v", err)
+	}
+	if ppid != 4242 {
+		t.Errorf("ppid = %d, want 4242", ppid)
+	}
+	if start != 999888 {
+		t.Errorf("starttime = %d, want 999888", start)
+	}
+}
+
 func TestParseStatFieldsHandlesCommWithSpacesAndParens(t *testing.T) {
 	// Fabricated after a real /proc/self/stat but with a hostile comm.
 	// Post-')-space' fields (index 0 = state, index 1 = ppid, index 19 =

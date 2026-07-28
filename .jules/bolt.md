@@ -20,4 +20,4 @@ Furthermore, very fast parent lookup routines can outrun a spawned test subproce
 
 **Action:**
 Unified PPID and Start Time lookups into a single `parentAndStartTime` function, cutting OS file reads and system calls in half during ancestry walks. Built a high-performance, single-pass byte parser on Linux that reads `/proc/<pid>/stat` directly into a stack-allocated byte buffer using the low-level `unix` syscalls, achieving exactly zero heap allocations on the parse path. This reduced lookup times by over 56% and slashed allocations by 98.5%.
-Added a brief 10ms delay in process-spawning tests to guarantee the OS environment block is fully initialized before testing cross-process env-variable checks.
+Replaced the brief fixed delay in process-spawning tests with a condition-based wait for `JANUSFS_SESSION` to become visible in the child's environment before exercising the environ path.

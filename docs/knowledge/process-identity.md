@@ -106,12 +106,16 @@ gets a process *more* restriction, not less.
 Walk the PPID chain from the caller upward until a registered session root is
 found, or PID 1 is reached.
 
-- macOS: `unix.SysctlRaw` with `KERN_PROC_PID` yields a `kinfo_proc` carrying
-  both the parent PID and the process start time.
-- Linux: field 4 (`ppid`) and field 22 (`starttime`) of `/proc/<pid>/stat`.
+- macOS: one `KERN_PROC_PID` lookup yields a `kinfo_proc` carrying both the
+  parent PID and the process start time.
+- Linux: one `/proc/<pid>/stat` read yields field 4 (`ppid`) and field 22
+  (`starttime`); the parser is a single-pass byte scanner anchored on the last
+  `)` so process names containing spaces or parentheses cannot misalign fields.
 
-The walk is O(depth) syscalls, which is far too expensive per FUSE operation, so
-the verdict must be memoized.
+The implementation exposes this as `parentAndStartTime(pid)` so the ancestry
+walk reads each ancestor once instead of separately calling `parent(pid)` and
+`startTime(pid)`. The walk is still O(depth) OS reads, which is far too expensive
+per FUSE operation, so the verdict must be memoized.
 
 ## 3. Start time, for cache-key disambiguation only
 
@@ -189,8 +193,10 @@ type Registry interface {
 ```
 
 Platform specifics go in `procid_darwin.go` and `procid_linux.go` behind one
-internal interface: `startTime(pid)`, `parent(pid)`, `environ(pid)`. Both are
-pure `golang.org/x/sys/unix`; cgo remains forbidden.
+internal interface: `parentAndStartTime(pid)`, `startTime(pid)`, `parent(pid)`,
+`environ(pid)`. `startTime` and `parent` are compatibility wrappers around the
+combined lookup. Both platform implementations are pure `golang.org/x/sys/unix`;
+cgo remains forbidden.
 
 The caller PID reaches the adapter through go-fuse's caller context, which the
 adapter must plumb into the decision path — today `resolve()` takes no caller
@@ -199,13 +205,14 @@ through the adapter, not a local addition.
 
 # The cost that decides whether this ships
 
-Every FUSE operation would perform at least one `sysctl` to re-read the caller's
-start time and confirm the memoized verdict. `NFR-3`'s budget is 250 µs of
-added p99 latency for an allowed operation. A `KERN_PROC_PID` `sysctl` is
-plausibly a few microseconds, but that is an assumption, not a measurement.
+Every FUSE operation would perform at least one process lookup to re-read the
+caller's start time and confirm the memoized verdict. `NFR-3`'s budget is 250 µs
+of added p99 latency for an allowed operation. The measured cache-hit
+revalidation cost is comfortably under budget on darwin/arm64, and PR #12's
+linux/amd64 measurements put `BenchmarkStartTime` at ~8.7 µs and a depth-5
+ancestry walk at ~34.9 µs after the combined lookup/parser optimization.
 
-**Benchmark this before building anything else in this document.** If a
-per-operation identity lookup does not fit the budget, the honest conclusion is
-that macOS path-preserving mode does not ship, and the disjoint-mountpoint model
-stays the macOS answer — which is a perfectly acceptable outcome, because Linux
-gets real isolation either way.
+If these measurements stop fitting the budget on a supported platform, the
+honest conclusion is that macOS path-preserving mode does not ship there, and
+the disjoint-mountpoint model stays the answer — which is a perfectly acceptable
+outcome, because Linux gets real isolation either way.

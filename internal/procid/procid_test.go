@@ -55,12 +55,29 @@ func startChild(t *testing.T, env []string, args ...string) int {
 		if r.err != nil {
 			t.Fatalf("read pid from child: %v", r.err)
 		}
-		time.Sleep(10 * time.Millisecond) // Give the child's exec a tiny moment to complete
 		return r.pid
 	case <-time.After(3 * time.Second):
 		t.Fatal("child did not print pid within 3s")
 		return 0
 	}
+}
+
+func waitForEnvironToken(t *testing.T, pid int, token string) ([]string, error, bool) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var lastEnv []string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		env, err := environ(pid)
+		lastEnv, lastErr = env, err
+		if err == nil {
+			if tok, ok := tokenFromEnviron(env); ok && tok == token {
+				return env, nil, true
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return lastEnv, lastErr, false
 }
 
 func TestStartTimeAndParentSelf(t *testing.T) {
@@ -107,17 +124,12 @@ func TestIsAgentDirectChildViaEnviron(t *testing.T) {
 	// from KERN_PROCARGS2 for a cross-process read (see the caveat in
 	// environ_darwin.go). Skip when environ scraping is not usable on the
 	// current OS; the ancestry-walk path is exercised separately.
-	env := append(os.Environ(), sessionEnvVar+"=probe-token")
+	probeToken := "probe-token"
+	env := append(os.Environ(), sessionEnvVar+"="+probeToken)
 	probePID := startChild(t, env)
-	probeEnv, err := environ(probePID)
-	if err != nil || len(probeEnv) == 0 {
-		t.Skipf("environ(child) unavailable on this OS (err=%v, entries=%d) — environ path not testable", err, len(probeEnv))
-	}
-	// Also assert the probe actually saw JANUSFS_SESSION — if the kernel
-	// truncated but returned something (unlikely but not impossible),
-	// we cannot rely on this test's premise either.
-	if _, ok := tokenFromEnviron(probeEnv); !ok {
-		t.Skip("environ(child) returned entries but not JANUSFS_SESSION — environ region truncated by the kernel")
+	probeEnv, err, ok := waitForEnvironToken(t, probePID, probeToken)
+	if !ok {
+		t.Skipf("environ(child) unavailable or does not expose JANUSFS_SESSION on this OS (err=%v, entries=%d) — environ path not testable", err, len(probeEnv))
 	}
 
 	r := NewMemRegistry()
@@ -128,6 +140,9 @@ func TestIsAgentDirectChildViaEnviron(t *testing.T) {
 
 	childEnv := append(os.Environ(), sessionEnvVar+"="+token)
 	pid := startChild(t, childEnv)
+	if _, err, ok := waitForEnvironToken(t, pid, token); !ok {
+		t.Fatalf("test premise failed: child environ did not expose JANUSFS_SESSION before IsAgent (err=%v)", err)
+	}
 
 	if !r.IsAgent(pid) {
 		t.Errorf("expected child with JANUSFS_SESSION=%q to be classified as agent", token)

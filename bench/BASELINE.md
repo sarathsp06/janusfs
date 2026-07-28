@@ -46,6 +46,19 @@ the cache-hit path (map lookup + one start-time revalidation) is ~9 µs; the
 depth-5 ancestry walk (cold path, before memoization) is ~46 µs. All
 comfortably under budget — PRP 06 continues past Task 1's gate.
 
-Linux was not measured on this darwin-only development machine; `/proc/<pid>/stat`
-is a page cache hit and should be similar-or-faster, but that is an
-assumption until captured on a real Linux host.
+## PR #12 — Linux process identity parser optimization (measured on linux/amd64)
+
+PR #12 replaced separate parent/start-time reads with a single
+`parentAndStartTime(pid)` call and switched Linux `/proc/<pid>/stat` parsing to a
+single-pass byte parser. Reported linux/amd64 measurements:
+
+```
+BenchmarkStartTime       19825 ns/op  3264 B/op  11 allocs/op  →   8720 ns/op    48 B/op  2 allocs/op
+BenchmarkAncestryWalk    81940 ns/op 13602 B/op  44 allocs/op  →  34895 ns/op   160 B/op  8 allocs/op
+```
+
+This closes the earlier Linux measurement gap for the procid hot path: a single
+start-time revalidation is well under the 250 µs per-op identity budget, and the
+cold ancestry walk remains comfortably inside the budget too. These Linux numbers
+were provided by the PR author; this darwin/arm64 development machine cannot
+execute Linux binaries, but it does cross-compile the Linux test binary.

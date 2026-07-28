@@ -39,7 +39,7 @@ func readStatFields(pid int) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("procid: open %s: %w", path, err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	var data [1024]byte
 	n, err := unix.Read(fd, data[:])
@@ -61,20 +61,22 @@ func parentAndStartTime(pid int) (int, int64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("procid: open %s: %w", path, err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	var data [1024]byte
 	n, err := unix.Read(fd, data[:])
 	if err != nil {
 		return 0, 0, fmt.Errorf("procid: read %s: %w", path, err)
 	}
-	subData := data[:n]
+	return parseParentAndStartTime(data[:n])
+}
 
-	i := bytes.LastIndexByte(subData, ')')
-	if i < 0 || i+2 >= len(subData) {
+func parseParentAndStartTime(data []byte) (int, int64, error) {
+	i := bytes.LastIndexByte(data, ')')
+	if i < 0 || i+2 >= len(data) {
 		return 0, 0, fmt.Errorf("procid: malformed /proc stat line")
 	}
-	sub := subData[i+2:]
+	sub := data[i+2:]
 
 	var ppid int
 	var starttime int64
