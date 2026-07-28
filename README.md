@@ -502,21 +502,6 @@ See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / ass
 
 For details on building, formatting, running unit and FUSE integration tests, and validating the release configuration locally, see the **[Development Guide](docs/DEVELOPMENT.md)**.
 
-## Status
-
-**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Reloads are on demand — there is no continuous file watcher (`janusfs update` recompiles the rule set and invalidates the cache; FR-20) — but in-tree rule changes are also picked up automatically the next time `open`/`opendir` resolves near them, via a path-depth-bounded on-disk staleness probe (FR-20a). The observability stack (`internal/obs` + `internal/api`) serves a live dashboard (coverage, cache stats, a real-time SSE event feed) and a Prometheus `/metrics` endpoint, with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting. Mounts are owned by a long-running daemon (`janusfs daemon`) that resumes them across reboots and serves one combined dashboard; `janusfs mount`/`umount` are thin clients over a local control socket.
-
-Roadmap:
-
-- [x] Phase 0 — walking-skeleton macFUSE passthrough
-- [x] Phase 1 — rule engine, three-state resolution, `janusfs init`/`check`/`explain`
-- [x] Phase 2 — pattern-based masking wired into the mount, leak oracle green
-- [x] Phase 3 — on-demand reload (`janusfs update`), race-tight leak oracle
-- [x] Phase 4 — dashboard, history, HTTP API, per-mount token auth
-- [x] Phase 5 — diagnostics maturity (`janusfs doctor`, conflicts.json)
-
-MVP (Phases 0–4) is complete.
-
 ## License
 
 JanusFS is licensed under the [MIT License](LICENSE).
