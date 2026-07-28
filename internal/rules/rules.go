@@ -81,6 +81,9 @@ type IgnoreLevel struct {
 	// Hidden rather than silently skip the broken line (see Resolve).
 	Poisoned bool
 	LineErrs []error
+
+	IsGlobal bool
+	RelDir   string
 }
 
 // RawLine is one non-blank, non-comment line of a config file, kept for
@@ -103,9 +106,11 @@ type MaskEntry struct {
 
 // MaskLevel is one directory's compiled .janusmask.
 type MaskLevel struct {
-	Dir     string
-	File    string
-	Entries []MaskEntry
+	Dir      string
+	File     string
+	Entries  []MaskEntry
+	IsGlobal bool
+	RelDir   string
 }
 
 // RuleSet is the immutable, compiled result of discovery. Levels are ordered
@@ -167,13 +172,29 @@ func Discover(root string) (*RuleSet, error) {
 
 // loadLevel loads dir's .janusignore/.janusmask (if present) into rs.
 func (rs *RuleSet) loadLevel(dir string) {
+	isGlobal := rs.GlobalDir != "" && dir == rs.GlobalDir
+	var relDir string
+	if !isGlobal {
+		rel, err := filepath.Rel(rs.Root, dir)
+		if err == nil {
+			relDir = filepath.ToSlash(rel)
+			if relDir == "." {
+				relDir = ""
+			}
+		}
+	}
+
 	if lvl, ok, err := loadIgnoreLevel(dir, rs.FoldCase); ok {
+		lvl.IsGlobal = isGlobal
+		lvl.RelDir = relDir
 		rs.IgnoreLevels = append(rs.IgnoreLevels, lvl)
 		rs.DiscoverErrs = append(rs.DiscoverErrs, lvl.LineErrs...)
 	} else if err != nil {
 		rs.DiscoverErrs = append(rs.DiscoverErrs, err)
 	}
 	if lvl, ok, err := loadMaskLevel(dir, rs.FoldCase); ok {
+		lvl.IsGlobal = isGlobal
+		lvl.RelDir = relDir
 		rs.MaskLevels = append(rs.MaskLevels, lvl)
 	} else if err != nil {
 		rs.DiscoverErrs = append(rs.DiscoverErrs, err)

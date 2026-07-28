@@ -275,3 +275,38 @@ func TestConcurrentReadsSinglePathNoRace(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func BenchmarkPatternSignature_Empty(b *testing.B) {
+	var pats []*patterns.Pattern
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
+
+func BenchmarkPatternSignature_Single(b *testing.B) {
+	pats, err := patterns.ParsePatternRef("env-value")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
+
+func BenchmarkPatternSignature_Multiple(b *testing.B) {
+	pats1, _ := patterns.ParsePatternRef("env-value")
+	pats2, _ := patterns.ParsePatternRef("aws-key")
+	pats3, _ := patterns.ParsePatternRef("github-token")
+	pats := append(pats1, pats2...)
+	pats = append(pats, pats3...)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
