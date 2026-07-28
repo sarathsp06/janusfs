@@ -152,7 +152,7 @@ cd my-project
 janusfs init                    # writes .janusignore + .janusmask templates
 
 # 4) preview what those rules will do BEFORE you mount
-janusfs check                   # linter: zero-match globs, dir-mask, hidden-dir/global-floor negations
+janusfs check                   # linter: bad regex/glob, dir-mask no-ops, ineffective negations
 janusfs explain .env            # per-file trace: which rule decided this file's fate
 
 # 5) start the daemon (owns mounts, serves the dashboard, resumes past mounts)
@@ -164,6 +164,11 @@ janusfs mount .
 # prints the mountpoint + dashboard URL. Point your agent at that mountpoint,
 # never at the real path. Unmount later with:  janusfs umount .
 ```
+
+**Platform-specific confinement, read this before you decide how to launch your agent:**
+
+- **Linux** has a real, kernel-enforced boundary: `janusfs exec -- <agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path. The agent cannot reach the unfiltered tree by any path, because from inside that namespace the unfiltered tree doesn't exist.
+- **macOS has no enforced boundary today.** Both "point your agent at the mountpoint" and `janusfs exec` are **advisory**: the real source directory remains fully readable at its own path by the same agent process, through any other tool, subprocess, or absolute path it happens to resolve (git config, an IDE workspace file, a stray `cd`, …). Nothing on macOS currently stops that — path-preserving mode (which would close this) is speculative and unimplemented; the disjoint mountpoint model is the only thing that ships. If your threat model requires that an agent genuinely cannot reach a secret by any path, macOS is not sufficient on its own — this is JanusFS's own stated non-goal (see [Security model](#security-model)), not a bug you can configure around.
 
 The mountpoint always mirrors the source's full path under your mount root
 (e.g. `~/.janusfs/mounts/Users/you/my-project`), so two sources never collide
@@ -221,12 +226,22 @@ janusfs umount ~/proj      # unmount by source path OR mountpoint
 janusfs paths              # show where settings, the registry, and rules live
 ```
 
-Rules are applied on demand — there's no file watcher (watching a large tree
-exhausts macOS file descriptors, and the native FSEvents API needs cgo, which
-this project forbids). Editing a config file in the dashboard reloads
-automatically; editing on disk, run `janusfs update` (or click **Reload rules**
-in the dashboard). Reads are always correct regardless: every masked read
-revalidates the file before serving.
+There's no file watcher (watching a large tree exhausts macOS file
+descriptors, and the native FSEvents API needs cgo, which this project
+forbids) — but freshness is enforced at two different levels, and they're not
+the same guarantee:
+
+- **Content is always correct.** Every masked read revalidates the real
+  file's `(mtime, size, inode)` before serving, so a concurrent edit to the
+  file's *content* is always caught, on every single read.
+- **In-tree rule changes are picked up the next time anything is opened
+  near them.** Editing, or adding, a `.janusignore`/`.janusmask` file on disk
+  takes effect automatically the next time a file or directory near it is
+  opened — no explicit action needed. If nothing gets opened after the edit
+  (e.g. an agent only keeps reading already-open handles), or you edit
+  **global** rules (`~/.janusfs/config/`), run `janusfs update` to force it
+  immediately (or click **Reload rules** in the dashboard, which also reloads
+  on save).
 
 If no daemon is running, `janusfs mount` says so; `janusfs umount` falls back to
 a direct OS-level unmount so a stray mount can still be cleaned up. Stopping the
@@ -423,9 +438,10 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
-| `janusfs check [path]` | Static linter: unknown builtins, bad regex, zero-match globs, directory-mask globs, hidden-dir/global-floor negations that have no effect, duplicate rules. `--json` for machine output; exit 1 on errors. |
+| `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. `--json` for machine output; exit 1 on errors. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
 | `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
+| `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. **Linux:** real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. **macOS:** advisory only — sets the child's working directory to a disjoint sanitized mount, scrubs `JANUSFS_*` env vars, and rewrites the mountpoint back to the source path in argv and in stdout/stderr as a best-effort compatibility shim, but the real source path remains directly reachable by the child through any other means (a subprocess, a config file, a cache), and content the child prints containing the mountpoint string is rewritten too — not a faithful byte reproduction. Refuses to run if no `.janusignore`/`.janusmask` exists anywhere in the tree, rather than guessing. |
 
 All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
 
@@ -446,23 +462,21 @@ $ janusfs explain --root ~/proj ~/proj/.env
 ```
 $ janusfs check
 /Users/you/proj/.janusmask
-  [warn]:5  mask glob "**/application*.{yml,yaml}" matches no files under .
+  [error]:2 invalid mask rule "*.log" — files it matches are Hidden (fail-closed) until this is fixed: compiling custom regex "[": error parsing regexp: missing closing ]: `[`
   [warn]:8  mask glob "secrets" also matches a directory, which can never be Masked — the directory match is a harmless no-op
       suggestion: rewrite to "secrets/**" if you meant to mask only the files inside
 
-/Users/you/proj/sub/.janusignore
-  [error]:2 rules: 2: patterns: compiling custom regex "[": error parsing regexp: missing closing ]: `[`
-
-1 error(s), 2 warning(s), 0 info across 42 files, 7 directories.
+1 error(s), 1 warning(s) across 42 files, 7 directories.
 ```
 
 ## Security model
 
-- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted.
+- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **This boundary is only kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace). On macOS both the disjoint mount and `janusfs exec` are advisory: the real source directory stays reachable at its own path by any means other than the mountpoint. JanusFS is explicitly not a sandbox against a process that has, or can find, another way to the source (see Non-goals in `SPEC.md`) — on macOS today, "another way to the source" is simply "the source's own path," reachable with no exploit needed.
 - **Agents cannot weaken policy.** `.janusignore` and `.janusmask` are read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (edit a revealed file, save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount.
 - **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
 - **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
 - **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector (there is no file watcher).
+- **Opens and directory listings check rule freshness too.** Every `open`/`opendir` probes the ancestor chain of `.janusignore`/`.janusmask` files for on-disk changes (edited, added, or removed) and recompiles before resolving if anything moved — bounded by path depth, never a tree walk. This closes the gap where tightening a rule (or adding one to a previously bare directory) would otherwise silently have no effect until an explicit `janusfs update`. It does not cover global rules (`~/.janusfs/config/`) or paths nothing has opened since the edit — `janusfs update` remains the way to force those.
 - **Descriptor-relative reads.** The daemon opens the source directory once at mount time and every masked read goes through that retained descriptor with `O_NOFOLLOW`. Swapping a checked path for a symlink between the policy decision and the read cannot make the read follow the swap — the descriptor sees the file the decision was made against, not whatever the path string now resolves to.
 - **`~/.janusfs/` perms:** directory `0700`, files `0600`.
 
@@ -484,7 +498,7 @@ For details on building, formatting, running unit and FUSE integration tests, an
 
 ## Status
 
-**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Reloads are on demand — there is no file watcher (`janusfs update` recompiles the rule set and invalidates the cache; FR-20). The observability stack (`internal/obs` + `internal/api`) serves a live dashboard (coverage, cache stats, a real-time SSE event feed) and a Prometheus `/metrics` endpoint, with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting. Mounts are owned by a long-running daemon (`janusfs daemon`) that resumes them across reboots and serves one combined dashboard; `janusfs mount`/`umount` are thin clients over a local control socket.
+**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Reloads are on demand — there is no continuous file watcher (`janusfs update` recompiles the rule set and invalidates the cache; FR-20) — but in-tree rule changes are also picked up automatically the next time `open`/`opendir` resolves near them, via a path-depth-bounded on-disk staleness probe (FR-20a). The observability stack (`internal/obs` + `internal/api`) serves a live dashboard (coverage, cache stats, a real-time SSE event feed) and a Prometheus `/metrics` endpoint, with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting. Mounts are owned by a long-running daemon (`janusfs daemon`) that resumes them across reboots and serves one combined dashboard; `janusfs mount`/`umount` are thin clients over a local control socket.
 
 Roadmap:
 

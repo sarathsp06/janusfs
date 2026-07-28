@@ -17,11 +17,13 @@ import (
 // empty message to avoid an extra blank "janusfs: " line.
 var errSilentNonZero = errors.New("")
 
-// newCheckCmd statically lints the config tree rooted at [path] (default cwd):
-// regex and glob errors, zero-match globs, directory-mask rewrites, negation
-// attempts a hidden ancestor blocks, negations blocked by the global rule floor,
-// and exact-duplicate rules. The global rule directory is always included in the
-// scan, since it participates in every decision.
+// newCheckCmd statically lints the config tree rooted at [path] (default cwd)
+// for the things that indicate a real mistake: regex and glob errors,
+// directory-mask rewrites, negation attempts a hidden ancestor blocks, and
+// negations blocked by the global rule floor. It deliberately does NOT report a
+// pattern that merely matches no files today — a defensive rule covering files
+// that don't exist yet is intended, not a bug. The global rule directory is
+// always included in the scan, since it participates in every decision.
 func newCheckCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{

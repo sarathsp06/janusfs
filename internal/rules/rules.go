@@ -185,7 +185,7 @@ func readRawLines(path string) ([]RawLine, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []RawLine
 	sc := bufio.NewScanner(f)

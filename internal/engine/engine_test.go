@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -201,7 +202,7 @@ func BenchmarkResolveCacheHit(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer os.RemoveAll(home)
+	defer func() { _ = os.RemoveAll(home) }()
 	b.Setenv("HOME", home)
 
 	root := b.TempDir()
@@ -225,7 +226,7 @@ func BenchmarkResolveCacheMiss(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer os.RemoveAll(home)
+	defer func() { _ = os.RemoveAll(home) }()
 	b.Setenv("HOME", home)
 
 	root := b.TempDir()
@@ -262,5 +263,132 @@ func BenchmarkResolveCacheMiss(b *testing.B) {
 		// entry from the previous iteration.
 		e.gen.Add(1)
 		_ = e.Resolve(rel, false)
+	}
+}
+
+// TestStaleAncestorsDetectsEditedFile covers the case a manual `janusfs
+// update` already handles, as a baseline: editing a known rule file's
+// content (and therefore its mtime) must be detected.
+func TestStaleAncestorsDetectsEditedFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	ignorePath := filepath.Join(root, ".janusignore")
+	writeFile(t, ignorePath, "*.pem\n")
+	writeFile(t, filepath.Join(root, "secret.env"), "x")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.StaleAncestors("secret.env", false) {
+		t.Fatal("freshly-discovered rule set must not report stale")
+	}
+
+	// Editing the file: content + mtime change, but no NEW file appears.
+	time.Sleep(2 * time.Millisecond) // ensure a distinguishable mtime
+	writeFile(t, ignorePath, "*.pem\n*.env\n")
+
+	if !e.StaleAncestors("secret.env", false) {
+		t.Fatal("expected StaleAncestors to detect the edited .janusignore")
+	}
+	if err := e.Reload(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Resolve("secret.env", false).Decision; got != Hidden {
+		t.Errorf("after reload, expected Hidden, got %v", got)
+	}
+}
+
+// TestStaleAncestorsDetectsNewFileInPreviouslyBareDir is the case a naive
+// "did any known file's mtime change" check misses entirely: a brand-new
+// .janusignore dropped into a subdirectory that had no config file at all
+// when the engine was constructed changes no tracked file's mtime, so the
+// check must independently probe for newly-appeared files, not just diff
+// already-known ones.
+func TestStaleAncestorsDetectsNewFileInPreviouslyBareDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	subdir := filepath.Join(root, "subdir")
+	writeFile(t, filepath.Join(subdir, "secret.env"), "x")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Resolve("subdir/secret.env", false).Decision; got != Allowed {
+		t.Fatalf("expected Allowed before any rule exists, got %v", got)
+	}
+	if e.StaleAncestors("subdir/secret.env", false) {
+		t.Fatal("freshly-discovered rule set (no config files at all) must not report stale")
+	}
+
+	// A brand-new .janusignore in a directory that had NONE before — no
+	// previously-known file's mtime changes.
+	writeFile(t, filepath.Join(subdir, ".janusignore"), "*.env\n")
+
+	if !e.StaleAncestors("subdir/secret.env", false) {
+		t.Fatal("expected StaleAncestors to detect the newly-added .janusignore in a previously bare directory")
+	}
+	if err := e.Reload(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Resolve("subdir/secret.env", false).Decision; got != Hidden {
+		t.Errorf("after reload, expected Hidden, got %v", got)
+	}
+}
+
+// TestStaleAncestorsScopedToAncestorChain confirms the check is bounded to
+// the ancestor chain of the path being checked, not tree-wide: a new rule
+// file in an unrelated sibling directory must not be reported as making
+// this path's own ancestors stale.
+func TestStaleAncestorsDetectsSizeChangeEvenIfMTimeIsRestored(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	cfg := filepath.Join(root, ".janusignore")
+	writeFile(t, cfg, "secret.env\n")
+	writeFile(t, filepath.Join(root, "secret.env"), "x\n")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.StaleAncestors("secret.env", false) {
+		t.Fatal("expected fresh config snapshot immediately after New")
+	}
+
+	st, err := os.Stat(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := st.ModTime()
+
+	writeFile(t, cfg, "secret.env\nvery-secret.env\n")
+	if err := os.Chtimes(cfg, mod, mod); err != nil {
+		t.Fatal(err)
+	}
+
+	if !e.StaleAncestors("secret.env", false) {
+		t.Fatal("expected StaleAncestors to detect a size-changing edit even when mtime is restored")
+	}
+}
+
+func TestStaleAncestorsScopedToAncestorChain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a", "file.txt"), "x")
+	writeFile(t, filepath.Join(root, "b", "file.txt"), "x")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, filepath.Join(root, "b", ".janusignore"), "*.txt\n")
+
+	if e.StaleAncestors("a/file.txt", false) {
+		t.Fatal("a new rule in sibling directory b must not mark a's ancestor chain stale")
+	}
+	if !e.StaleAncestors("b/file.txt", false) {
+		t.Fatal("expected the new rule in b's own directory to be detected")
 	}
 }

@@ -303,7 +303,7 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 
 	d := &daemon{mounts: map[string]*mountRuntime{
@@ -321,7 +321,7 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go d.acceptLoop(ln)
 
 	resp, err := control.Call(daemonRequest{Cmd: "list"})

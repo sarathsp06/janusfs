@@ -79,7 +79,7 @@ func Call(req Request) (Response, error) {
 	if err != nil {
 		return Response{}, ErrDaemonNotRunning
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return Response{}, err
 	}

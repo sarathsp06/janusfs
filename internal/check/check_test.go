@@ -37,18 +37,26 @@ func containsSubstr(list []string, sub string) bool {
 	return false
 }
 
-func TestCheckZeroMatchGlob(t *testing.T) {
+// TestCheckZeroMatchIsNotAFinding locks in that a rule matching no file today
+// is NOT reported: a defensive `.janusignore`/`.janusmask` pattern covering
+// files that don't exist yet (id_rsa*, *.pem, …) is intended, not a mistake,
+// and warning about it only trains users to ignore check output.
+func TestCheckZeroMatchIsNotAFinding(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, ".janusignore"), "*.doesnotexist\n")
+	writeFile(t, filepath.Join(root, ".janusignore"), "*.doesnotexist\nid_rsa*\n")
+	writeFile(t, filepath.Join(root, ".janusmask"), "*.nope : env-value\n")
 	writeFile(t, filepath.Join(root, "README.md"), "x")
 
 	r, err := Run(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsSubstr(findMessages(r), "matches no files") {
-		t.Fatalf("expected a zero-match finding, got %v", findMessages(r))
+	if containsSubstr(findMessages(r), "matches no files") {
+		t.Fatalf("zero-match patterns are defensive and must not be reported, got %v", findMessages(r))
+	}
+	if len(r.Findings) != 0 {
+		t.Fatalf("expected no findings for a tree of only defensive non-matching rules, got %v", findMessages(r))
 	}
 }
 

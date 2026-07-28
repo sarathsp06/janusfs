@@ -82,7 +82,7 @@ func runPaths() error {
 		if r.note != "" {
 			note = r.note
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", r.label, r.path, note)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", r.label, r.path, note)
 	}
 	return tw.Flush()
 }

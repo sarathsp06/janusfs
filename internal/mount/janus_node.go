@@ -41,6 +41,13 @@ type JanusRoot struct {
 	Observe   func(OpEvent)
 	StartTime time.Time
 
+	// Reload is the single rule-set reload entry point (see Adapter.Reload);
+	// reloadIfStale calls it so an automatic on-open recompile is identical to
+	// a manual `janusfs update`. Nil-safe: reloadIfStale falls back to bumping
+	// the engine directly, which is still correct (the decision cache is
+	// generation-keyed).
+	Reload func() error
+
 	// Backing is a descriptor-relative handle to the source root, acquired
 	// once at construction. contentKey, readRaw, and decisionFor's Lstat use
 	// it instead of resolving a path string against LoopbackRoot.Path on every
@@ -67,7 +74,7 @@ type JanusNode struct {
 // newJanusRoot constructs the FUSE root node for src, wired to eng/prov.
 // Mirrors fs.NewLoopbackRoot's construction, but with NewNode set to
 // produce JanusNode instead of the library's default LoopbackNode.
-func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, observe func(OpEvent)) (fs.InodeEmbedder, *JanusRoot, error) {
+func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, observe func(OpEvent), reload func() error) (fs.InodeEmbedder, *JanusRoot, error) {
 	var st syscall.Stat_t
 	if err := syscall.Stat(src, &st); err != nil {
 		return nil, nil, err
@@ -84,10 +91,15 @@ func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, obser
 		return nil, nil, fmt.Errorf("mount: opening backing root %q: %w", src, err)
 	}
 
-	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe, StartTime: time.Now(), Backing: br}
-	jr.LoopbackRoot.Path = src
-	jr.LoopbackRoot.Dev = uint64(st.Dev)
-	jr.LoopbackRoot.NewNode = func(rootData *fs.LoopbackRoot, parent *fs.Inode, name string, st *syscall.Stat_t) fs.InodeEmbedder {
+	jr := &JanusRoot{Engine: eng, Provider: prov, Observe: observe, StartTime: time.Now(), Reload: reload, Backing: br}
+	jr.Path = src
+	jr.Dev = uint64(st.Dev)
+	// NewNode is deprecated in favor of NodeWrapChilder, but migrating would
+	// mean deriving isDir from the already-constructed node rather than the
+	// stat struct this factory receives directly — a behavior-relevant change
+	// to the decision-bearing constructor, deliberately not bundled into a
+	// lint pass.
+	jr.LoopbackRoot.NewNode = func(rootData *fs.LoopbackRoot, parent *fs.Inode, name string, st *syscall.Stat_t) fs.InodeEmbedder { //nolint:staticcheck
 		return &JanusNode{
 			LoopbackNode: fs.LoopbackNode{RootData: rootData},
 			root:         jr,
@@ -95,8 +107,8 @@ func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, obser
 		}
 	}
 
-	rootNode := jr.LoopbackRoot.NewNode(&jr.LoopbackRoot, nil, "", &st)
-	jr.LoopbackRoot.RootNode = rootNode
+	rootNode := jr.LoopbackRoot.NewNode(&jr.LoopbackRoot, nil, "", &st) //nolint:staticcheck
+	jr.RootNode = rootNode
 	return rootNode, jr, nil
 }
 
@@ -154,7 +166,7 @@ func (n *JanusNode) relPath() string {
 
 // absPath returns the real, on-disk absolute path this node represents.
 func (n *JanusNode) absPath() string {
-	return filepath.Join(n.root.LoopbackRoot.Path, n.relPath())
+	return filepath.Join(n.root.Path, n.relPath())
 }
 
 // resolve returns this node's own Decision, recovering from
@@ -169,6 +181,32 @@ func (n *JanusNode) resolve() (res engine.Resolution) {
 		}
 	}()
 	return n.root.Engine.Resolve(n.relPath(), n.isDir)
+}
+
+// reloadIfStale checks whether any .janusignore/.janusmask between this
+// node and the mount root has appeared, disappeared, or changed on disk
+// since the loaded rule-set generation was compiled, and recompiles if so —
+// closing the gap where editing (or newly adding) a rule silently has no
+// effect until an explicit `janusfs update`. Bounded by path depth (a
+// handful of stat calls), so it is only ever called from Open/OpendirHandle,
+// never from a read handler's hot path — every read already re-resolves its
+// decision against whichever generation is current, so a reload triggered
+// here takes effect for already-open handles for free on their next read.
+//
+// A reload that fails (e.g. a newly-edited file has a syntax error) is
+// ignored here: Engine.Reload never installs a broken rule set, so the
+// mount keeps serving the last-known-good generation and simply retries
+// staleness detection on the next Open/Opendir — the same fail-safe
+// contract `janusfs update` already has.
+func (n *JanusNode) reloadIfStale() {
+	if !n.root.Engine.StaleAncestors(n.relPath(), n.isDir) {
+		return
+	}
+	if n.root.Reload != nil {
+		_ = n.root.Reload()
+		return
+	}
+	_ = n.root.Engine.Reload(n.root.Path)
 }
 
 // decisionFor resolves the Decision for a not-yet-looked-up child name of
@@ -302,6 +340,7 @@ func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, f
 		n.observe("open", "CONFIG_READONLY", 0, start)
 		return nil, 0, syscall.EACCES
 	}
+	n.reloadIfStale()
 	res := n.resolve()
 	dec := res.Decision.String()
 	defer func() { n.observe("open", dec, 0, start) }()
@@ -349,6 +388,7 @@ var _ = (fs.NodeOpendirHandler)((*JanusNode)(nil))
 // parent's Readdir, untouched here — only descending into it is denied).
 func (n *JanusNode) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	start := time.Now()
+	n.reloadIfStale()
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("readdir", dec, 0, start) }()
@@ -550,7 +590,7 @@ func (n *JanusNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	if errno != 0 {
 		return target, errno
 	}
-	if escapesRoot(n.root.LoopbackRoot.Path, n.absPath(), string(target)) {
+	if escapesRoot(n.root.Path, n.absPath(), string(target)) {
 		return nil, syscall.ENOENT
 	}
 	return target, 0
@@ -703,7 +743,7 @@ func (h *maskedHandle) readRaw(ctx context.Context, dest []byte, off int64, star
 		h.node.observeRead("ALLOWED", 0, "", start)
 		return nil, apperrors.ToErrno(fmt.Errorf("readRaw openat %q: %w", rel, err))
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	n, err := preadFull(fd, dest, off)
 	if err != nil {
 		return nil, apperrors.ToErrno(err)

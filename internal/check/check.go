@@ -114,7 +114,6 @@ func Run(root string) (Report, error) {
 
 	var findings []Finding
 	findings = append(findings, discoverErrorFindings(rs)...)
-	findings = append(findings, ignoreLevelFindings(rs, entries)...)
 	findings = append(findings, maskLevelFindings(rs, entries)...)
 	findings = append(findings, hiddenDirNegationFindings(rs, eng, entries)...)
 	findings = append(findings, globalFloorNegationFindings(rs, eng, entries)...)
@@ -173,58 +172,41 @@ func discoverErrorFindings(rs *rules.RuleSet) []Finding {
 	return out
 }
 
-// ignoreLevelFindings reports zero-match .janusignore lines.
-func ignoreLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
-	var out []Finding
-	for _, lvl := range rs.IgnoreLevels {
-		if lvl.Poisoned {
-			continue // already reported via DiscoverErrs
-		}
-		for _, p := range lvl.Patterns {
-			if !matchesAnyEntry(lvl.Dir, rs.Root, p, entries) {
-				out = append(out, Finding{
-					Severity: SeverityWarn,
-					File:     lvl.File,
-					Line:     p.LineNo(),
-					Message:  fmt.Sprintf("pattern %q matches no files under %s", p.Raw(), displayDir(rs.Root, lvl.Dir)),
-				})
-			}
-		}
-	}
-	return out
-}
-
-// maskLevelFindings reports directory-mask rewrites, zero-match
-// globs, and pattern-reference errors (unknown builtin / bad regex).
+// maskLevelFindings reports the two mask problems that indicate a real
+// mistake: a pattern that failed to compile (unknown builtin / bad regex),
+// and a glob that targets a directory (which can never be Masked). It does
+// NOT flag a glob that merely matches no files today — a defensive rule
+// covering files that don't exist yet is intended, not a bug.
 func maskLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 	var out []Finding
 	for _, lvl := range rs.MaskLevels {
 		for _, e := range lvl.Entries {
 			if e.CompileErr != nil {
+				// State the consequence, not just the parse error: a mask
+				// entry that fails to compile fails closed — every file its
+				// glob matches resolves to Hidden until the rule is fixed
+				// (see internal/rules Resolve's poisonedMask path). Surfacing
+				// that here is what makes the fail-closed behaviour legible
+				// rather than a silent surprise.
 				out = append(out, Finding{
 					Severity: SeverityError,
 					File:     lvl.File,
 					Line:     e.LineNo,
-					Message:  e.CompileErr.Error(),
+					Message:  fmt.Sprintf("invalid mask rule %q — files it matches are Hidden (fail-closed) until this is fixed: %v", e.Glob, e.CompileErr),
 				})
 				continue
 			}
 
-			matchedDir, matchedFile := false, false
+			matchedDir := false
 			for _, te := range entries {
-				if !isUnderDir(rs.Root, lvl.Dir, te.rel) {
+				if !te.isDir || !isUnderDir(rs.Root, lvl.Dir, te.rel) {
 					continue
 				}
-				rel := relToDir(rs.Root, lvl.Dir, te.rel)
-				if e.GlobPattern.Matches(rel, te.isDir) {
-					if te.isDir {
-						matchedDir = true
-					} else {
-						matchedFile = true
-					}
+				if e.GlobPattern.Matches(relToDir(rs.Root, lvl.Dir, te.rel), true) {
+					matchedDir = true
+					break
 				}
 			}
-
 			if matchedDir {
 				// Severity is Warn, not Error: this is already
 				// harmless at runtime (Resolve never evaluates mask
@@ -237,14 +219,6 @@ func maskLevelFindings(rs *rules.RuleSet, entries []treeEntry) []Finding {
 					Line:       e.LineNo,
 					Message:    fmt.Sprintf("mask glob %q also matches a directory, which can never be Masked — the directory match is a harmless no-op", e.Glob),
 					Suggestion: fmt.Sprintf("rewrite to %q if you meant to mask only the files inside", e.Glob+"/**"),
-				})
-			}
-			if !matchedDir && !matchedFile {
-				out = append(out, Finding{
-					Severity: SeverityWarn,
-					File:     lvl.File,
-					Line:     e.LineNo,
-					Message:  fmt.Sprintf("mask glob %q matches no files under %s", e.Glob, displayDir(rs.Root, lvl.Dir)),
 				})
 			}
 		}
@@ -508,7 +482,6 @@ type levelInfo struct {
 	dir      string
 	patterns []matcher
 	file     string
-	lines    []int
 }
 
 // matcher is satisfied by internal/rules's unexported ignorePattern type
@@ -517,19 +490,6 @@ type levelInfo struct {
 // MaskEntry.GlobPattern.
 type matcher interface {
 	Matches(relPath string, isDir bool) bool
-}
-
-func matchesAnyEntry(dir, root string, p matcher, entries []treeEntry) bool {
-	for _, te := range entries {
-		if !isUnderDir(root, dir, te.rel) {
-			continue
-		}
-		rel := relToDir(root, dir, te.rel)
-		if p.Matches(rel, te.isDir) {
-			return true
-		}
-	}
-	return false
 }
 
 func displayDir(root, dir string) string {

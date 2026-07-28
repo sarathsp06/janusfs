@@ -11,6 +11,9 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -82,6 +85,55 @@ type Engine struct {
 	gen          atomic.Uint64
 	cache        atomic.Pointer[sync.Map]
 	cacheEntries atomic.Int64
+	configFP     atomic.Pointer[map[string]dirConfigFP]
+}
+
+// dirConfigFP is one directory's on-disk config-file fingerprint: whether
+// .janusignore/.janusmask exist there and, if so, their mtime and size. Two
+// fingerprints differing means the policy on disk has changed since the
+// fingerprint was taken — the file appeared, disappeared, or was edited. Size
+// is tracked alongside mtime as belt-and-suspenders: an edit that lands in the
+// same mtime tick (a coarse-mtime filesystem, or two writes within one
+// nanosecond) is still caught as long as it changed the file's length, the
+// same reason the redaction cache key carries both.
+type dirConfigFP struct {
+	ignoreOK, maskOK           bool
+	ignoreMTimeNS, maskMTimeNS int64
+	ignoreSize, maskSize       int64
+}
+
+func statConfigFP(dir string) dirConfigFP {
+	var fp dirConfigFP
+	if st, err := os.Stat(filepath.Join(dir, ".janusignore")); err == nil {
+		fp.ignoreOK = true
+		fp.ignoreMTimeNS = st.ModTime().UnixNano()
+		fp.ignoreSize = st.Size()
+	}
+	if st, err := os.Stat(filepath.Join(dir, ".janusmask")); err == nil {
+		fp.maskOK = true
+		fp.maskMTimeNS = st.ModTime().UnixNano()
+		fp.maskSize = st.Size()
+	}
+	return fp
+}
+
+// buildConfigSnapshot fingerprints every directory rs already discovered a
+// level in. It does NOT walk the tree — it only stats the (small, bounded by
+// config-file count, not tree size) set of directories Discover already
+// found — so it costs nothing beyond what Discover/Reload already paid.
+func buildConfigSnapshot(rs *rules.RuleSet) map[string]dirConfigFP {
+	snap := make(map[string]dirConfigFP, len(rs.IgnoreLevels)+len(rs.MaskLevels))
+	for _, lvl := range rs.IgnoreLevels {
+		if _, ok := snap[lvl.Dir]; !ok {
+			snap[lvl.Dir] = statConfigFP(lvl.Dir)
+		}
+	}
+	for _, lvl := range rs.MaskLevels {
+		if _, ok := snap[lvl.Dir]; !ok {
+			snap[lvl.Dir] = statConfigFP(lvl.Dir)
+		}
+	}
+	return snap
 }
 
 // New discovers and compiles root's rule tree, returning an Engine ready to
@@ -95,6 +147,8 @@ func New(root string) (*Engine, error) {
 	e.rs.Store(rs)
 	e.gen.Store(1)
 	e.cache.Store(&sync.Map{})
+	snap := buildConfigSnapshot(rs)
+	e.configFP.Store(&snap)
 	return e, nil
 }
 
@@ -173,7 +227,58 @@ func (e *Engine) Reload(root string) error {
 	e.gen.Add(1)
 	e.cache.Store(&sync.Map{})
 	e.cacheEntries.Store(0)
+	snap := buildConfigSnapshot(rs)
+	e.configFP.Store(&snap)
 	return nil
+}
+
+// StaleAncestors reports whether any .janusignore/.janusmask between
+// relPath's own directory (if relPath is itself a directory) or its parent
+// (if relPath is a file) and the rule tree's root has appeared, disappeared,
+// or changed mtime since the current generation was compiled — including a
+// brand-new config file in a directory that previously had none, which a
+// naive "did a known file's mtime change" check would miss entirely.
+//
+// This is bounded by path DEPTH, not tree size: a handful of stat(2) calls
+// per ancestor directory, never a tree walk. It is meant to be called from
+// Open/Opendir handlers (already off the per-read hot path), never from a
+// read handler — every read already re-resolves its decision against
+// whichever generation is current (FR-22/FR-24), so a reload triggered here
+// takes effect for in-flight reads for free the next time they run.
+//
+// Global-level (~/.janusfs/config) edits are not covered: that directory
+// isn't an ancestor of any in-tree path, so this check can't reach it by
+// construction. Those still require an explicit `janusfs update`.
+func (e *Engine) StaleAncestors(relPath string, isDir bool) bool {
+	rs := e.rs.Load()
+	snapPtr := e.configFP.Load()
+	if rs == nil || snapPtr == nil {
+		return false
+	}
+	snap := *snapPtr
+
+	dir := filepath.Join(rs.Root, filepath.FromSlash(relPath))
+	if !isDir {
+		dir = filepath.Dir(dir)
+	}
+	root := filepath.Clean(rs.Root)
+
+	for {
+		dir = filepath.Clean(dir)
+		got := statConfigFP(dir)
+		want := snap[dir] // zero value if dir wasn't a known level — correct: "no file expected"
+		if got != want {
+			return true
+		}
+		if dir == root || !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+			return false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
 }
 
 // RuleSet exposes the current compiled snapshot for callers that need

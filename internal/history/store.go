@@ -56,7 +56,7 @@ func Open(root, dbPath string, retentionDays int) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("history: migrate: %w", err)
 	}
 
@@ -74,12 +74,12 @@ func Open(root, dbPath string, retentionDays int) (*Store, error) {
 	}
 
 	if err := s.insertSessionStart(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("history: session start: %w", err)
 	}
 
 	if err := s.prune(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("history: initial prune: %w", err)
 	}
 
@@ -185,7 +185,7 @@ func (s *Store) flush(events []obs.Event) {
 	if err != nil {
 		return
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.NamedExec(`INSERT INTO op_rollups (ts, path, op, decision, bytes, latency_us, cnt) VALUES (:ts, :path, :op, :decision, :bytes, :latency_us, 1)`, rows); err != nil {
 		return

@@ -44,7 +44,7 @@ func startDaemonBackground(debug bool, indexPort int) error {
 		return fmt.Errorf("daemon: %w", err)
 	}
 	if conn, derr := net.Dial("unix", sock); derr == nil {
-		conn.Close()
+		_ = conn.Close()
 		fmt.Printf("JanusFS daemon is already running.\n  Dashboard: http://127.0.0.1:%d/\n", indexPort)
 		return nil
 	}
@@ -62,7 +62,7 @@ func startDaemonBackground(debug bool, indexPort int) error {
 	if err != nil {
 		return fmt.Errorf("daemon: opening %s: %w", logPath, err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -87,7 +87,7 @@ func startDaemonBackground(debug bool, indexPort int) error {
 	// Startup grace: poll the socket until the child binds it or we time out.
 	for range 50 {
 		if conn, derr := net.Dial("unix", sock); derr == nil {
-			conn.Close()
+			_ = conn.Close()
 			fmt.Printf("JanusFS daemon started (pid %d).\n  Logs:      %s\n  Dashboard: http://127.0.0.1:%d/\n", child.Process.Pid, logPath, indexPort)
 			return nil
 		}

@@ -42,7 +42,7 @@ func TestRecordAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	s.Record(obs.Event{Op: "open", Path: "a.txt", Decision: obs.Allowed, Bytes: 100, LatencyUs: 50})
 	s.Record(obs.Event{Op: "read", Path: "a.txt", Decision: obs.Allowed, Bytes: 1024, LatencyUs: 200})
@@ -51,14 +51,14 @@ func TestRecordAndStats(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Flush by closing.
-	s.Close()
+	_ = s.Close()
 
 	// Re-open and check stats.
 	s2, err := Open(dir, dbPath, 30)
 	if err != nil {
 		t.Fatalf("Re-open: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	stats := s2.Stats(context.Background())
 	if stats == nil {
@@ -76,20 +76,20 @@ func TestQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	s.Record(obs.Event{Op: "open", Path: "a.txt", Decision: obs.Allowed, Bytes: 100, LatencyUs: 50})
 	s.Record(obs.Event{Op: "read", Path: "a.txt", Decision: obs.Allowed, Bytes: 1024, LatencyUs: 200})
 	s.Record(obs.Event{Op: "open", Path: ".env", Decision: obs.Masked, Bytes: 44, LatencyUs: 30})
 
 	time.Sleep(100 * time.Millisecond)
-	s.Close()
+	_ = s.Close()
 
 	s2, err := Open(dir, dbPath, 30)
 	if err != nil {
 		t.Fatalf("Re-open: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	rows, err := s2.Query(context.Background(), time.Now().Add(-1*time.Hour))
 	if err != nil {
@@ -107,18 +107,18 @@ func TestPrune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	s.Record(obs.Event{Op: "open", Path: "old.txt", Decision: obs.Allowed})
 	time.Sleep(50 * time.Millisecond)
-	s.Close()
+	_ = s.Close()
 
 	// Re-open with 0 retention.
 	s2, err := Open(dir, dbPath, 0)
 	if err != nil {
 		t.Fatalf("Re-open: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	rows, err := s2.Query(context.Background(), time.Now().Add(-24*time.Hour))
 	if err != nil {
@@ -151,13 +151,13 @@ func TestReopenPersistence(t *testing.T) {
 	s1.Record(obs.Event{Op: "open", Path: "persist.txt", Decision: obs.Allowed, Bytes: 42})
 	s1.Record(obs.Event{Op: "open", Path: "persist.txt", Decision: obs.Allowed, Bytes: 42})
 	time.Sleep(50 * time.Millisecond)
-	s1.Close()
+	_ = s1.Close()
 
 	s2, err := Open(dir, dbPath, 30)
 	if err != nil {
 		t.Fatalf("Open s2: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	rows, err := s2.Query(context.Background(), time.Now().Add(-1*time.Hour))
 	if err != nil {
@@ -181,11 +181,11 @@ func TestCorruptionSafe(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "corrupt.db")
 
-	os.WriteFile(dbPath, []byte("not a valid sqlite database"), 0o600)
+	_ = os.WriteFile(dbPath, []byte("not a valid sqlite database"), 0o600)
 
 	s, err := Open(dir, dbPath, 30)
 	if err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("expected error opening corrupted DB")
 	}
 }
@@ -197,7 +197,7 @@ func TestConcurrentRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	done := make(chan struct{})
 	go func() {
@@ -214,13 +214,13 @@ func TestConcurrentRecord(t *testing.T) {
 
 	<-done
 	time.Sleep(100 * time.Millisecond)
-	s.Close()
+	_ = s.Close()
 
 	s2, err := Open(dir, dbPath, 30)
 	if err != nil {
 		t.Fatalf("Re-open: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 
 	rows, err := s2.Query(context.Background(), time.Now().Add(-1*time.Hour))
 	if err != nil {

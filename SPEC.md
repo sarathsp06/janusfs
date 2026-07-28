@@ -276,13 +276,30 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 ### 3.4 Reload and consistency
 
 - **FR-20** There is **no file watcher**. Rule changes are applied on demand: via
-  `janusfs update [src|mountpoint|configpath]`, the dashboard's reload button, or
-  a config save through the dashboard editor. A recompile builds a full new
-  snapshot off-thread and swaps it atomically; filesystem operations are never
-  blocked by recompilation, and the previous generation serves until the swap.
-  The rationale for having no watcher: on macOS a per-directory watch of a large
-  tree exhausted the descriptor limit, and cgo FSEvents bindings are forbidden
-  (§21). FR-22 is what makes this safe.
+  `janusfs update [src|mountpoint|configpath]`, the dashboard's reload button, a
+  config save through the dashboard editor, or — for in-tree rule files only —
+  automatically, the next time `open`/`opendir` resolves a path whose ancestor
+  chain's `.janusignore`/`.janusmask` set has changed on disk since the loaded
+  generation was compiled (FR-20a). A recompile builds a full new snapshot
+  off-thread and swaps it atomically; filesystem operations are never blocked by
+  recompilation, and the previous generation serves until the swap. The
+  rationale for having no *continuous* watcher: on macOS a per-directory watch
+  of a large tree exhausted the descriptor limit, and cgo FSEvents bindings are
+  forbidden (§21). FR-22 is what makes this safe.
+
+- **FR-20a** The on-demand check in FR-20 is bounded by path **depth**, not tree
+  size: on `open`/`opendir`, stat both config filenames at every ancestor
+  directory between the resolved path and the mount root (a handful of
+  `stat(2)` calls, never a directory walk) and compare existence+mtime against
+  a snapshot taken at the last successful discovery/reload. Detects an edited
+  file (mtime changed) and a brand-new file in a previously bare directory
+  (existence changed) equally — the latter is the case a naive
+  known-files-only mtime diff would miss. Never runs on a read handler; every
+  read already re-resolves its decision against whichever generation is
+  current (FR-22/FR-24), so a reload triggered here takes effect for
+  already-open handles for free on their next read. Does not cover the global
+  level (`~/.janusfs/config`, not an ancestor of any in-tree path) or a path
+  nothing has opened since the edit — both still require `janusfs update`.
 
 - **FR-21** A generation swap invalidates the decision cache and every cached
   redaction. Conservatively, all entries.
@@ -506,11 +523,15 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   and the dashboard URL.
 
 - **FR-48** `janusfs check [path]` statically lints the config tree and reports
-  per finding a severity, `file:line`, and a suggested fix: regex compile errors,
-  unknown builtin names, globs matching zero files, rule shadowing, redundant
-  pairs, directory-mask rewrites (FR-10), and blocked negation attempts (FR-9,
-  FR-17). Findings are grouped by file and sorted by severity. Exit 1 on errors.
-  `--json` for tooling.
+  per finding a severity, `file:line`, and a suggested fix, restricted to
+  findings that indicate a real mistake: regex/glob compile errors (reported
+  with their fail-closed-to-Hidden consequence), unknown builtin names,
+  directory-mask rewrites (FR-10), and blocked negation attempts (FR-9, FR-17).
+  It does **not** report a rule that merely matches no files in the current
+  tree: a defensive pattern for files that do not exist yet is intended, and
+  flagging it only trains the operator to ignore the output. Findings are
+  grouped by file and sorted by severity. Exit 1 on errors. `--json` for
+  tooling.
 
 - **FR-49** `janusfs explain <path>` shows the derivation of one path's decision:
   every rule considered, in order, with which matched, which was a negation, and

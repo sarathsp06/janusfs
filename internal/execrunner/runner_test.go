@@ -20,12 +20,12 @@ func TestRunMockE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp home: %v", err)
 	}
-	defer os.RemoveAll(tmpHome)
+	defer func() { _ = os.RemoveAll(tmpHome) }()
 
 	// Save original home and restore later.
 	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	_ = os.Setenv("HOME", tmpHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	// Define our source and mount directories. Resolve symlinks immediately:
 	// on macOS, os.MkdirTemp returns a path under /var/folders/..., which is
@@ -36,7 +36,7 @@ func TestRunMockE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create src dir: %v", err)
 	}
-	defer os.RemoveAll(srcDirRaw)
+	defer func() { _ = os.RemoveAll(srcDirRaw) }()
 	srcDir, err := filepath.EvalSymlinks(srcDirRaw)
 	if err != nil {
 		t.Fatalf("failed to resolve src dir: %v", err)
@@ -46,7 +46,7 @@ func TestRunMockE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mount dir: %v", err)
 	}
-	defer os.RemoveAll(mountDirRaw)
+	defer func() { _ = os.RemoveAll(mountDirRaw) }()
 	mountDir, err := filepath.EvalSymlinks(mountDirRaw)
 	if err != nil {
 		t.Fatalf("failed to resolve mount dir: %v", err)
@@ -87,7 +87,7 @@ func TestRunMockE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to listen on socket: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	// Handle mock daemon requests in a goroutine.
 	go func() {
@@ -97,7 +97,7 @@ func TestRunMockE2E(t *testing.T) {
 				return
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				var req daemonRequest
 				if err := json.NewDecoder(c).Decode(&req); err != nil {
 					return
@@ -130,47 +130,16 @@ func TestRunMockE2E(t *testing.T) {
 	if err := os.Chdir(srcDir); err != nil {
 		t.Fatalf("failed to chdir: %v", err)
 	}
-	defer os.Chdir(origCWD)
+	defer func() { _ = os.Chdir(origCWD) }()
 
 	// Set some environment variables.
-	os.Setenv("JANUSFS_MOCK_SECRET", "supersecret")
-	os.Setenv("MY_VAR", "myvalue")
-	defer os.Unsetenv("JANUSFS_MOCK_SECRET")
-	defer os.Unsetenv("MY_VAR")
+	_ = os.Setenv("JANUSFS_MOCK_SECRET", "supersecret")
+	_ = os.Setenv("MY_VAR", "myvalue")
+	defer func() { _ = os.Unsetenv("JANUSFS_MOCK_SECRET") }()
+	defer func() { _ = os.Unsetenv("MY_VAR") }()
 
 	// Target command: compile a small Go program and execute it.
-	helperGo := `
-package main
-
-import (
-	"fmt"
-	"os"
-)
-
-func main() {
-	// Print current working directory
-	cwd, _ := os.Getwd()
-	fmt.Printf("CWD:%s\n", cwd)
-
-	// Print arguments
-	for _, arg := range os.Args[1:] {
-		fmt.Printf("ARG:%s\n", arg)
-	}
-
-	// Print environment keys starting with JANUSFS_
-	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "JANUSFS_") {
-			fmt.Println("LEAK:JANUSFS_MOCK_SECRET is not scrubbed")
-			os.Exit(1)
-		}
-	}
-	fmt.Println("ENV_SCRUBBED:OK")
-}
-
-import "strings"
-`
-	// Wait, the Go imports block should be at the top! Let's clean up the code.
-	helperGo = `package main
+	const helperGo = `package main
 
 import (
 	"fmt"
@@ -199,7 +168,7 @@ func main() {
 	if err != nil {
 		t.Fatalf("failed to create test bin dir: %v", err)
 	}
-	defer os.RemoveAll(testBinDir)
+	defer func() { _ = os.RemoveAll(testBinDir) }()
 
 	goFile := filepath.Join(testBinDir, "helper.go")
 	if err := os.WriteFile(goFile, []byte(helperGo), 0o644); err != nil {
@@ -226,8 +195,8 @@ func main() {
 	exitCode, runErr := Run(context.Background(), []string{binFile, argWithSrc})
 
 	// Restore stdout/stderr
-	wOut.Close()
-	wErr.Close()
+	_ = wOut.Close()
+	_ = wErr.Close()
 	os.Stdout = origStdout
 	os.Stderr = origStderr
 
@@ -274,11 +243,11 @@ func TestRunDaemonNotRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp home: %v", err)
 	}
-	defer os.RemoveAll(tmpHome)
+	defer func() { _ = os.RemoveAll(tmpHome) }()
 
 	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	_ = os.Setenv("HOME", tmpHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	exitCode, err := Run(context.Background(), []string{"echo", "hello"})
 	if exitCode != 125 {
@@ -299,10 +268,10 @@ func TestFindSourceAndMountRefusesToGuess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp home: %v", err)
 	}
-	defer os.RemoveAll(tmpHome)
+	defer func() { _ = os.RemoveAll(tmpHome) }()
 	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", origHome)
+	_ = os.Setenv("HOME", tmpHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	// A policy-free directory: no .janusignore, no .janusmask anywhere in its
 	// ancestry within this isolated temp tree.
@@ -310,7 +279,7 @@ func TestFindSourceAndMountRefusesToGuess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create cwd: %v", err)
 	}
-	defer os.RemoveAll(policyFreeCwd)
+	defer func() { _ = os.RemoveAll(policyFreeCwd) }()
 	policyFreeCwd, err = filepath.EvalSymlinks(policyFreeCwd)
 	if err != nil {
 		t.Fatalf("failed to resolve cwd: %v", err)
@@ -326,7 +295,7 @@ func TestFindSourceAndMountRefusesToGuess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to listen on socket: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -336,7 +305,7 @@ func TestFindSourceAndMountRefusesToGuess(t *testing.T) {
 			var req daemonRequest
 			_ = json.NewDecoder(conn).Decode(&req)
 			_ = json.NewEncoder(conn).Encode(daemonResponse{OK: true})
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 

@@ -255,7 +255,7 @@ func (c *RamCache) readOversize(pats []*patterns.Pattern, p []byte, off int64, o
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	need := off + int64(len(p))
 	var out bytesSink
@@ -340,7 +340,7 @@ func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err

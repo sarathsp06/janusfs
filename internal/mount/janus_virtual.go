@@ -73,13 +73,14 @@ var _ = (fs.NodeGetattrer)((*janusVirtualFile)(nil))
 var _ = (fs.NodeOpener)((*janusVirtualFile)(nil))
 
 func (f *janusVirtualFile) content() []byte {
-	if f.name == "conflicts.json" {
-		b, err := vfsmeta.ConflictsJSON(f.root.LoopbackRoot.Path)
+	switch f.name {
+	case "conflicts.json":
+		b, err := vfsmeta.ConflictsJSON(f.root.Path)
 		if err != nil {
 			return []byte(fmt.Sprintf(`{"error": %q}`, err.Error()))
 		}
 		return b
-	} else if f.name == "status.json" {
+	case "status.json":
 		ps := f.root.Provider.Stats()
 		return vfsmeta.StatusJSON(
 			f.root.StartTime,

@@ -30,7 +30,7 @@ func newDoctorCmd() *cobra.Command {
 			if jsonOut {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				enc.Encode(report)
+				_ = enc.Encode(report)
 				return nil
 			}
 

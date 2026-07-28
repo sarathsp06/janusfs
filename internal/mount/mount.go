@@ -68,6 +68,16 @@ type Adapter struct {
 	// synchronously.
 	Observe func(OpEvent)
 
+	// Reload, if set, recompiles the rule set and is the SINGLE reload entry
+	// point: `janusfs update`, the dashboard reload button, and the automatic
+	// on-open staleness recompile (FR-20a) all route through it, so an auto
+	// reload does exactly what a manual one does — including invalidating the
+	// redaction cache and updating observability — rather than being a second,
+	// divergent reload path. If nil (e.g. a test that constructs the adapter
+	// directly), the on-open recompile falls back to bumping the engine alone,
+	// which is still correct because the decision cache is generation-keyed.
+	Reload func() error
+
 	server *fuse.Server
 }
 
@@ -84,11 +94,11 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 		return errors.New("mount: Engine and Provider are required")
 	}
 
-	root, jr, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe)
+	root, jr, err := newJanusRoot(src, a.Engine, a.Provider, a.Observe, a.Reload)
 	if err != nil {
 		return err
 	}
-	defer jr.Backing.Close()
+	defer func() { _ = jr.Backing.Close() }()
 
 	opts := &fs.Options{
 		// fs.Options.Logger is the filesystem-level diagnostic sink; it

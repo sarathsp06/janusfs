@@ -208,7 +208,7 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	b := vfsmeta.StatusJSON(start, gen, st.Entries, st.Bytes, st.Hits, st.Misses, st.Rebuilds)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	_, _ = w.Write(b)
 }
 
 func (s *Server) handleConflictsJSON(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +222,7 @@ func (s *Server) handleConflictsJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	_, _ = w.Write(b)
 }
 
 // relativeRuleRef turns a RuleRef's "<absolute-file>:<line>" into a
@@ -246,7 +246,7 @@ func relativeRuleRef(root, ruleRef string) string {
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +285,7 @@ func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
 
 	var masked, hidden []map[string]any
 
-	filepath.WalkDir(s.root, func(fpath string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(s.root, func(fpath string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -420,7 +420,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var files []map[string]any
-	filepath.WalkDir(s.root, func(fpath string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(s.root, func(fpath string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}

@@ -143,6 +143,7 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 			ready <- nil
 		},
 		Observe: makeObserver(recorder),
+		Reload:  rt.reload,
 	}
 
 	go func() {
@@ -202,7 +203,7 @@ func (rt *mountRuntime) stop() {
 		rt.recorder.Close()
 	}
 	if rt.hist != nil {
-		rt.hist.Close()
+		_ = rt.hist.Close()
 	}
 }
 

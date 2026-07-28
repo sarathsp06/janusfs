@@ -79,7 +79,11 @@ func (r *MemRegistry) Unregister(sessionToken string) {
 }
 
 // sessionRoots returns a snapshot of registered root identities keyed by
-// token — used by IsAgent's environ and ancestry-walk paths.
+// token — used by IsAgent's environ and ancestry-walk paths. Scaffolding for
+// PRP 06 Tasks 3-4, deferred pending PRP 07; not wired into IsAgent yet but
+// not dead — see PRPs/06-process-identity.md.
+//
+//nolint:unused // see comment above
 func (r *MemRegistry) sessionRoots() map[string]Identity {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

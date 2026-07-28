@@ -84,7 +84,7 @@ func TestOpenAtNoFollowRejectsFinalSymlink(t *testing.T) {
 
 	fd, err := r.OpenAt("link.txt", unix.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err == nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		t.Fatal("expected OpenAt with O_NOFOLLOW to reject a final-component symlink")
 	}
 }

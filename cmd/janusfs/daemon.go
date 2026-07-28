@@ -96,7 +96,7 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 		_ = enc.Encode(daemonRequest{Cmd: "list"})
 		var resp daemonResponse
 		_ = json.NewDecoder(conn).Decode(&resp)
-		conn.Close()
+		_ = conn.Close()
 
 		fmt.Fprintf(os.Stderr, "JanusFS daemon is already running.\n")
 		fmt.Fprintf(os.Stderr, "  Dashboard: http://127.0.0.1:%d/\n", indexPort)
@@ -180,7 +180,7 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 	}
 
 	cancel()
-	lc.Close()
+	_ = lc.Close()
 	_ = os.Remove(sock)
 	d.shutdown()
 	return nil
@@ -197,7 +197,7 @@ func (d *daemon) acceptLoop(lc net.Listener) {
 }
 
 func (d *daemon) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	var req daemonRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		control.WriteResponse(conn, daemonResponse{Error: "bad request: " + err.Error()})
@@ -478,7 +478,7 @@ func (d *daemon) shutdown() {
 
 	if d.indexer != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		d.indexer.Shutdown(shutdownCtx)
+		_ = d.indexer.Shutdown(shutdownCtx)
 		cancel()
 	}
 }

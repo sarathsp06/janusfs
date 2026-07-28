@@ -29,7 +29,7 @@ func TestOpenAtReadsFileContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenAt: %v", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	buf := make([]byte, 16)
 	n, err := unix.Read(fd, buf)
@@ -257,7 +257,7 @@ func TestOperationsAfterRootPathReplacedBySymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenAt after path swap: %v", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	buf := make([]byte, 32)
 	n, err := unix.Read(fd, buf)
 	if err != nil {

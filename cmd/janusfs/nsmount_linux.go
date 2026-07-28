@@ -134,6 +134,13 @@ func runNSMount(ctx context.Context, src string, targetArgs []string) (int, erro
 		Engine:      eng,
 		Provider:    prov,
 		ErrorLogger: errLog,
+		Reload: func() error {
+			if err := eng.Reload(shadow); err != nil {
+				return err
+			}
+			prov.InvalidateAll()
+			return nil
+		},
 	}
 	ready := make(chan error, 1)
 	adapter.OnMounted = func() {

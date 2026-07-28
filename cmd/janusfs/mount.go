@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -147,7 +148,7 @@ type logWriter struct {
 }
 
 func (w logWriter) Write(p []byte) (int, error) {
-	w.logger.Log(nil, w.level, string(p))
+	w.logger.Log(context.Background(), w.level, string(p))
 	return len(p), nil
 }
 

@@ -25,11 +25,11 @@ func TestRunWithPidfileDir(t *testing.T) {
 
 	// Write a live pidfile (our own PID).
 	pidPath := filepath.Join(dir, "testmount.pid")
-	os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600)
+	_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600)
 
 	// Write a stale pidfile.
 	stalePath := filepath.Join(dir, "stale.pid")
-	os.WriteFile(stalePath, []byte("99999999"), 0o600)
+	_ = os.WriteFile(stalePath, []byte("99999999"), 0o600)
 
 	r := Run(dir, "")
 	if r == nil {

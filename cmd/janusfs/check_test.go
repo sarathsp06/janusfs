@@ -82,8 +82,13 @@ func TestRunCheck_ErrorFindings_ExitOne(t *testing.T) {
 func TestRunCheck_JSONOutput_ValidSchema(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, ".janusignore"), "*.doesnotexist\n")
-	writeFile(t, filepath.Join(root, "a.txt"), "x")
+	// A directory-mask rewrite is a `warn`-severity finding that survives the
+	// removal of zero-match reporting, so it exercises the non-error JSON path.
+	writeFile(t, filepath.Join(root, ".janusmask"), "secrets\n")
+	if err := os.MkdirAll(filepath.Join(root, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "secrets", "a.txt"), "x")
 
 	out := captureStdout(t, func() {
 		_ = runCheck(root, true)
