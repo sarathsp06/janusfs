@@ -427,6 +427,21 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `generic-secret`  | `password:` / `secret:` / `api-key:` values (6+ chars) |
 | `whole-file`      | sentinel: mask every byte                              |
 
+Print the exact regexes JanusFS uses with:
+
+```bash
+janusfs patterns
+janusfs patterns --json
+```
+
+Example:
+
+```text
+NAME            MASKS                                      REGEX
+generic-secret  password/secret/token/api-key assignments  (?im)\b(?:password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*["']?([^\s"']{6,})
+whole-file      Masks every byte of the file; no regex...   —
+```
+
 ## CLI reference
 
 | Command | Purpose |
@@ -434,13 +449,14 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `janusfs install` | Optional setup: choose a custom mount root with `--root` or an interactive prompt (saved to `~/.janusfs/settings.json`). Without it, JanusFS uses `~/.janusfs/mounts`. `--global-rules` also seeds `~/.janusfs/config/`. |
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--background` detaches and logs to `~/.janusfs/logs/daemon.log`; `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
 | `janusfs logs [-f]` | Show the background daemon's log (`~/.janusfs/logs/daemon.log`); `-f` follows it like `tail -f`. |
-| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an empty `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
+| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an explicit `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
 | `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusignore`/`.janusmask` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
 | `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
 | `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed; this is a safety aid, not proof of full coverage. `--json` for machine output; exit 1 on errors only. |
+| `janusfs patterns` | List every reserved built-in `.janusmask` pattern name with its description and exact regex source. `--json` for machine-readable output. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
 | `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
 | `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. **Linux:** real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. **macOS:** advisory only — sets the child's working directory to a disjoint sanitized mount, scrubs `JANUSFS_*` env vars, and rewrites the mountpoint back to the source path in argv and in stdout/stderr as a best-effort compatibility shim, but the real source path remains directly reachable by the child through any other means (a subprocess, a config file, a cache), and content the child prints containing the mountpoint string is rewritten too — not a faithful byte reproduction. Refuses to run if no `.janusignore`/`.janusmask` exists anywhere in the tree, rather than guessing. |

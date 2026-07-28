@@ -166,6 +166,29 @@ func TestBuiltinCorpus(t *testing.T) {
 	}
 }
 
+func TestBuiltinsCatalogIncludesRegexes(t *testing.T) {
+	infos := Builtins()
+	byName := map[string]BuiltinInfo{}
+	for _, info := range infos {
+		byName[info.Name] = info
+	}
+
+	for _, name := range []string{"env-value", "aws-key", "private-key", "jwt", "db-uri", "github-token", "generic-secret", "whole-file"} {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("Builtins() missing %q; got %+v", name, infos)
+		}
+	}
+	if got := byName["aws-key"].Regexes; len(got) != 2 {
+		t.Fatalf("aws-key regex count = %d, want 2: %+v", len(got), got)
+	}
+	if got := byName["generic-secret"].Regexes; len(got) != 1 || !strings.Contains(got[0], "password") {
+		t.Fatalf("generic-secret regexes = %+v, want the visible regexp source", got)
+	}
+	if whole := byName["whole-file"]; !whole.WholeFile || len(whole.Regexes) != 0 {
+		t.Fatalf("whole-file info = %+v, want whole-file sentinel with no regex", whole)
+	}
+}
+
 func TestReservedNames(t *testing.T) {
 	for _, name := range []string{"env-value", "aws-key", "private-key", "jwt", "db-uri", "github-token", "generic-secret", "whole-file"} {
 		if !IsReserved(name) {

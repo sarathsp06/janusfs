@@ -51,9 +51,10 @@ const WholeFileName = "whole-file"
 // which lets registerBuiltins stay a short, obviously-correct loop rather than
 // repeating regexp.MustCompile and field assignment per entry.
 type builtinSpec struct {
-	name       string
-	expr       string // empty for whole-file
-	groupIndex int
+	name        string
+	description string
+	expr        string // empty for whole-file
+	groupIndex  int
 }
 
 // builtinSpecs is the builtin pattern library. Changing any expr here is a
@@ -61,13 +62,13 @@ type builtinSpec struct {
 // and the dashboard report so a user can tell which pattern set produced a
 // result.
 var builtinSpecs = []builtinSpec{
-	{name: "env-value", expr: `(?m)^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+?)\s*$`, groupIndex: 1},
-	{name: "aws-key", expr: `\b((?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16})\b`, groupIndex: 1},
-	{name: "private-key", expr: `(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, groupIndex: 0},
-	{name: "jwt", expr: `\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`, groupIndex: 1},
-	{name: "db-uri", expr: `\b[a-z][a-z0-9+.-]*://([^\s:@/]+:[^\s@/]+)@`, groupIndex: 1},
-	{name: "github-token", expr: `\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255})\b`, groupIndex: 1},
-	{name: "generic-secret", expr: `(?im)\b(?:password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*["']?([^\s"']{6,})`, groupIndex: 1},
+	{name: "env-value", description: "RHS of KEY=value in dotenv/shell exports", expr: `(?m)^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+?)\s*$`, groupIndex: 1},
+	{name: "aws-key", description: "AWS access key IDs and secret access keys", expr: `\b((?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16})\b`, groupIndex: 1},
+	{name: "private-key", description: "PEM BEGIN PRIVATE KEY blocks", expr: `(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, groupIndex: 0},
+	{name: "jwt", description: "JWT-looking three-segment tokens", expr: `\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`, groupIndex: 1},
+	{name: "db-uri", description: "user:pass credentials inside scheme://user:pass@host URIs", expr: `\b[a-z][a-z0-9+.-]*://([^\s:@/]+:[^\s@/]+)@`, groupIndex: 1},
+	{name: "github-token", description: "GitHub ghp/gho/ghu/ghs/ghr tokens", expr: `\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255})\b`, groupIndex: 1},
+	{name: "generic-secret", description: "password/secret/token/api-key style assignments", expr: `(?im)\b(?:password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*["']?([^\s"']{6,})`, groupIndex: 1},
 }
 
 // awsSecretKeySpec is aws-key's second regex: the name covers both an access
@@ -75,9 +76,10 @@ var builtinSpecs = []builtinSpec{
 // "aws-key" name so both are tried, unioning matches like any two patterns on
 // one glob.
 var awsSecretKeySpec = builtinSpec{
-	name:       "aws-key",
-	expr:       `(?i)\baws_secret_access_key\b\s*[=:]\s*([A-Za-z0-9/+=]{40})`,
-	groupIndex: 1,
+	name:        "aws-key",
+	description: "AWS access key IDs and secret access keys",
+	expr:        `(?i)\baws_secret_access_key\b\s*[=:]\s*([A-Za-z0-9/+=]{40})`,
+	groupIndex:  1,
 }
 
 // builtins is the compiled registry, keyed by name. aws-key maps to a slice
@@ -86,9 +88,48 @@ var awsSecretKeySpec = builtinSpec{
 // can expand to more than one regex.
 var builtinVariants = map[string][]*Pattern{}
 
+// BuiltinInfo describes one public built-in pattern name for CLI/docs output.
+type BuiltinInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Regexes     []string `json:"regexes"`
+	GroupIndex  int      `json:"groupIndex"`
+	WholeFile   bool     `json:"wholeFile"`
+}
+
 // ReservedNames is the set of names a user regex may not shadow, including the
 // whole-file sentinel.
 var ReservedNames = map[string]bool{}
+
+func Builtins() []BuiltinInfo {
+	byName := map[string]*BuiltinInfo{}
+	var order []string
+	add := func(spec builtinSpec) {
+		info := byName[spec.name]
+		if info == nil {
+			order = append(order, spec.name)
+			info = &BuiltinInfo{Name: spec.name, Description: spec.description, GroupIndex: spec.groupIndex}
+			byName[spec.name] = info
+		}
+		if spec.expr != "" {
+			info.Regexes = append(info.Regexes, spec.expr)
+		}
+	}
+	for _, spec := range builtinSpecs {
+		add(spec)
+	}
+	add(awsSecretKeySpec)
+	out := make([]BuiltinInfo, 0, len(order)+1)
+	for _, name := range order {
+		out = append(out, *byName[name])
+	}
+	out = append(out, BuiltinInfo{
+		Name:        WholeFileName,
+		Description: "Masks every byte of the file; no regex is evaluated",
+		WholeFile:   true,
+	})
+	return out
+}
 
 func init() {
 	register := func(spec builtinSpec) {

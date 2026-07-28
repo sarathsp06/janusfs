@@ -536,6 +536,11 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   be presented as proof of complete coverage. Exit 1 on errors. `--json` for
   tooling.
 
+- **FR-48a** `janusfs patterns [--json]` lists every reserved built-in
+  `.janusmask` pattern name with its description and exact RE2 regex source.
+  `whole-file` is shown as a sentinel with no regex. The output is for operator
+  inspection and tooling, not part of the masking hot path.
+
 - **FR-49** `janusfs explain <path>` shows the derivation of one path's decision:
   every rule considered, in order, with which matched, which was a negation, and
   which decided.
