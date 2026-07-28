@@ -54,7 +54,7 @@ func TestRunCheck_CleanTree_ExitZero(t *testing.T) {
 	writeFile(t, filepath.Join(root, "server.pem"), "x")
 
 	out := captureStdout(t, func() {
-		if err := runCheck(root, false); err != nil {
+		if err := runCheck(root, false, false); err != nil {
 			t.Errorf("expected nil error for clean tree, got %v", err)
 		}
 	})
@@ -70,7 +70,7 @@ func TestRunCheck_ErrorFindings_ExitOne(t *testing.T) {
 	writeFile(t, filepath.Join(root, "a.txt"), "x")
 
 	out := captureStdout(t, func() {
-		if err := runCheck(root, false); err != errSilentNonZero {
+		if err := runCheck(root, false, false); err != errSilentNonZero {
 			t.Errorf("expected errSilentNonZero, got %v", err)
 		}
 	})
@@ -91,7 +91,7 @@ func TestRunCheck_JSONOutput_ValidSchema(t *testing.T) {
 	writeFile(t, filepath.Join(root, "secrets", "a.txt"), "x")
 
 	out := captureStdout(t, func() {
-		_ = runCheck(root, true)
+		_ = runCheck(root, true, false)
 	})
 	var report struct {
 		Findings []struct {
@@ -113,9 +113,48 @@ func TestRunCheck_JSONOutput_ValidSchema(t *testing.T) {
 	}
 }
 
+func TestRunCheck_SecretsFlagReportsAllowedSecret(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
+
+	out := captureStdout(t, func() {
+		if err := runCheck(root, false, true); err != nil {
+			t.Errorf("expected nil error for heuristic secret warnings, got %v", err)
+		}
+	})
+	if !strings.Contains(out, "likely secret file .env is currently Allowed") {
+		t.Errorf("expected --secrets warning in output, got %q", out)
+	}
+}
+
+func TestRunCheck_SecretsJSONOutput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
+
+	out := captureStdout(t, func() {
+		if err := runCheck(root, true, true); err != nil {
+			t.Errorf("expected nil error for heuristic secret warnings, got %v", err)
+		}
+	})
+	var report struct {
+		Findings []struct {
+			Severity string `json:"severity"`
+			Message  string `json:"message"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("JSON output should parse: %v\noutput: %s", err, out)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Severity != "warn" || !strings.Contains(report.Findings[0].Message, "likely secret file .env") {
+		t.Fatalf("expected one warn finding for .env, got %+v", report.Findings)
+	}
+}
+
 func TestRunCheck_NonexistentRoot_ReturnsError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	err := runCheck(filepath.Join(t.TempDir(), "does-not-exist"), false)
+	err := runCheck(filepath.Join(t.TempDir(), "does-not-exist"), false, false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent root")
 	}

@@ -64,6 +64,17 @@ func newDaemonCmd() *cobra.Command {
 	return cmd
 }
 
+func browserOpenCommand(url string) (string, []string, bool) {
+	switch runtimeGOOS {
+	case "darwin":
+		return "open", []string{url}, true
+	case "linux":
+		return "xdg-open", []string{url}, true
+	default:
+		return "", nil, false
+	}
+}
+
 // daemon owns every live mount in one process and multiplexes control
 // commands from `janusfs mount`/`umount` clients onto them.
 var validateMountConfig = func(cfg config.Config) error { return cfg.Validate() }
@@ -163,7 +174,9 @@ func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error 
 
 	fmt.Printf("JanusFS daemon running.\n  Dashboard: http://%s/\n  Control:   %s\n", indexAddr, sock)
 	if !noOpen {
-		_ = exec.Command("open", fmt.Sprintf("http://%s/", indexAddr)).Start()
+		if name, args, ok := browserOpenCommand(fmt.Sprintf("http://%s/", indexAddr)); ok {
+			_ = exec.Command(name, args...).Start()
+		}
 	}
 
 	spawnWatchdog(d, logger)

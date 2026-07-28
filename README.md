@@ -144,15 +144,15 @@ The rule engine reads `.janusignore` and `.janusmask` from the mount root down (
 ### 2) Quickstart Setup & Usage
 
 ```bash
-# 2) one-time setup: pick a mount root (where policy-enforced mountpoints live)
-janusfs install                 # saves ~/.janusfs/settings.json; --global-rules also seeds machine-wide defaults
-
-# 3) drop secure defaults into your project (or use --global-rules above)
+# 2) drop secure defaults into your project
 cd my-project
 janusfs init                    # writes .janusignore + .janusmask templates
 
+# Optional: choose a custom mount root instead of ~/.janusfs/mounts
+janusfs install --root ~/.janusfs/mounts
+
 # 4) preview what those rules will do BEFORE you mount
-janusfs check                   # linter: bad regex/glob, dir-mask no-ops, ineffective negations
+janusfs check --secrets         # linter + opt-in heuristic scan for likely Allowed secrets
 janusfs explain .env            # per-file trace: which rule decided this file's fate
 
 # 5) start the daemon (owns mounts, serves the dashboard, resumes past mounts)
@@ -170,11 +170,12 @@ janusfs mount .
 - **Linux** has a real, kernel-enforced boundary: `janusfs exec -- <agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path. The agent cannot reach the unfiltered tree by any path, because from inside that namespace the unfiltered tree doesn't exist.
 - **macOS has no enforced boundary today.** Both "point your agent at the mountpoint" and `janusfs exec` are **advisory**: the real source directory remains fully readable at its own path by the same agent process, through any other tool, subprocess, or absolute path it happens to resolve (git config, an IDE workspace file, a stray `cd`, …). Nothing on macOS currently stops that — path-preserving mode (which would close this) is speculative and unimplemented; the disjoint mountpoint model is the only thing that ships. If your threat model requires that an agent genuinely cannot reach a secret by any path, macOS is not sufficient on its own — this is JanusFS's own stated non-goal (see [Security model](#security-model)), not a bug you can configure around.
 
-The mountpoint always mirrors the source's full path under your mount root
+By default, the mountpoint mirrors the source's full path under your mount root
 (e.g. `~/.janusfs/mounts/Users/you/my-project`), so two sources never collide
-and the location is fully predictable — there's no path override. To give a
-mount a friendly name in the dashboard, pass `--name "My Project"`; it's a
-display label only and never changes the path.
+and the location is fully predictable. If that path is too hostile for a tool or
+agent harness, pass an explicit mountpoint (`janusfs mount ~/proj ~/pv`) and use
+that shorter path. To give a mount a friendly name in the dashboard, pass
+`--name "My Project"`; it's a display label only and never changes the path.
 
 Every file that reaches the agent has been filtered (`$MP` is the mountpoint `janusfs mount` printed):
 
@@ -311,19 +312,20 @@ Before mounting for the first time, run this quick checklist to reduce friction:
 
 1. Install and approve macFUSE (System Settings → Privacy & Security), then
    reboot if required.
-2. Configure a mount root (recommended default is `~/.janusfs/mounts`) with:
-
-   janusfs install
-
-3. Seed secure defaults in your repo (or in `~/.janusfs/config`):
+2. Seed secure defaults in your repo (or in `~/.janusfs/config`):
 
    cd my-project
    janusfs init
 
-4. Lint rules and preview effects before mounting:
+3. Lint rules and preview effects before mounting:
 
-   janusfs check
+   janusfs check --secrets
    janusfs explain .env
+
+4. Optional: customize the mount root if `~/.janusfs/mounts` is not right for
+   your workflow:
+
+   janusfs install --root ~/janus-mounts
 
 5. Start the daemon and bring the mount up:
 
@@ -429,7 +431,7 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 
 | Command | Purpose |
 |---------|---------|
-| `janusfs install` | One-time setup: choose a mount root (saved to `~/.janusfs/settings.json`) so `janusfs mount <src>` needs no `--mount-root`. `--global-rules` also seeds `~/.janusfs/config/`. |
+| `janusfs install` | Optional setup: choose a custom mount root with `--root` or an interactive prompt (saved to `~/.janusfs/settings.json`). Without it, JanusFS uses `~/.janusfs/mounts`. `--global-rules` also seeds `~/.janusfs/config/`. |
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--background` detaches and logs to `~/.janusfs/logs/daemon.log`; `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
 | `janusfs logs [-f]` | Show the background daemon's log (`~/.janusfs/logs/daemon.log`); `-f` follows it like `tail -f`. |
 | `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an empty `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
@@ -438,7 +440,7 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
-| `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. `--json` for machine output; exit 1 on errors. |
+| `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed; this is a safety aid, not proof of full coverage. `--json` for machine output; exit 1 on errors only. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
 | `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
 | `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. **Linux:** real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. **macOS:** advisory only — sets the child's working directory to a disjoint sanitized mount, scrubs `JANUSFS_*` env vars, and rewrites the mountpoint back to the source path in argv and in stdout/stderr as a best-effort compatibility shim, but the real source path remains directly reachable by the child through any other means (a subprocess, a config file, a cache), and content the child prints containing the mountpoint string is rewritten too — not a faithful byte reproduction. Refuses to run if no `.janusignore`/`.janusmask` exists anywhere in the tree, rather than guessing. |
@@ -460,13 +462,17 @@ $ janusfs explain --root ~/proj ~/proj/.env
 ### `janusfs check` example
 
 ```
-$ janusfs check
+$ janusfs check --secrets
 /Users/you/proj/.janusmask
   [error]:2 invalid mask rule "*.log" — files it matches are Hidden (fail-closed) until this is fixed: compiling custom regex "[": error parsing regexp: missing closing ]: `[`
   [warn]:8  mask glob "secrets" also matches a directory, which can never be Masked — the directory match is a harmless no-op
       suggestion: rewrite to "secrets/**" if you meant to mask only the files inside
 
-1 error(s), 1 warning(s) across 42 files, 7 directories.
+/Users/you/proj/.env
+  [warn] likely secret file .env is currently Allowed (env file name)
+    suggestion: add a .janusignore rule to hide it, or a .janusmask rule if the file is useful after redaction
+
+1 error(s), 2 warning(s) across 42 files, 7 directories.
 ```
 
 ## Security model

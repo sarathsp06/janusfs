@@ -25,5 +25,5 @@ const (
 
 	// hintNoMountRoot is shown when a mount is requested but no mount root is
 	// configured to derive the mountpoint under.
-	hintNoMountRoot = "no mount root configured: run `janusfs install` (or set --mount-root / JANUSFS_MOUNT_ROOT)"
+	hintNoMountRoot = "no mount root configured: run `janusfs install --root <dir>` or set JANUSFS_MOUNT_ROOT"
 )

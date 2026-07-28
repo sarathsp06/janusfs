@@ -174,6 +174,7 @@ func TestResolveMountpoint_NoOpWhenMountpointSet(t *testing.T) {
 func TestResolveMountpoint_NoOpWhenMountRootUnset(t *testing.T) {
 	c := Default()
 	c.Src = "/src"
+	c.MountRoot = ""
 
 	if err := c.ResolveMountpoint(); err != nil {
 		t.Fatalf("ResolveMountpoint() error = %v", err)
@@ -265,15 +266,20 @@ func TestApplyFile_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestApplyFile_MissingIsNoOp(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+func TestApplyFile_MissingKeepsDefaultMountRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	cfg := Default()
+	want := filepath.Join(home, ".janusfs", "mounts")
+	if cfg.MountRoot != want {
+		t.Fatalf("Default MountRoot = %q, want %q", cfg.MountRoot, want)
+	}
 	if err := ApplyFile(&cfg); err != nil {
 		t.Fatalf("ApplyFile() error = %v, want nil for missing settings file", err)
 	}
-	if cfg.MountRoot != "" {
-		t.Errorf("MountRoot = %q, want unchanged empty", cfg.MountRoot)
+	if cfg.MountRoot != want {
+		t.Errorf("MountRoot = %q, want default to survive missing settings file", cfg.MountRoot)
 	}
 }
 
@@ -324,6 +330,8 @@ func TestMountsRegistry_RoundTrip(t *testing.T) {
 }
 
 func TestDefault_Values(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	c := Default()
 	if c.UIPort != 7381 {
 		t.Errorf("UIPort = %d, want 7381", c.UIPort)
@@ -342,5 +350,8 @@ func TestDefault_Values(t *testing.T) {
 	}
 	if c.RedactBufferMax != 512*1024*1024 {
 		t.Errorf("RedactBufferMax = %d, want 512MB", c.RedactBufferMax)
+	}
+	if c.MountRoot != filepath.Join(home, ".janusfs", "mounts") {
+		t.Errorf("MountRoot = %q, want default under HOME", c.MountRoot)
 	}
 }

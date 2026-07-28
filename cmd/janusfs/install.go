@@ -18,10 +18,10 @@ func newInstallCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "One-time setup: choose a mount root and save it to ~/.janusfs/settings.json",
-		Long: "Configure the mount root — the folder under which every mount appears as a\n" +
-			"sanitized mirror of its source's full path. Saved to ~/.janusfs/settings.json\n" +
-			"so `janusfs mount <src>` needs no --mount-root thereafter.",
+		Short: "Optional setup: choose a custom mount root and save it to ~/.janusfs/settings.json",
+		Long: "Configure a custom mount root — the folder under which derived mountpoints\n" +
+			"appear as sanitized mirrors of each source's full path. Saved to\n" +
+			"~/.janusfs/settings.json. Without this command, JanusFS uses ~/.janusfs/mounts.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInstall(root, globalRules)

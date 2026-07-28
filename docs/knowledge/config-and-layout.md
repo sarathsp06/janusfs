@@ -36,7 +36,7 @@ in `ApplyEnv`.
 | `HistoryRetentionDays` | `--history-retention` | `JANUSFS_HISTORY_RETENTION_DAYS` | 30 |
 | `NoHistory` | `--no-history` | `JANUSFS_NO_HISTORY` | false |
 | `RedactBufferMax` | `--redact-buffer-max` | `JANUSFS_REDACT_BUFFER_MAX` | 512 MB |
-| `MountRoot` | `--mount-root` | `JANUSFS_MOUNT_ROOT` | unset (also from `settings.json`) |
+| `MountRoot` | `install --root` | `JANUSFS_MOUNT_ROOT` | `~/.janusfs/mounts` (also from `settings.json`) |
 
 Constants are at `config.go:27`. `Src` and `Mountpoint` are positional only and
 have no env equivalent.
@@ -46,7 +46,9 @@ have no env equivalent.
 `Default()` → `ApplyFile()` → `ApplyEnv()` → flags. The daemon applies exactly
 that order (`cmd/janusfs/daemon.go:127`). `ApplyFile` reads
 `~/.janusfs/settings.json`, which currently carries one key, `mount_root`
-(`config.go:164`). A missing file is not an error; a malformed one is.
+(`config.go:164`). A missing file is not an error; the built-in
+`~/.janusfs/mounts` default remains in effect. A malformed settings file is an
+error.
 
 Env helpers `envInt`/`envInt64`/`envBool` (`config.go:297`) treat unset **and
 empty** as absent, so `JANUSFS_UI_PORT=` does not clobber the default, and a
@@ -64,8 +66,10 @@ mount /Users/me/projects/app   with mount root ~/.janusfs/mounts
 
 `filepath.Join` swallows the leading slash of the absolute source, which nests
 the whole path rather than anchoring at it. Every source maps to a unique,
-predictable location, so two sources never collide. There is deliberately no
-override: `--name` is a dashboard label, not a different path.
+predictable location, so two sources never collide by default. `janusfs mount
+<src> [mountpoint]` may override the derived path when a short, tool-friendly
+mountpoint is more important than path mirroring. `--name` remains only a
+dashboard label; it does not change the path.
 
 This derivation is the reason **the mountpoint is never equal to the source
 path**, which is the root of the path-parity problem described in

@@ -34,11 +34,11 @@ Registered in `newRootCmd` (`cmd/janusfs/main.go:48`). Every command except
 | `mount <src> [mountpoint]` | ask the daemon to mount | `--name`, `--no-history` |
 | `update [src\|mountpoint\|configpath]` | recompile rules for one or all mounts | — |
 | `umount <mountpoint\|src>` | unmount via daemon, or directly if none is running | — |
-| `install` | one-time setup: choose and save a mount root | `--root`, `--global-rules` |
+| `install` | optional setup: choose and save a custom mount root | `--root`, `--global-rules` |
 | `init [dir]` | write template `.janusignore`/`.janusmask` | `--global`, `--force` |
 | `paths` | list config/data paths and whether each exists | — |
 | `path <src>` | print the mountpoint for a mounted source, for `cd`/scripting | — |
-| `check [path]` | static config linter | `--json` |
+| `check [path]` | static config linter; optional heuristic scan for Allowed secret-looking files/content | `--json`, `--secrets` |
 | `explain <path>` | show the derivation of one path's decision | — |
 | `doctor` | runtime diagnostics | `--verbose` |
 | `exec -- <cmd>` | run a command against a sanitized view | flag parsing disabled |

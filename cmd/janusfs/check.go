@@ -24,8 +24,11 @@ var errSilentNonZero = errors.New("")
 // pattern that merely matches no files today — a defensive rule covering files
 // that don't exist yet is intended, not a bug. The global rule directory is
 // always included in the scan, since it participates in every decision.
+// --secrets adds an opt-in heuristic scan for likely secret files/content that
+// still resolve Allowed; it is a warning aid, not a proof of complete coverage.
 func newCheckCmd() *cobra.Command {
 	var jsonOut bool
+	var secrets bool
 	cmd := &cobra.Command{
 		Use:   "check [path]",
 		Short: "Statically analyze .janusignore/.janusmask for conflicts",
@@ -35,15 +38,16 @@ func newCheckCmd() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runCheck(dir, jsonOut)
+			return runCheck(dir, jsonOut, secrets)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	cmd.Flags().BoolVar(&secrets, "secrets", false, "also warn about likely secret files/content that currently resolve Allowed")
 	return cmd
 }
 
-func runCheck(dir string, jsonOut bool) error {
-	report, err := check.Run(dir)
+func runCheck(dir string, jsonOut bool, secrets bool) error {
+	report, err := check.RunWithOptions(dir, check.Options{Secrets: secrets})
 	if err != nil {
 		return fmt.Errorf("check: %w", err)
 	}

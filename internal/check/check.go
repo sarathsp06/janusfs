@@ -1,8 +1,8 @@
 // Package check is the static config linter: it walks a rule
 // tree (internal/rules) and a real source tree together and reports
 // findings a human should look at before mounting — regex/glob errors,
-// globs that touch nothing, mask globs that accidentally target a
-// directory, negations that can never take effect because an
+// mask globs that accidentally target a directory, negations that can never
+// take effect because an
 // ancestor directory is Hidden, and in-tree negations that can never
 // take effect because the global rule floor already hid the path.
 //
@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/sarathsp06/janusfs/internal/engine"
+	"github.com/sarathsp06/janusfs/internal/patterns"
 	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
@@ -89,9 +90,24 @@ type treeEntry struct {
 	isDir bool
 }
 
-// Run discovers root's rule tree and lints it against root's real
-// contents.
+// Options controls optional checks that are intentionally not part of the
+// default linter. Defaults stay quiet and syntax/intent-focused; opt-ins may
+// use heuristics that are useful before handing a tree to an agent but should
+// not be mistaken for proof of complete coverage.
+type Options struct {
+	// Secrets enables a conservative best-effort scan for files that look like
+	// secrets but currently resolve Allowed. It reports warnings, never errors.
+	Secrets bool
+}
+
+// Run discovers root's rule tree and lints it against root's real contents.
 func Run(root string) (Report, error) {
+	return RunWithOptions(root, Options{})
+}
+
+// RunWithOptions discovers root's rule tree and lints it against root's real
+// contents, enabling optional heuristic checks requested by opts.
+func RunWithOptions(root string, opts Options) (Report, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return Report{}, fmt.Errorf("check: resolving root %q: %w", root, err)
@@ -117,6 +133,9 @@ func Run(root string) (Report, error) {
 	findings = append(findings, maskLevelFindings(rs, entries)...)
 	findings = append(findings, hiddenDirNegationFindings(rs, eng, entries)...)
 	findings = append(findings, globalFloorNegationFindings(rs, eng, entries)...)
+	if opts.Secrets {
+		findings = append(findings, secretFindings(rootAbs, eng, entries)...)
+	}
 	findings = append(findings, redundancyFindings(rs)...)
 	findings = append(findings, maskRedundancyFindings(rs)...)
 	findings = append(findings, subdirLevelRedundancyFindings(rs, entries)...)
@@ -160,6 +179,93 @@ func walkTree(root string) ([]treeEntry, error) {
 		return nil
 	})
 	return entries, err
+}
+
+const secretScanMaxBytes = 1 << 20
+
+func secretFindings(root string, eng *engine.Engine, entries []treeEntry) []Finding {
+	var out []Finding
+	contentPatterns := secretContentPatterns()
+	for _, te := range entries {
+		if te.isDir || eng.Resolve(te.rel, false).Decision != engine.Allowed {
+			continue
+		}
+
+		if reason := secretFilenameReason(te.rel); reason != "" {
+			out = append(out, Finding{
+				Severity:   SeverityWarn,
+				File:       filepath.Join(root, filepath.FromSlash(te.rel)),
+				Message:    fmt.Sprintf("likely secret file %s is currently Allowed (%s)", te.rel, reason),
+				Suggestion: "add a .janusignore rule to hide it, or a .janusmask rule if the file is useful after redaction",
+			})
+			continue
+		}
+
+		if reason := secretContentReason(filepath.Join(root, filepath.FromSlash(te.rel)), contentPatterns); reason != "" {
+			out = append(out, Finding{
+				Severity:   SeverityWarn,
+				File:       filepath.Join(root, filepath.FromSlash(te.rel)),
+				Message:    fmt.Sprintf("likely secret content in %s is currently Allowed (%s)", te.rel, reason),
+				Suggestion: "add a .janusmask rule for this file if agents need structure, or .janusignore if they do not need it",
+			})
+		}
+	}
+	return out
+}
+
+func secretFilenameReason(rel string) string {
+	base := strings.ToLower(filepath.Base(filepath.FromSlash(rel)))
+	switch {
+	case base == ".env" || strings.HasPrefix(base, ".env."):
+		return "env file name"
+	case base == ".npmrc":
+		return "npm credential file name"
+	case base == "credentials":
+		return "credential file name"
+	case base == "id_rsa" || strings.HasPrefix(base, "id_rsa."):
+		return "private key file name"
+	case strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".pfx"):
+		return "key/certificate file extension"
+	case strings.HasSuffix(base, ".tfvars"):
+		return "Terraform variables file extension"
+	case strings.Contains(base, "credential"):
+		return "credential-like file name"
+	default:
+		return ""
+	}
+}
+
+func secretContentPatterns() []*patterns.Pattern {
+	names := []string{"aws-key", "private-key", "jwt", "db-uri", "github-token", "generic-secret"}
+	var out []*patterns.Pattern
+	for _, name := range names {
+		if ps, ok := patterns.LookupBuiltin(name); ok {
+			out = append(out, ps...)
+		}
+	}
+	return out
+}
+
+func secretContentReason(path string, pats []*patterns.Pattern) string {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(buf) > secretScanMaxBytes {
+		buf = buf[:secretScanMaxBytes]
+	}
+	for _, p := range pats {
+		if p.Regex == nil {
+			continue
+		}
+		if p.PreFilter != nil && !p.PreFilter(buf) {
+			continue
+		}
+		if p.Regex.Match(buf) {
+			return "matches " + p.Name
+		}
+	}
+	return ""
 }
 
 // discoverErrorFindings surfaces rules.RuleSet.DiscoverErrs (unreadable

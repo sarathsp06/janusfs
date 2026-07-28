@@ -85,14 +85,15 @@ type Config struct {
 	RedactBufferMax int64
 
 	// MountRoot is the directory under which a mountpoint is derived when
-	// <mountpoint> is omitted (--mount-root, env JANUSFS_MOUNT_ROOT). Empty
-	// disables derivation, making <mountpoint> required.
+	// <mountpoint> is omitted (install --root, env JANUSFS_MOUNT_ROOT). Empty
+	// disables derivation, making <mountpoint> required; the default is
+	// ~/.janusfs/mounts so first-run mounting does not require install.
 	MountRoot string
 }
 
 // Default returns a Config populated with every tunable's documented default
-// value. Src and Mountpoint are left empty: the positional arguments have no
-// meaningful default and must always be supplied before Validate is run.
+// value. Src and Mountpoint are left empty: Src has no meaningful default, and
+// Mountpoint is derived later from MountRoot when omitted.
 func Default() Config {
 	return Config{
 		UIPort:               DefaultUIPort,
@@ -101,6 +102,7 @@ func Default() Config {
 		HistoryRetentionDays: DefaultHistoryRetentionDays,
 		NoHistory:            false,
 		RedactBufferMax:      DefaultRedactBufferMax,
+		MountRoot:            DefaultMountRoot(),
 	}
 }
 
@@ -134,9 +136,10 @@ func ApplyEnv(cfg *Config) error {
 	return nil
 }
 
-// DefaultMountRoot is the suggested --mount-root for `janusfs install`'s
-// interactive prompt: alongside ~/.janusfs/config (global rules) and
-// ~/.janusfs/settings.json, mounts live at ~/.janusfs/mounts/<full-src-path>.
+// DefaultMountRoot is the built-in mount root and the default shown by
+// `janusfs install`'s interactive prompt: alongside ~/.janusfs/config (global
+// rules) and ~/.janusfs/settings.json, mounts live at
+// ~/.janusfs/mounts/<full-src-path>.
 func DefaultMountRoot() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -350,7 +353,7 @@ func (c *Config) ResolveMountpoint() error {
 	// source path under MountRoot rather than anchoring at it.
 	derived := filepath.Join(c.MountRoot, srcAbs)
 	if err := os.MkdirAll(derived, 0o700); err != nil {
-		return fmt.Errorf("config: creating mountpoint %q under --mount-root: %w", derived, err)
+		return fmt.Errorf("config: creating derived mountpoint %q under mount root: %w", derived, err)
 	}
 	c.Mountpoint = derived
 	return nil

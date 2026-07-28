@@ -530,7 +530,10 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   It does **not** report a rule that merely matches no files in the current
   tree: a defensive pattern for files that do not exist yet is intended, and
   flagging it only trains the operator to ignore the output. Findings are
-  grouped by file and sorted by severity. Exit 1 on errors. `--json` for
+  grouped by file and sorted by severity. `--secrets` enables an opt-in,
+  heuristic scan for likely secret filenames and built-in secret-pattern content
+  that currently resolves Allowed; those findings are warnings only and must not
+  be presented as proof of complete coverage. Exit 1 on errors. `--json` for
   tooling.
 
 - **FR-49** `janusfs explain <path>` shows the derivation of one path's decision:
@@ -546,7 +549,9 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 - **FR-51** `janusfs paths` lists every config and data path with presence.
   `janusfs path <src>` prints just the mountpoint, for `cd "$(...)"`.
 
-- **FR-52** `janusfs install` configures the mount root once and saves it.
+- **FR-52** JanusFS has a built-in mount root default of `~/.janusfs/mounts` so
+  first-run mounting does not require setup. `janusfs install` optionally
+  configures a custom mount root once and saves it.
   `--global-rules` also writes secure-default global rules.
 
 - **FR-53** All commands support `--quiet` and exit codes suitable for scripting.

@@ -70,6 +70,29 @@ func TestDaemonIndex_NotFoundForOtherPaths(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenCommandByPlatform(t *testing.T) {
+	oldGOOS := runtimeGOOS
+	t.Cleanup(func() { runtimeGOOS = oldGOOS })
+
+	runtimeGOOS = "darwin"
+	name, args, ok := browserOpenCommand("http://127.0.0.1:7381/")
+	if !ok || name != "open" || len(args) != 1 || args[0] != "http://127.0.0.1:7381/" {
+		t.Fatalf("darwin browserOpenCommand = (%q, %v, %v), want open URL", name, args, ok)
+	}
+
+	runtimeGOOS = "linux"
+	name, args, ok = browserOpenCommand("http://127.0.0.1:7381/")
+	if !ok || name != "xdg-open" || len(args) != 1 || args[0] != "http://127.0.0.1:7381/" {
+		t.Fatalf("linux browserOpenCommand = (%q, %v, %v), want xdg-open URL", name, args, ok)
+	}
+
+	runtimeGOOS = "plan9"
+	_, _, ok = browserOpenCommand("http://127.0.0.1:7381/")
+	if ok {
+		t.Fatal("unsupported platform should not return a browser opener")
+	}
+}
+
 func TestDoUnmount_NotMounted(t *testing.T) {
 	d := &daemon{mounts: map[string]*mountRuntime{}}
 	resp := d.doUnmount(daemonRequest{Mountpoint: "/not/mounted"})

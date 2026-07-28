@@ -34,7 +34,7 @@ func newMountCmd() *cobra.Command {
 		Long: "Hands a mount to the running janusfs daemon and returns; the daemon owns the\n" +
 			"mount and keeps it alive across reboots (via `janusfs daemon`) until you run\n" +
 			"`janusfs umount`. With no [mountpoint], the mountpoint mirrors <src>'s full\n" +
-			"path under the mount root; pass an empty [mountpoint] to mount at a short path\n" +
+			"path under the mount root; pass [mountpoint] to mount at a short path\n" +
 			"of your choosing. Start the daemon first with `janusfs daemon`.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {

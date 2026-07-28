@@ -157,6 +157,63 @@ func TestCheckRedundantDuplicateLine(t *testing.T) {
 	}
 }
 
+func TestCheckSecretsReportsAllowedSecretFilename(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
+
+	r, err := RunWithOptions(root, Options{Secrets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubstr(findMessages(r), "likely secret file .env is currently Allowed") {
+		t.Fatalf("expected allowed .env warning, got %v", findMessages(r))
+	}
+}
+
+func TestCheckSecretsDoesNotReportHiddenSecretFilename(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusignore"), ".env\n")
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
+
+	r, err := RunWithOptions(root, Options{Secrets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsSubstr(findMessages(r), "likely secret file .env") {
+		t.Fatalf("expected hidden .env not to be reported, got %v", findMessages(r))
+	}
+}
+
+func TestCheckSecretsReportsAllowedSecretContent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "config.txt"), "password = super-secret-value\n")
+
+	r, err := RunWithOptions(root, Options{Secrets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubstr(findMessages(r), "likely secret content in config.txt is currently Allowed") {
+		t.Fatalf("expected allowed secret-content warning, got %v", findMessages(r))
+	}
+}
+
+func TestCheckDoesNotScanSecretsByDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
+
+	r, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Findings) != 0 {
+		t.Fatalf("expected default check not to run heuristic secret scan, got %v", findMessages(r))
+	}
+}
+
 func TestCheckCleanTreeNoFindings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
