@@ -44,9 +44,7 @@ func (r *revocableHandle) stillAllowed(op string, start time.Time) syscall.Errno
 	if d == engine.Allowed {
 		return 0
 	}
-	if r.node.root.Observe != nil {
-		r.node.root.Observe(OpEvent{Op: op, Path: r.node.relPath(), Decision: d.String(), LatencyUs: time.Since(start).Microseconds()})
-	}
+	r.node.observe(op, d.String(), 0, start)
 	return syscall.EACCES
 }
 

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/sarathsp06/janusfs/internal/config"
+	"github.com/sarathsp06/janusfs/internal/control"
 )
 
 // fakeRuntime builds a mountRuntime with just the fields the daemon's
@@ -309,7 +310,7 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 		"/mnt/a": fakeRuntime("/src/a", "/mnt/a", "", "t", "b"),
 	}}
 
-	sock, err := socketPath()
+	sock, err := control.SocketPath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,9 +324,9 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 	defer ln.Close()
 	go d.acceptLoop(ln)
 
-	resp, err := daemonCall(daemonRequest{Cmd: "list"})
+	resp, err := control.Call(daemonRequest{Cmd: "list"})
 	if err != nil {
-		t.Fatalf("daemonCall(list) error = %v", err)
+		t.Fatalf("control.Call(list) error = %v", err)
 	}
 	if !resp.OK {
 		t.Fatalf("list resp not OK: %+v", resp)
@@ -337,7 +338,7 @@ func TestDaemonSocket_ListRoundTrip(t *testing.T) {
 
 func TestDaemonCall_NoDaemon(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no socket here
-	_, err := daemonCall(daemonRequest{Cmd: "list"})
+	_, err := control.Call(daemonRequest{Cmd: "list"})
 	if !errors.Is(err, errDaemonNotRunning) {
 		t.Errorf("daemonCall with no daemon = %v, want errDaemonNotRunning", err)
 	}

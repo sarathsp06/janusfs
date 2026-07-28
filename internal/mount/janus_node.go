@@ -128,6 +128,24 @@ func (n *JanusNode) observe(op, decision string, bytes int64, start time.Time) {
 	})
 }
 
+// observeRead emits a read event, the one op that also carries a cache result.
+// It is the single place the masked/raw read path names OpEvent, so the read
+// handlers below never repeat the nil-check, the latency math, or the wire
+// struct. cache is "na" on a served read and "" on an early error.
+func (n *JanusNode) observeRead(decision string, bytes int64, cache string, start time.Time) {
+	if n.root.Observe == nil {
+		return
+	}
+	n.root.Observe(OpEvent{
+		Op:        "read",
+		Path:      n.relPath(),
+		Decision:  decision,
+		Bytes:     bytes,
+		LatencyUs: time.Since(start).Microseconds(),
+		Cache:     cache,
+	})
+}
+
 // relPath returns this node's path relative to the mount root, slash
 // separated — the form internal/engine.Resolve expects.
 func (n *JanusNode) relPath() string {
@@ -146,9 +164,7 @@ func (n *JanusNode) absPath() string {
 func (n *JanusNode) resolve() (res engine.Resolution) {
 	defer func() {
 		if r := recover(); r != nil {
-			if n.root.Observe != nil {
-				n.root.Observe(OpEvent{Op: "resolve", Path: n.relPath(), Decision: "PANIC"})
-			}
+			n.observe("resolve", "PANIC", 0, time.Time{})
 			res = engine.Resolution{Decision: engine.Hidden, Poisoned: true}
 		}
 	}()
@@ -174,6 +190,41 @@ func (n *JanusNode) decisionFor(name string) engine.Decision {
 		isDir = st.Mode&unix.S_IFMT == unix.S_IFDIR
 	}
 	return n.root.Engine.Resolve(rel, isDir).Decision
+}
+
+// gateClass classifies how a FUSE operation reacts to a path's Decision. It
+// collapses the two policy shapes that were otherwise hand-copied across every
+// mutating and traversing handler into one named, table-tested mapping — the
+// authoritative FR-8 behaviour matrix expressed once.
+type gateClass int
+
+const (
+	// denyNonAllowed: mutating operations (create, delete, rename, chmod,
+	// hardlink, xattr writes) require ALLOWED — both MASKED and HIDDEN deny.
+	denyNonAllowed gateClass = iota
+	// denyHidden: read/traverse operations (opendir, readlink, xattr reads)
+	// and directory create/remove pass ALLOWED and MASKED, denying only
+	// HIDDEN. Directories are never MASKED (FR-10), so for mkdir/rmdir the
+	// MASKED arm is simply unreachable.
+	denyHidden
+)
+
+// gate maps a (class, decision) pair to the errno the operation must return,
+// or 0 to proceed. This is the single source of truth for how the three faces
+// (ALLOWED/MASKED/HIDDEN) translate to access control; every mutating and
+// traversing handler consults it instead of re-deriving the check inline.
+func gate(class gateClass, d engine.Decision) syscall.Errno {
+	switch class {
+	case denyNonAllowed:
+		if d != engine.Allowed {
+			return syscall.EACCES
+		}
+	case denyHidden:
+		if d == engine.Hidden {
+			return syscall.EACCES
+		}
+	}
+	return 0
 }
 
 var _ = (fs.NodeLookuper)((*JanusNode)(nil))
@@ -301,8 +352,8 @@ func (n *JanusNode) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHan
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("readdir", dec, 0, start) }()
-	if d == engine.Hidden {
-		return nil, 0, syscall.EACCES
+	if e := gate(denyHidden, d); e != 0 {
+		return nil, 0, e
 	}
 	return n.LoopbackNode.OpendirHandle(ctx, flags)
 }
@@ -320,8 +371,8 @@ func (n *JanusNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("setattr", dec, 0, start) }()
-	if d != engine.Allowed {
-		return syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return e
 	}
 	return n.LoopbackNode.Setattr(ctx, f, in, out)
 }
@@ -338,8 +389,8 @@ func (n *JanusNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("unlink", dec, 0, start) }()
-	if d != engine.Allowed {
-		return syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return e
 	}
 	return n.LoopbackNode.Unlink(ctx, name)
 }
@@ -351,8 +402,8 @@ func (n *JanusNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("mkdir", dec, 0, start) }()
-	if d == engine.Hidden {
-		return nil, syscall.EACCES
+	if e := gate(denyHidden, d); e != 0 {
+		return nil, e
 	}
 	return n.LoopbackNode.Mkdir(ctx, name, mode, out)
 }
@@ -364,8 +415,8 @@ func (n *JanusNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("rmdir", dec, 0, start) }()
-	if d == engine.Hidden {
-		return syscall.EACCES
+	if e := gate(denyHidden, d); e != 0 {
+		return e
 	}
 	return n.LoopbackNode.Rmdir(ctx, name)
 }
@@ -394,12 +445,12 @@ func (n *JanusNode) Rename(ctx context.Context, name string, newParent fs.InodeE
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("rename", dec, 0, start) }()
-	if d != engine.Allowed {
-		return syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return e
 	}
 	if np, ok := newParent.(*JanusNode); ok {
-		if np.decisionFor(newName) != engine.Allowed {
-			return syscall.EACCES
+		if e := gate(denyNonAllowed, np.decisionFor(newName)); e != 0 {
+			return e
 		}
 	}
 	return n.LoopbackNode.Rename(ctx, name, newParent, newName, flags)
@@ -412,8 +463,8 @@ func (n *JanusNode) Symlink(ctx context.Context, target, name string, out *fuse.
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("symlink", dec, 0, start) }()
-	if d != engine.Allowed {
-		return nil, syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return nil, e
 	}
 	return n.LoopbackNode.Symlink(ctx, target, name, out)
 }
@@ -435,15 +486,15 @@ func (n *JanusNode) Link(ctx context.Context, target fs.InodeEmbedder, name stri
 		return nil, syscall.EACCES
 	}
 	targetDecision := tn.resolve().Decision
-	if targetDecision != engine.Allowed {
+	if e := gate(denyNonAllowed, targetDecision); e != 0 {
 		n.observe("link", targetDecision.String(), 0, start)
-		return nil, syscall.EACCES
+		return nil, e
 	}
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("link", dec, 0, start) }()
-	if d != engine.Allowed {
-		return nil, syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return nil, e
 	}
 	return n.LoopbackNode.Link(ctx, target, name, out)
 }
@@ -455,8 +506,8 @@ func (n *JanusNode) Mknod(ctx context.Context, name string, mode, rdev uint32, o
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("mknod", dec, 0, start) }()
-	if d != engine.Allowed {
-		return nil, syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return nil, e
 	}
 	return n.LoopbackNode.Mknod(ctx, name, mode, rdev, out)
 }
@@ -475,8 +526,8 @@ func (n *JanusNode) Create(ctx context.Context, name string, flags uint32, mode 
 	d := n.decisionFor(name)
 	dec := d.String()
 	defer func() { n.observe("create", dec, 0, start) }()
-	if d != engine.Allowed {
-		return nil, nil, 0, syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return nil, nil, 0, e
 	}
 	return n.LoopbackNode.Create(ctx, name, flags, mode, out)
 }
@@ -492,8 +543,8 @@ func (n *JanusNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("readlink", dec, 0, start) }()
-	if d == engine.Hidden {
-		return nil, syscall.EACCES
+	if e := gate(denyHidden, d); e != 0 {
+		return nil, e
 	}
 	target, errno := n.LoopbackNode.Readlink(ctx)
 	if errno != 0 {
@@ -524,8 +575,8 @@ func (n *JanusNode) Getxattr(ctx context.Context, attr string, dest []byte) (uin
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("getxattr", dec, 0, start) }()
-	if d == engine.Hidden {
-		return 0, syscall.EACCES
+	if e := gate(denyHidden, d); e != 0 {
+		return 0, e
 	}
 	return n.LoopbackNode.Getxattr(ctx, attr, dest)
 }
@@ -538,8 +589,8 @@ func (n *JanusNode) Listxattr(ctx context.Context, dest []byte) (uint32, syscall
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("listxattr", dec, 0, start) }()
-	if d == engine.Hidden {
-		return 0, syscall.EACCES
+	if e := gate(denyHidden, d); e != 0 {
+		return 0, e
 	}
 	return n.LoopbackNode.Listxattr(ctx, dest)
 }
@@ -551,8 +602,8 @@ func (n *JanusNode) Setxattr(ctx context.Context, attr string, data []byte, flag
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("setxattr", dec, 0, start) }()
-	if d != engine.Allowed {
-		return syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return e
 	}
 	return n.LoopbackNode.Setxattr(ctx, attr, data, flags)
 }
@@ -564,8 +615,8 @@ func (n *JanusNode) Removexattr(ctx context.Context, attr string) syscall.Errno 
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("removexattr", dec, 0, start) }()
-	if d != engine.Allowed {
-		return syscall.EACCES
+	if e := gate(denyNonAllowed, d); e != 0 {
+		return e
 	}
 	return n.LoopbackNode.Removexattr(ctx, attr)
 }
@@ -595,9 +646,7 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 	start := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
-			if h.node.root.Observe != nil {
-				h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "PANIC", LatencyUs: time.Since(start).Microseconds()})
-			}
+			h.node.observeRead("PANIC", 0, "", start)
 			result, errno = nil, apperrors.ToErrno(fmt.Errorf("%w: %v", apperrors.ErrPanic, r))
 		}
 	}()
@@ -616,9 +665,7 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 	}
 	switch res.Decision {
 	case engine.Hidden:
-		if h.node.root.Observe != nil {
-			h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "HIDDEN", LatencyUs: time.Since(start).Microseconds()})
-		}
+		h.node.observeRead("HIDDEN", 0, "", start)
 		return nil, syscall.EACCES
 	case engine.Masked:
 		// Fall through to redacted read with current patterns.
@@ -629,21 +676,15 @@ func (h *maskedHandle) Read(ctx context.Context, dest []byte, off int64) (result
 
 	key, err := h.contentKey()
 	if err != nil {
-		if h.node.root.Observe != nil {
-			h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "MASKED", LatencyUs: time.Since(start).Microseconds()})
-		}
+		h.node.observeRead("MASKED", 0, "", start)
 		return nil, syscall.EIO
 	}
 	n, err := h.node.root.Provider.ReadAt(ctx, key, res.Patterns, dest, off, h.backingOpener())
 	if err != nil {
-		if h.node.root.Observe != nil {
-			h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "MASKED", LatencyUs: time.Since(start).Microseconds()})
-		}
+		h.node.observeRead("MASKED", 0, "", start)
 		return nil, apperrors.ToErrno(err)
 	}
-	if h.node.root.Observe != nil {
-		h.node.root.Observe(OpEvent{Op: "read", Path: h.node.relPath(), Decision: "MASKED", Bytes: int64(n), LatencyUs: time.Since(start).Microseconds(), Cache: "na"})
-	}
+	h.node.observeRead("MASKED", int64(n), "na", start)
 	return fuse.ReadResultData(dest[:n]), 0
 }
 
@@ -659,9 +700,7 @@ func (h *maskedHandle) readRaw(ctx context.Context, dest []byte, off int64, star
 	rel := h.node.relPath()
 	fd, err := h.node.root.Backing.OpenAt(rel, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		if h.node.root.Observe != nil {
-			h.node.root.Observe(OpEvent{Op: "read", Path: rel, Decision: "ALLOWED", LatencyUs: time.Since(start).Microseconds()})
-		}
+		h.node.observeRead("ALLOWED", 0, "", start)
 		return nil, apperrors.ToErrno(fmt.Errorf("readRaw openat %q: %w", rel, err))
 	}
 	defer unix.Close(fd)
@@ -669,9 +708,7 @@ func (h *maskedHandle) readRaw(ctx context.Context, dest []byte, off int64, star
 	if err != nil {
 		return nil, apperrors.ToErrno(err)
 	}
-	if h.node.root.Observe != nil {
-		h.node.root.Observe(OpEvent{Op: "read", Path: rel, Decision: "ALLOWED", Bytes: int64(n), LatencyUs: time.Since(start).Microseconds(), Cache: "na"})
-	}
+	h.node.observeRead("ALLOWED", int64(n), "na", start)
 	return fuse.ReadResultData(dest[:n]), 0
 }
 
@@ -701,15 +738,16 @@ func (h *maskedHandle) contentKey() (provider.ContentKey, error) {
 	if err != nil {
 		return provider.ContentKey{}, err
 	}
-	return provider.ContentKey{
-		// absPath() is used here only as the cache map's identity key, never
-		// as an access path — every actual read above goes through Backing.
-		Path:    h.node.absPath(),
-		MTimeNS: st.Mtim.Sec*1e9 + st.Mtim.Nsec,
-		Size:    st.Size,
-		Inode:   st.Ino,
-		Gen:     h.node.root.Engine.Generation(),
-	}, nil
+	// absPath() is the cache map's identity key only, never an access path —
+	// every actual read above goes through Backing. provider.NewContentKey owns
+	// the freshness contract; this call just supplies the stat + generation.
+	return provider.NewContentKey(
+		h.node.absPath(),
+		st.Mtim.Sec*1e9+st.Mtim.Nsec,
+		st.Size,
+		st.Ino,
+		h.node.root.Engine.Generation(),
+	), nil
 }
 
 // backingOpener returns a provider.Opener that opens this node's real file

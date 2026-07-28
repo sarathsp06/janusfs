@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,12 +35,9 @@ func newPathCmd() *cobra.Command {
 			if err != nil {
 				want = args[0]
 			}
-			resp, err := daemonCall(daemonRequest{Cmd: "list"})
-			if errors.Is(err, errDaemonNotRunning) {
-				return fmt.Errorf("path: %s", hintStartDaemon)
-			}
+			resp, err := callDaemon("path", daemonRequest{Cmd: "list"})
 			if err != nil {
-				return fmt.Errorf("path: %w", err)
+				return err
 			}
 			for _, m := range resp.Mounts {
 				if abs, _ := filepath.Abs(m.Src); abs == want || m.Mountpoint == want {

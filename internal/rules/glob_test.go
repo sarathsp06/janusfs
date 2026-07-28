@@ -38,7 +38,7 @@ func TestTranslateGlobUnit(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.line+"_"+c.path, func(t *testing.T) {
-			p, err := compilePattern(1, c.line)
+			p, err := compilePatternFold(1, c.line, false)
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}
@@ -51,7 +51,7 @@ func TestTranslateGlobUnit(t *testing.T) {
 }
 
 func TestNegateAndDirOnlyParsing(t *testing.T) {
-	p, err := compilePattern(1, "!important.log")
+	p, err := compilePatternFold(1, "!important.log", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestNegateAndDirOnlyParsing(t *testing.T) {
 		t.Error("expected negate=true")
 	}
 
-	p2, err := compilePattern(1, `\!literal.log`)
+	p2, err := compilePatternFold(1, `\!literal.log`, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestGitConformance(t *testing.T) {
 			}
 			runGit(t, dir, "init", "-q")
 
-			p, err := compilePattern(1, c.pattern)
+			p, err := compilePatternFold(1, c.pattern, false)
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}

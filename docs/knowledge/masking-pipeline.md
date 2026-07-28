@@ -80,23 +80,22 @@ caller's job, and `provider` does that by wrapping it as
 bookkeeping — never a rebuild, never a `redact` call — which is what satisfies
 "no FUSE handler blocks on another's rebuild".
 
-`ContentKey` (`provider.go:43`) is the whole correctness story:
+`ContentKey` is the whole correctness story: the absolute real path (identity
+/ map key only, never an access path), mtime in nanoseconds, size, inode, and
+the rule-set generation. Its fields are **unexported**; the only way to build
+one is `provider.NewContentKey(path, mtimeNS, size, inode, gen)`. That keeps the
+freshness contract — which fields define staleness — in `internal/provider`,
+right next to the whole-struct equality check that is the authoritative change
+detector, so a caller in another package cannot silently omit a field (e.g. the
+generation) and defeat staleness detection. A `Path()` accessor exposes the
+identity for callers that need it.
 
-```go
-type ContentKey struct {
-    Path    string  // absolute real path on disk
-    MTimeNS int64
-    Size    int64
-    Inode   uint64
-    Gen     uint64  // rule-set generation
-}
-```
-
-`maskedHandle.contentKey()` (`internal/mount/janus_node.go:597`) rebuilds this
-key with a fresh `syscall.Stat` on **every read**, never caching it for the
-lifetime of the handle. That is deliberate: it means a concurrent edit to the
-real file is always caught, and it is the reason the project can ship without a
-file watcher at all. The key is authoritative; nothing else detects change.
+`maskedHandle.contentKey()` (`internal/mount/janus_node.go`) builds the key with
+a fresh stat of the real file (through the retained backing descriptor) on
+**every read**, never caching it for the lifetime of the handle. That is
+deliberate: it means a concurrent edit to the real file is always caught, and it
+is the reason the project can ship without a file watcher at all. The key is
+authoritative; nothing else detects change.
 
 Including `Gen` means a rule reload invalidates every cached redaction
 implicitly, on top of the explicit `InvalidateAll()`.

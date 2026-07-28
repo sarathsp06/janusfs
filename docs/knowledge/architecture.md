@@ -115,7 +115,7 @@ go adapter.Mount(ctx, src, mountpoint)  ← blocks until unmount
 `startMount` returns only once the mount is actually serving. That is what makes
 `janusfs mount` able to honestly report success: `OnMounted` fires after
 `fs.Mount` returns and the kernel handshake completed
-(`internal/mount/mount_darwin.go:115`), and it sends `nil` on the `ready`
+(`internal/mount/mount.go`, the shared adapter), and it sends `nil` on the `ready`
 channel. If `adapter.Mount` returns before that, the error goes on the same
 channel and `startMount` tears down (`runtime.go:161`).
 
@@ -127,7 +127,7 @@ continues without persistence (`runtime.go:112`).
 `mountRuntime.stop()` (`runtime.go:172`) is the ordered shutdown:
 
 1. cancel the context, which makes `Adapter.Mount`'s goroutine call
-   `server.Unmount()` (`mount_darwin.go:121`);
+   `server.Unmount()` (`mount.go`, the shared adapter);
 2. wait `shutdownGrace` for the serve loop to exit;
 3. if it drags, `unmountKernel(mountpoint, force=true)` — on darwin a
    `diskutil unmount` → `umount` → `diskutil unmount force` ladder, on Linux

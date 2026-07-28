@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sarathsp06/janusfs/internal/config"
+	"github.com/sarathsp06/janusfs/internal/control"
 )
 
 func newUmountCmd() *cobra.Command {
@@ -35,7 +36,7 @@ func runUmount(mountpoint string) error {
 		mpAbs = mountpoint
 	}
 
-	resp, err := daemonCall(daemonRequest{Cmd: "unmount", Mountpoint: mpAbs})
+	resp, err := control.Call(daemonRequest{Cmd: "unmount", Mountpoint: mpAbs})
 	switch {
 	case errors.Is(err, errDaemonNotRunning):
 		// No daemon: fall back to a direct OS unmount so a stray mount left by

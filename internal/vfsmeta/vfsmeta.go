@@ -16,13 +16,12 @@ import (
 
 // Status contains the live mount status fields for status.json.
 type Status struct {
-	Uptime       string      `json:"uptime"`
-	Generation   uint64      `json:"generation"`
-	WatcherAlive bool        `json:"watcherAlive"`
-	Cache        CacheStatus `json:"cache"`
-	GoVersion    string      `json:"goVersion"`
-	Version      string      `json:"version"`
-	StartTime    time.Time   `json:"startTime"`
+	Uptime     string      `json:"uptime"`
+	Generation uint64      `json:"generation"`
+	Cache      CacheStatus `json:"cache"`
+	GoVersion  string      `json:"goVersion"`
+	Version    string      `json:"version"`
+	StartTime  time.Time   `json:"startTime"`
 }
 
 // CacheStatus describes the provider cache state.
@@ -45,7 +44,7 @@ func ConflictsJSON(root string) ([]byte, error) {
 }
 
 // StatusJSON builds the status.json content from live state.
-func StatusJSON(startTime time.Time, gen uint64, watcherAlive bool, cacheEntries int, cacheBytes int64, cacheHits, cacheMisses, cacheRebuilds uint64) []byte {
+func StatusJSON(startTime time.Time, gen uint64, cacheEntries int, cacheBytes int64, cacheHits, cacheMisses, cacheRebuilds uint64) []byte {
 	cache := CacheStatus{
 		CurrentBytes: cacheBytes,
 		EntryCount:   cacheEntries,
@@ -61,13 +60,12 @@ func StatusJSON(startTime time.Time, gen uint64, watcherAlive bool, cacheEntries
 	}
 
 	status := Status{
-		Uptime:       time.Since(startTime).Round(time.Second).String(),
-		Generation:   gen,
-		WatcherAlive: watcherAlive,
-		Cache:        cache,
-		GoVersion:    goVer,
-		Version:      "dev",
-		StartTime:    startTime,
+		Uptime:     time.Since(startTime).Round(time.Second).String(),
+		Generation: gen,
+		Cache:      cache,
+		GoVersion:  goVer,
+		Version:    "dev",
+		StartTime:  startTime,
 	}
 
 	b, _ := json.MarshalIndent(status, "", "  ")

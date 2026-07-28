@@ -57,6 +57,16 @@ separate, larger conversion.
 Every row below is a real override in `janus_node.go`. "passthrough" means
 delegation to the embedded `LoopbackNode`.
 
+The `EACCES` columns are not re-derived per handler: each override resolves the
+decision and passes it to one gate — `gate(class, decision) → errno` — with two
+op-classes. `denyNonAllowed` (setattr, unlink, rename, symlink, mknod, create,
+link, setxattr, removexattr) returns `EACCES` unless the decision is ALLOWED;
+`denyHidden` (opendir, readlink, getxattr, listxattr, mkdir, rmdir) returns
+`EACCES` only for HIDDEN. This single table is the FR-8 matrix in code and is
+unit-tested directly in `gate_test.go`. `open` and the masked read handler keep
+their own switches (they return handles/redacted bytes, not just an errno). The
+per-row anchors below are indicative; `gate` is the authoritative mapping.
+
 | Operation | ALLOWED | MASKED | HIDDEN | Anchor |
 |---|---|---|---|---|
 | `lookup`, `getattr` | real attrs | real attrs | real attrs | inherited; `Getattr` at `:207` only zeroes `Ino` |
@@ -166,8 +176,8 @@ mask it, because it is intercepted before any policy lookup.
 uptime, provider stats), both mode `0444`, both `FOPEN_DIRECT_IO`, write-intent
 opens denied (`janus_virtual.go:106`).
 
-`status.json` currently reports `watcherAlive: false` unconditionally, since
-reload is on demand (`janus_virtual.go:88`).
+`status.json` carries no watcher field: there is no file watcher (FR-20), so
+reload is on demand only.
 
 `janusfs exec` uses the existence of `<mountpoint>/.janusfs` as its mount
 readiness probe (`internal/execrunner/runner.go:150`), so this directory is

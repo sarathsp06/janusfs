@@ -35,23 +35,43 @@ import (
 // blocking a FUSE handler forever on a wedged rebuild.
 const rebuildTimeout = 10 * time.Second
 
-// ContentKey identifies exactly one version of one file's redacted
-// content. Path is the absolute real path on disk, used ONLY as this cache's
-// map key / identity — never as an access path. Two reads
-// with an identical key are guaranteed to want the same redacted bytes;
-// any field differing means the cache entry (if any) is stale.
+// ContentKey identifies exactly one version of one file's redacted content.
+// Two reads with an identical key are guaranteed to want the same redacted
+// bytes; any field differing means the cache entry (if any) is stale — this
+// whole-struct equality (see ReadAt) is the authoritative change detector.
+//
+// Its fields are unexported and it can only be built through NewContentKey, so
+// the freshness contract lives here next to the equality check: a caller
+// cannot silently omit a field (e.g. the generation) and defeat staleness
+// detection, which — since the caller lives in another package (internal/mount)
+// with no compile-time tie to this equality — is exactly the bug that could
+// otherwise hide across the seam.
 type ContentKey struct {
-	Path    string
-	MTimeNS int64
-	Size    int64
-	Inode   uint64
-	Gen     uint64
+	path    string // absolute real path on disk; identity/map key ONLY, never an access path
+	mtimeNS int64
+	size    int64
+	inode   uint64
+	gen     uint64
 }
+
+// NewContentKey builds the cache-validity key from the freshness inputs a
+// masked read has on hand: the file's identity path, its modification time in
+// whole nanoseconds, size, inode, and the rule-set generation. Requiring every
+// field as an argument is the point — there is no way to construct a key that
+// omits one.
+func NewContentKey(path string, mtimeNS, size int64, inode, gen uint64) ContentKey {
+	return ContentKey{path: path, mtimeNS: mtimeNS, size: size, inode: inode, gen: gen}
+}
+
+// Path returns the identity path this key was built for. It is the cache map
+// key, not an access path — production callers read the file through
+// internal/backing, never by reopening this string.
+func (k ContentKey) Path() string { return k.path }
 
 // Opener returns a fresh, independently readable handle on the content a
 // ContentKey identifies. Callers (internal/mount) back this with a
 // descriptor-relative open (internal/backing) rather than re-resolving
-// ContentKey.Path as a string, so the decision that produced this key and the
+// ContentKey.path as a string, so the decision that produced this key and the
 // bytes actually read for it go through the same resolution — closing the
 // window a path re-open would leave between the two. This package calls
 // Opener exactly once per rebuild (or once per readOversize call), always
@@ -105,7 +125,7 @@ type entry struct {
 // lock.
 type RamCache struct {
 	mu       sync.Mutex
-	entries  map[string]*entry // keyed by ContentKey.Path
+	entries  map[string]*entry // keyed by ContentKey.path
 	lru      *list.List        // most-recently-used at the front
 	curBytes int64
 
@@ -131,14 +151,14 @@ func NewRamCache(maxBytes, maxFile, redactBufferMax int64) *RamCache {
 
 // ReadAt implements RedactedContentProvider.ReadAt.
 func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.Pattern, p []byte, off int64, open Opener) (int, error) {
-	if key.Size > c.maxFile {
+	if key.size > c.maxFile {
 		return c.readOversize(pats, p, off, open)
 	}
 
 	sig := patternSignature(pats)
 
 	c.mu.Lock()
-	if e, ok := c.entries[key.Path]; ok && e.key == key {
+	if e, ok := c.entries[key.path]; ok && e.key == key {
 		// Exact key match: either already ready, or a rebuild for this
 		// exact version is in flight (another reader triggered it) —
 		// either way, wait on it below rather than starting a duplicate
@@ -154,7 +174,7 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 	// stale-but-still-redacted bytes can be served to this caller immediately
 	// while the rebuild runs for the next one.
 	var stalePrev *entry
-	if e, ok := c.entries[key.Path]; ok {
+	if e, ok := c.entries[key.path]; ok {
 		c.lru.Remove(e.lruElem)
 		if e.built {
 			c.curBytes -= int64(len(e.bytes))
@@ -166,7 +186,7 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 	c.misses.Add(1)
 	c.rebuilds.Add(1)
 	ne := &entry{key: key, patternSig: sig, ready: make(chan struct{})}
-	c.entries[key.Path] = ne
+	c.entries[key.path] = ne
 	ne.lruElem = c.lru.PushFront(ne)
 	c.mu.Unlock()
 
@@ -210,11 +230,11 @@ func (c *RamCache) waitAndServe(ctx context.Context, e *entry, sig string, p []b
 			// pattern set than what this caller needs (a race between two
 			// generations) — fail closed rather than serve mismatched
 			// content.
-			return 0, fmt.Errorf("provider: pattern set changed mid-rebuild for %q: %w", e.key.Path, apperrors.ErrRebuildTimeout)
+			return 0, fmt.Errorf("provider: pattern set changed mid-rebuild for %q: %w", e.key.path, apperrors.ErrRebuildTimeout)
 		}
 		return copyAt(e.bytes, p, off), nil
 	case <-time.After(rebuildTimeout):
-		return 0, fmt.Errorf("provider: rebuilding %q: %w", e.key.Path, apperrors.ErrRebuildTimeout)
+		return 0, fmt.Errorf("provider: rebuilding %q: %w", e.key.path, apperrors.ErrRebuildTimeout)
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
@@ -306,7 +326,7 @@ func (c *RamCache) evictLocked() {
 		e := elem.Value.(*entry)
 		prev := elem.Prev()
 		if e.built {
-			delete(c.entries, e.key.Path)
+			delete(c.entries, e.key.path)
 			c.lru.Remove(elem)
 			c.curBytes -= int64(len(e.bytes))
 			zero(e.bytes)

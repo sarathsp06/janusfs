@@ -401,7 +401,7 @@ func TestCompilePatternFoldCaseInsensitive(t *testing.T) {
 }
 
 func TestCompilePatternNoFoldIsCaseSensitive(t *testing.T) {
-	p, err := compilePattern(1, "*.env")
+	p, err := compilePatternFold(1, "*.env", false)
 	if err != nil {
 		t.Fatal(err)
 	}

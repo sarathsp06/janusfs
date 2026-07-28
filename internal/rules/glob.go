@@ -34,17 +34,9 @@ type ignorePattern struct {
 	raw     string // original line, unmodified, for reporting
 }
 
-// compilePattern parses and compiles one non-blank, non-comment line — a
-// .janusignore line or a .janusmask glob — into an ignorePattern, matching
-// case-sensitively. Used directly only by tests; production callers go through
-// compilePatternFold so matching agrees with the backing volume's own case
-// sensitivity.
-func compilePattern(lineNo int, raw string) (*ignorePattern, error) {
-	return compilePatternFold(lineNo, raw, false)
-}
-
-// compilePatternFold is compilePattern with foldCase controlling whether the
-// compiled regex matches case-insensitively. This must agree with the backing
+// compilePatternFold parses and compiles one non-blank, non-comment line — a
+// .janusignore line or a .janusmask glob — into an ignorePattern, with foldCase
+// controlling whether the compiled regex matches case-insensitively. This must agree with the backing
 // filesystem: on a case-insensitive volume (APFS/HFS+ default), the kernel
 // resolves "SECRET.ENV" and "secret.env" to the same inode, so a
 // case-sensitive glob would let ".ENV" slip past a "*.env" mask rule.

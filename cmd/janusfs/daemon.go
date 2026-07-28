@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"log/slog"
 	"net"
 	"net/http"
@@ -39,7 +38,7 @@ type (
 )
 
 func newDaemonCmd() *cobra.Command {
-	var debug, noOpen bool
+	var debug, noOpen, background bool
 	var indexPort int
 
 	cmd := &cobra.Command{
@@ -48,14 +47,19 @@ func newDaemonCmd() *cobra.Command {
 		Long: "Starts the long-running JanusFS process. It resumes every mount recorded by a\n" +
 			"previous `janusfs mount` (and not explicitly unmounted), serves a combined\n" +
 			"dashboard listing them all, and accepts `janusfs mount`/`umount` commands over\n" +
-			"a local control socket. Runs until Ctrl-C, then unmounts everything cleanly.",
+			"a local control socket. Runs in the foreground until Ctrl-C (then unmounts\n" +
+			"everything cleanly), or pass --background to detach and log to a file.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if background {
+				return startDaemonBackground(debug, indexPort)
+			}
 			return runDaemon(cmd.Context(), debug, noOpen, indexPort)
 		},
 	}
 	cmd.Flags().BoolVar(&debug, "debug", false, "verbose debug logging")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open the dashboard in a browser on start")
+	cmd.Flags().BoolVar(&background, "background", false, "detach from the terminal and run in the background, logging to ~/.janusfs/logs/daemon.log")
 	cmd.Flags().IntVar(&indexPort, "ui-port", config.DefaultUIPort, "port for the combined dashboard (binds 127.0.0.1)")
 	return cmd
 }
@@ -80,7 +84,7 @@ type daemon struct {
 }
 
 func runDaemon(parent context.Context, debug, noOpen bool, indexPort int) error {
-	sock, err := socketPath()
+	sock, err := control.SocketPath()
 	if err != nil {
 		return fmt.Errorf("daemon: %w", err)
 	}
@@ -196,20 +200,20 @@ func (d *daemon) handleConn(conn net.Conn) {
 	defer conn.Close()
 	var req daemonRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		writeResp(conn, daemonResponse{Error: "bad request: " + err.Error()})
+		control.WriteResponse(conn, daemonResponse{Error: "bad request: " + err.Error()})
 		return
 	}
 	switch req.Cmd {
 	case "mount":
-		writeResp(conn, d.doMount(req))
+		control.WriteResponse(conn, d.doMount(req))
 	case "unmount":
-		writeResp(conn, d.doUnmount(req))
+		control.WriteResponse(conn, d.doUnmount(req))
 	case "list":
-		writeResp(conn, daemonResponse{OK: true, Mounts: d.snapshot()})
+		control.WriteResponse(conn, daemonResponse{OK: true, Mounts: d.snapshot()})
 	case "reload":
-		writeResp(conn, d.doReload(req))
+		control.WriteResponse(conn, d.doReload(req))
 	default:
-		writeResp(conn, daemonResponse{Error: "unknown command: " + req.Cmd})
+		control.WriteResponse(conn, daemonResponse{Error: "unknown command: " + req.Cmd})
 	}
 }
 
@@ -331,16 +335,36 @@ func (d *daemon) doMount(req daemonRequest) daemonResponse {
 	d.mounts[mpAbs] = rt
 	d.mu.Unlock()
 
-	_ = writePidfile(mpAbs) // records the daemon PID; keeps the double-mount guard working
-	srcAbs, _ := filepath.Abs(cfg.Src)
-	if err := config.RecordMount(srcAbs, mpAbs, req.Label); err != nil {
-		d.logger.Warn("failed to record mount", "error", err)
-	}
+	d.recordMount(rt)
 
 	return daemonResponse{
 		OK:      true,
 		Message: fmt.Sprintf("mounted %s -> %s", cfg.Src, mpAbs),
 		Mounts:  []mountStatus{d.status(rt)},
+	}
+}
+
+// recordMount persists everything a now-live mount owns on disk: the pidfile
+// (the double-mount guard and `janusfs doctor` read it) and the registry entry
+// (resume reads it at the next daemon start). One place answers "what does a
+// live mount leave on disk", so the doMount path stays a single call.
+func (d *daemon) recordMount(rt *mountRuntime) {
+	_ = writePidfile(rt.Mountpoint) // records the daemon PID; keeps the double-mount guard working
+	srcAbs, _ := filepath.Abs(rt.Src)
+	if err := config.RecordMount(srcAbs, rt.Mountpoint, rt.Label); err != nil {
+		d.logger.Warn("failed to record mount", "error", err)
+	}
+}
+
+// forgetMount removes everything recordMount persisted, plus the now-empty
+// mirror directories — the mount is gone for good and must not resume. This is
+// deliberately distinct from shutdown's pidfile-only cleanup, which keeps the
+// registry entry so the mount resumes on the next start.
+func (d *daemon) forgetMount(mp string) {
+	_ = removePidfile(mp)
+	pruneMirrorDirs(mp, d.base.MountRoot)
+	if err := config.RemoveMount(mp); err != nil {
+		d.logger.Warn("failed to update mounts registry", "error", err)
 	}
 }
 
@@ -405,11 +429,7 @@ func (d *daemon) doUnmount(req daemonRequest) daemonResponse {
 	}
 
 	rt.stop()
-	_ = removePidfile(mp)
-	pruneMirrorDirs(mp, d.base.MountRoot)
-	if err := config.RemoveMount(mp); err != nil {
-		d.logger.Warn("failed to update mounts registry", "error", err)
-	}
+	d.forgetMount(mp)
 	return daemonResponse{OK: true, Message: "unmounted " + mp}
 }
 
@@ -523,91 +543,6 @@ func (d *daemon) snapshot() []mountStatus {
 	return out
 }
 
-// handleHTTP multiplexes both the daemon-level combined index view, the individual
-// mount dashboards, and their API/SSE/static asset endpoints under `/mounts/<uuid>/`.
-func (d *daemon) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" {
-		d.handleIndex(w, r)
-		return
-	}
-
-	if strings.HasPrefix(r.URL.Path, "/mounts/") {
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/mounts/"), "/")
-		if len(parts) > 0 && parts[0] != "" {
-			uuid := parts[0]
-			d.mu.Lock()
-			var matched *mountRuntime
-			for _, rt := range d.mounts {
-				if rt.UUID == uuid {
-					matched = rt
-					break
-				}
-			}
-			d.mu.Unlock()
-
-			if matched != nil && matched.apiSrv != nil {
-				// Strip the prefix "/mounts/<uuid>" so that the existing api.Server
-				// router handles it correctly (it registers endpoints starting with "/").
-				trimmedPath := "/" + strings.Join(parts[1:], "/")
-				r.URL.Path = trimmedPath
-				matched.apiSrv.ServeHTTP(w, r)
-				return
-			}
-		}
-	}
-
-	http.NotFound(w, r)
-}
-
-// handleIndex serves the combined dashboard: a plain list of every live
-// mount linking to its individual dashboard.
-func (d *daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
-	mounts := d.snapshot()
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprint(w, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>JanusFS</title>")
-	fmt.Fprint(w, "<style>body{font-family:-apple-system,system-ui,sans-serif;background:#f4efea;color:#383838;max-width:820px;margin:40px auto;padding:0 24px}"+
-		"h1{font-size:22px}a{color:#383838}li{margin:8px 0;list-style:none;padding:12px;background:#fff;border:2px solid #383838;box-shadow:-4px 4px 0 #383838}"+
-		".mp{font-family:monospace;font-size:13px;color:#666;margin-top:4px;display:flex;gap:8px;align-items:center}"+
-		"button.copy{font:inherit;font-size:11px;cursor:pointer;border:1px solid #383838;background:#fff;padding:1px 8px}"+
-		"button.copy:hover{background:#ffde00}</style></head><body>")
-	fmt.Fprintf(w, "<h1>JanusFS — %d mount(s)</h1><ul>", len(mounts))
-	if len(mounts) == 0 {
-		fmt.Fprint(w, "<p>No active mounts. Run <code>janusfs mount &lt;src&gt;</code>.</p>")
-	}
-	for _, m := range mounts {
-		title := m.Label
-		if title == "" {
-			title = m.Src
-		}
-		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a><div class=\"mp\"><span>%s</span>"+
-			"<button class=\"copy\" data-mp=\"%s\">copy path</button></div></li>",
-			html.EscapeString(m.Dashboard), html.EscapeString(title),
-			html.EscapeString(m.Mountpoint), html.EscapeString(m.Mountpoint))
-	}
-	fmt.Fprint(w, "</ul>")
-	fmt.Fprint(w, "<script>document.querySelectorAll('button.copy').forEach(function(b){"+
-		"b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-mp'))"+
-		".then(function(){var t=b.textContent;b.textContent='copied';setTimeout(function(){b.textContent=t;},1500);});});});</script>")
-	fmt.Fprint(w, "</body></html>")
-}
-
-// socketPath is the daemon control socket, ~/.janusfs/daemon.sock.
-func socketPath() (string, error) {
-	return control.SocketPath()
-}
-
-// daemonCall dials the daemon control socket, sends one request, and returns
-// the response. Returns an error (with errDaemonNotRunning wrapped) if no
-// daemon is listening, so callers can offer a clear next step.
-func daemonCall(req daemonRequest) (daemonResponse, error) {
-	resp, err := control.Call(req)
-	if errors.Is(err, control.ErrDaemonNotRunning) {
-		return resp, errDaemonNotRunning
-	}
-	return resp, err
-}
-
-func writeResp(conn net.Conn, resp daemonResponse) {
-	control.WriteResponse(conn, resp)
-}
+// The daemon's HTTP dashboard (handleHTTP / handleIndex) lives in dashboard.go;
+// the background-daemonize plumbing (startDaemonBackground / newLogsCmd) lives
+// in daemonize.go.

@@ -25,6 +25,19 @@ import (
 	"github.com/sarathsp06/janusfs/internal/vfsmeta"
 )
 
+// VFSStats is the cache snapshot the dashboard/status endpoints report. It is
+// a named struct rather than a positional tuple so a change to the provider's
+// stats can't silently reorder or mismatch across the api↔runtime seam. It
+// mirrors provider.ProviderStats by value; api deliberately does not import
+// provider (SPEC §13: the dashboard must not become a second resolution path).
+type VFSStats struct {
+	Entries  int
+	Bytes    int64
+	Hits     uint64
+	Misses   uint64
+	Rebuilds uint64
+}
+
 // Server is the localhost HTTP/SSE server.
 type Server struct {
 	mux           *http.ServeMux
@@ -35,9 +48,8 @@ type Server struct {
 	ui            fs.FS
 	root          string
 	mountpoint    string
-	providerStats func() (int, int64, uint64, uint64, uint64)
+	providerStats func() VFSStats
 	resolvePath   func(relPath string, isDir bool) (string, []string, string) // decision, patternNames, ruleRef ("<file>:<line>")
-	watcherAlive  func() bool
 	generation    func() uint64
 	reload        func() error // recompile the rule set on demand (config save / reload button)
 	startTime     time.Time
@@ -61,13 +73,12 @@ func New(uiFS fs.FS, token string, reg *prometheus.Registry, hist *history.Store
 	return s
 }
 
-// SetVFSMeta configures the root path, provider stats, path resolver, and
-// watcher status for vfsmeta and coverage endpoints. Call before Start.
-func (s *Server) SetVFSMeta(root string, providerStats func() (int, int64, uint64, uint64, uint64), resolvePath func(relPath string, isDir bool) (string, []string, string), watcherAlive func() bool, generation func() uint64) {
+// SetVFSMeta configures the root path, provider stats, and path resolver for
+// the vfsmeta and coverage endpoints. Call before Start.
+func (s *Server) SetVFSMeta(root string, providerStats func() VFSStats, resolvePath func(relPath string, isDir bool) (string, []string, string), generation func() uint64) {
 	s.root = root
 	s.providerStats = providerStats
 	s.resolvePath = resolvePath
-	s.watcherAlive = watcherAlive
 	s.generation = generation
 	if s.startTime.IsZero() {
 		s.startTime = time.Now()
@@ -182,26 +193,20 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"error": "vfsmeta not configured"})
 		return
 	}
-	watcherAlive := false
-	if s.watcherAlive != nil {
-		watcherAlive = s.watcherAlive()
-	}
 	start := s.startTime
 	if start.IsZero() {
 		start = time.Now()
 	}
 
-	var entries int
-	var bytes int64
-	var hits, misses, rebuilds uint64
+	var st VFSStats
 	if s.providerStats != nil {
-		entries, bytes, hits, misses, rebuilds = s.providerStats()
+		st = s.providerStats()
 	}
 	var gen uint64
 	if s.generation != nil {
 		gen = s.generation()
 	}
-	b := vfsmeta.StatusJSON(start, gen, watcherAlive, entries, bytes, hits, misses, rebuilds)
+	b := vfsmeta.StatusJSON(start, gen, st.Entries, st.Bytes, st.Hits, st.Misses, st.Rebuilds)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
@@ -245,11 +250,9 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
-	var entries int
-	var bytes int64
-	var hits, misses, rebuilds uint64
+	var st VFSStats
 	if s.providerStats != nil {
-		entries, bytes, hits, misses, rebuilds = s.providerStats()
+		st = s.providerStats()
 	}
 	var gen uint64
 	if s.generation != nil {
@@ -264,11 +267,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 			"generation": gen,
 			"uptime":     int64(time.Since(s.startTime).Seconds()),
 			"cache": map[string]any{
-				"entries":  entries,
-				"bytes":    bytes,
-				"hits":     hits,
-				"misses":   misses,
-				"rebuilds": rebuilds,
+				"entries":  st.Entries,
+				"bytes":    st.Bytes,
+				"hits":     st.Hits,
+				"misses":   st.Misses,
+				"rebuilds": st.Rebuilds,
 			},
 		},
 	})

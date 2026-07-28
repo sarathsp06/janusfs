@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/sarathsp06/janusfs/internal/control"
 )
 
 // shutdownGrace is how long a clean unmount is given before it is forced.
@@ -66,15 +68,9 @@ func newUpdateCmd() *cobra.Command {
 					req.Mountpoint = args[0]
 				}
 			}
-			resp, err := daemonCall(req)
-			if errors.Is(err, errDaemonNotRunning) {
-				return fmt.Errorf("update: %s", hintStartDaemon)
-			}
+			resp, err := callDaemon("update", req)
 			if err != nil {
-				return fmt.Errorf("update: %w", err)
-			}
-			if !resp.OK {
-				return fmt.Errorf("update: %s", resp.Error)
+				return err
 			}
 			fmt.Println(resp.Message)
 			return nil
@@ -82,16 +78,30 @@ func newUpdateCmd() *cobra.Command {
 	}
 }
 
-func runMount(req daemonRequest) error {
-	resp, err := daemonCall(req)
+// callDaemon sends req to the daemon and normalizes the three failure shapes
+// every client command shares: a not-running daemon becomes the start hint, a
+// transport error is wrapped, and a daemon-reported !OK becomes its message —
+// each prefixed with name. On success it returns the response for the caller to
+// render. umount deliberately does NOT use this: its not-running branch falls
+// back to a real OS-level unmount rather than printing a hint.
+func callDaemon(name string, req daemonRequest) (daemonResponse, error) {
+	resp, err := control.Call(req)
 	if errors.Is(err, errDaemonNotRunning) {
-		return fmt.Errorf("mount: %s", hintStartDaemon)
+		return resp, fmt.Errorf("%s: %s", name, hintStartDaemon)
 	}
 	if err != nil {
-		return fmt.Errorf("mount: %w", err)
+		return resp, fmt.Errorf("%s: %w", name, err)
 	}
 	if !resp.OK {
-		return fmt.Errorf("mount: %s", resp.Error)
+		return resp, fmt.Errorf("%s: %s", name, resp.Error)
+	}
+	return resp, nil
+}
+
+func runMount(req daemonRequest) error {
+	resp, err := callDaemon("mount", req)
+	if err != nil {
+		return err
 	}
 	fmt.Println(resp.Message)
 	for _, m := range resp.Mounts {

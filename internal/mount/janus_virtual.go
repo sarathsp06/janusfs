@@ -84,7 +84,6 @@ func (f *janusVirtualFile) content() []byte {
 		return vfsmeta.StatusJSON(
 			f.root.StartTime,
 			f.root.Engine.Generation(),
-			false, // watcherAlive is false since reload is on demand
 			ps.Entries,
 			ps.Bytes,
 			ps.Hits,

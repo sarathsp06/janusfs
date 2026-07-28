@@ -43,7 +43,7 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   - [16. Configuration, logging, and process wiring](#16-configuration-logging-and-process-wiring)
   - [17. History store](#17-history-store)
 - [Part III — Delivery](#part-iii--delivery)
-  - [18. Sequencing](#18-sequencing)
+  - [18. Independence of requirements](#18-independence-of-requirements)
   - [19. Test strategy](#19-test-strategy)
   - [20. Risks and rejected designs](#20-risks-and-rejected-designs)
 - [Part IV — Instructions for the implementing agent](#part-iv--instructions-for-the-implementing-agent)
@@ -682,9 +682,9 @@ internal/ui         embedded dashboard assets
 internal/vfsmeta    the .janusfs virtual file contents
 ```
 
-`internal/backing`, `internal/procid`, and `internal/nsexec` do not exist yet.
-`internal/watch` and `internal/platform`, which older documentation mentions, do
-not exist and are not planned.
+There is no `internal/watch` or `internal/platform`: there is no file watcher
+(FR-20), and platform differences are isolated behind build-tagged files inside
+the packages that need them, not a separate package.
 
 The dependency direction is one-way:
 
@@ -706,16 +706,22 @@ or `engine`, for the same reason.
 Built on `hanwen/go-fuse/v2`. The adapter translates a Decision into a kernel
 answer and does nothing else — it never decides and never redacts.
 
-Today it embeds `fs.LoopbackRoot`/`fs.LoopbackNode` and overrides only the
+It embeds `fs.LoopbackRoot`/`fs.LoopbackNode` and overrides only the
 operations FR-8's matrix says must differ, inheriting passthrough behaviour for
 everything else. That is why `lookup` and `getattr` report real attributes for all
 three decisions with no code.
 
-FR-33 requires replacing the inherited path-based backing access with a
-dirfd-relative layer. The override structure and the matrix are unaffected by
-that change; what changes is how each override reaches the real file. Keep the
-two concerns separate: `internal/backing` owns descriptor-relative I/O,
-`internal/mount` owns the decision-to-errno translation.
+The decision-to-errno translation is one gate: `gate(class, decision) → errno`,
+with two op-classes — `denyNonAllowed` (mutations: create/delete/rename/chmod/
+hardlink/xattr-writes require ALLOWED) and `denyHidden` (reads, traversal, and
+mkdir/rmdir deny only HIDDEN). Every override consults this one gate rather than
+re-deriving the check inline, so the FR-8 matrix lives in a single table (and is
+tested as one, without a live mount). The two concerns stay separate:
+`internal/backing` owns descriptor-relative I/O, `internal/mount` owns this
+decision-to-errno gate.
+
+The adapter reaches the real file through `internal/backing`'s dirfd-relative
+layer, not a path re-join, so the decision and the I/O share one resolution.
 
 Two distinct decision paths must be preserved:
 
@@ -732,12 +738,15 @@ the real file directly.
 Config-file immunity (FR-17) is checked **before** the policy lookup in every
 mutating operation, so no rule can make a config file writable.
 
-macOS mount options `nobrowse` and `noappledouble` are load-bearing, not
-cosmetic: without them Spotlight and Finder hold the volume busy and a graceful
-unmount fails with `EBUSY` indefinitely. `NullPermissions` avoids spurious
-`EACCES` from ownership mismatches on the loopback. `ioctl` returns `ENOSYS`
-because macOS tools issue ioctls on regular files and go-fuse's default handler
-panics on empty input buffers.
+The `Adapter`, its `Mount`/`Unmount` lifecycle, and `OpEvent` are one shared
+implementation (`internal/mount/mount.go`, build-tagged `darwin || linux`); the
+only platform difference is `applyPlatformOptions`. On macOS that sets the
+load-bearing (not cosmetic) `nobrowse` and `noappledouble` options — without
+them Spotlight and Finder hold the volume busy and a graceful unmount fails with
+`EBUSY` indefinitely — and `NullPermissions`, which avoids spurious `EACCES`
+from ownership mismatches on the loopback; on Linux it is a no-op. `ioctl`
+returns `ENOSYS` because macOS tools issue ioctls on regular files and go-fuse's
+default handler panics on empty input buffers.
 
 ## 7. Decision engine
 
@@ -928,19 +937,22 @@ buffer drops. Nothing in this path may ever block a FUSE handler.
 
 ## 13. HTTP API, UI, and virtual files
 
-One listener per daemon. The per-mount API server is a thin adapter holding
-closures injected at mount time — mount info, a decision resolver, a reload
-trigger — rather than importing the engine or provider, so the dashboard cannot
-become a second resolution path.
+One listener per daemon, served by the daemon process: a combined index at `/`
+and each mount's dashboard and API under `/mounts/<uuid>/` (the index and its
+routing live in `cmd/janusfs/dashboard.go`). The per-mount API server is a thin
+adapter holding closures injected at mount time — mount info, a decision
+resolver, a reload trigger, and a stats snapshot — rather than importing the
+engine or provider, so the dashboard cannot become a second resolution path.
+The stats snapshot crosses that seam as a typed `api.VFSStats` value (entries,
+bytes, cache hit/miss/rebuild counts), not a positional tuple.
 
 The dashboard is served from an embedded filesystem: no external asset, no CDN,
 fully offline.
 
 The virtual `.janusfs` directory is synthesized by the adapter before any policy
-lookup, which is why user rules cannot hide or mask it. Its `status.json`
-currently reports a vestigial `watcherAlive: false`, since FR-20 removed the
-watcher; consumers must not treat that as unhealthy, and the field should be
-removed.
+lookup, which is why user rules cannot hide or mask it. `status.json` reports
+generation, uptime, and cache counters; it carries no watcher field, because
+there is no watcher (FR-20) — reloads are on demand.
 
 `.janusfs` is also the mount-readiness probe used by `exec`, so it is
 load-bearing beyond introspection.
@@ -1021,71 +1033,18 @@ One SQLite database per mount, four tables: `schema_version`, `sessions`,
 
 # Part III — Delivery
 
-## 18. Sequencing
+## 18. Independence of requirements
 
-Ordered by value per unit of risk, not by the order the features were described.
-Each step is independently shippable and nothing later blocks anything earlier.
+Every requirement in this specification is independently implementable and
+independently testable: nothing here prescribes an order of construction, a
+release schedule, or a phase plan. A requirement's exit condition is simply its
+own test plus the invariants in §19 — the leak oracle green, no NFR-3 budget
+regressed, no new dependency added for convenience.
 
-**Step 1 — Correctness fixes.** Small, self-contained, each with a regression
-test.
-
-- FR-11: deny agent-created hardlinks to non-allowed inodes.
-- FR-13: case-correct glob matching on case-insensitive volumes.
-- FR-26: `exec` refuses to default to the current directory.
-- Consolidate the duplicated control-protocol types into one package.
-- `doctor` reports real mountpoints instead of pidfile hashes (FR-50).
-
-Exit criteria: a test per fix; the leak oracle still green; no new dependency.
-
-**Step 2 — Crash recovery (FR-35, FR-36, NFR-12).** Reuses the existing unmount
-ladder and mounts registry. No new subsystem.
-
-Exit criteria: `SIGKILL` the daemon with two live mounts and confirm both paths
-return to native access within 5 s; confirm a clean shutdown leaves the sweep a
-no-op; confirm the supervisor does not outlive its daemon.
-
-**Step 3 — Decision memoization (NFR-3).** Buys back the latency budget that
-anything later would spend.
-
-Exit criteria: a benchmark showing the cache-hit resolution figure met, and a test
-proving a generation bump makes stale entries unreachable.
-
-**Step 4 — Linux namespace exec (FR-28, FR-29, NFR-9, NFR-11).** The highest-value
-feature. Touches no FUSE handler, needs no identity subsystem, and deletes the
-path-rewriting code on Linux.
-
-Exit criteria: the NFR-9 test asserting the host mount table is unchanged and that
-host and in-namespace processes see different content at the same path
-simultaneously; the NFR-11 benchmark showing no host regression;
-`janusfs exec` working with no daemon running; the rewriter gone from the Linux
-path.
-
-**Step 5 — Backing access layer (FR-33).** Large and mechanical. Independently
-valuable for TOCTOU, and a hard prerequisite for step 7.
-
-Exit criteria: every backing access is descriptor-relative; a test that swaps a
-path component for a symlink between decision and I/O and confirms the decision
-still holds; no behaviour change to FR-8's matrix.
-
-**Step 6 — Process identity (FR-32, NFR-10).** Benchmark **first**. If the
-per-operation cost does not fit NFR-3, stop here and record that macOS
-path-preserving mode is not shipping.
-
-Exit criteria: the NFR-10 measurement published in `bench/`; correct
-classification across `fork`, `setsid`, double-fork, and reparenting; a test that a
-recycled PID never inherits a cached verdict; unidentifiable callers receive
-passthrough per NFR-2.
-
-**Step 7 — macOS path-preserving mode (FR-31).** Off by default, refusing to
-enable without steps 5 and 6.
-
-Exit criteria: a test that the mode refuses to enable when its prerequisites are
-absent; a test that a host tool writing to a masked file cannot corrupt it; the
-`git add` data-loss scenario from FR-31 covered explicitly.
-
-**Step 8 — FR-24, reload revocation of open handles.** Deferred deliberately: it
-is the narrowest window and the most likely to cost fast-path latency, so it
-should be designed after step 3's cache exists.
+The only hard dependencies are the ones the requirements themselves state:
+macOS path-preserving mode (FR-31) refuses to enable without the retained
+descriptor layer (FR-33) and process identity (FR-32); everything else stands
+alone.
 
 ## 19. Test strategy
 
@@ -1228,8 +1187,6 @@ A change is not done until all of these hold.
   the shared function is a smaller change than a guard in each caller, and it
   leaves no sibling broken.
 - Delete rather than add where you can. FR-29 deletes code, and that is the point.
-- Sequencing in §18 is deliberate. Do not start a later step to avoid an earlier
-  one; do not treat a later step as blocking an earlier one.
 - Stop and ask only when a decision changes the security model, the normative
   interfaces, or the dependency policy. Everything else: pick the fail-closed
   reading, record it, continue.

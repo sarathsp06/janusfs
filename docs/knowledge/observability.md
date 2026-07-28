@@ -138,6 +138,5 @@ the prefix before delegating (`cmd/janusfs/daemon.go:560`). See
 
 # Where the API and the FUSE view disagree
 
-`status.json` reports `watcherAlive: false` unconditionally
-(`internal/mount/janus_virtual.go:88`) because there is no watcher. The field is
-vestigial and any consumer treating `false` as unhealthy will be wrong.
+`status.json` carries no watcher field: there is no file watcher (FR-20), so
+reloads happen on demand and there is no liveness to report.

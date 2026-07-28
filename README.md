@@ -20,14 +20,14 @@
 - Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
 - A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
 
-The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stands between your real files and the agent, deciding what is allowed to pass through the filesystem boundary.
-
 ---
 
 ## Contents
 
 - [Why](#why)
-- [How it works](#how-it-works)
+- [How it works](#how-it-works-flow-diagram)
+- [The problem](#the-problem)
+- [Architecture](#architecture)
 - [Quickstart](#quickstart)
 - [The daemon](#the-daemon)
 - [The three faces](#the-three-faces)
@@ -45,9 +45,7 @@ The name comes from **Janus**, the Roman god of doors and gateways: JanusFS stan
 
 ## Why
 
-(Also: a short Janus backstory)
-
-Janus watches doors and thresholds — places where context changes. The repository root is a kind of threshold: it contains both code the agent should reason about and secrets the agent must never see. JanusFS turns that threshold into an explicit filesystem policy boundary. It decides, per-path and per-read, whether to hand the agent the real bytes, a redacted version, or nothing at all. This mirrors the myth: Janus decides what can pass and what cannot.
+The repository root is a threshold: it holds both code the agent should reason about and secrets the agent must never see. JanusFS turns that threshold into an explicit filesystem policy boundary, deciding per-path and per-read whether to hand the agent the real bytes, a redacted version, or nothing at all.
 
 ## How it works (flow diagram)
 
@@ -79,7 +77,7 @@ Agent -> JanusFS -> decision:
 ```
 
 
-## How it works
+## The problem
 
 AI coding agents need broad filesystem read access to be useful — and that access routinely includes `.env` files, private keys, credentials, cloud configs, and other things that should never end up in a prompt or a model's context.
 
@@ -91,7 +89,7 @@ The obvious workarounds all fail in some way:
 
 JanusFS resolves this per-file, per-read, at the FS boundary. Rules use `.gitignore`-style globs plus a named pattern library — syntax your users already know — and every enforcement decision goes through one code path that fails **closed** on any error.
 
-## How it works
+## Architecture
 
 A long-running **daemon** owns every mount. You drive it with short-lived CLI
 commands (`janusfs mount`/`umount`) that talk to it over a local unix socket
@@ -123,7 +121,7 @@ the mountpoint — where each file wears one of three faces.
                                             Real files on disk (never modified)
 ```
 
-The rule engine reads `.janusignore` and `.janusmask` from the mount root down (and from `~/.janusfs/config/` if it exists — see [Global rules](#global-rules-machine-wide-defaults)) and compiles them into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so file sizes and offsets stay identical — tools don't see short reads and don't get confused. Errors — parser failures, missing rules, watcher lag, anything — resolve to **Hidden**.
+The rule engine reads `.janusignore` and `.janusmask` from the mount root down (and from `~/.janusfs/config/` if it exists — see [Global rules](#global-rules-machine-wide-defaults)) and compiles them into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so file sizes and offsets stay identical — tools don't see short reads and don't get confused. Any error — parser failure, missing rules, anything — resolves to **Hidden**.
 
 ## Quickstart
 
@@ -158,7 +156,8 @@ janusfs check                   # linter: zero-match globs, dir-mask, hidden-dir
 janusfs explain .env            # per-file trace: which rule decided this file's fate
 
 # 5) start the daemon (owns mounts, serves the dashboard, resumes past mounts)
-janusfs daemon &                # or run in its own terminal; opens the dashboard
+janusfs daemon --background     # detaches, logs to ~/.janusfs/logs/daemon.log
+#                               # (or `janusfs daemon` to run in the foreground; `janusfs logs -f` to tail)
 
 # 6) mount — returns immediately; the daemon keeps it alive
 janusfs mount .
@@ -201,13 +200,19 @@ client that talks to it over `~/.janusfs/daemon.sock` and exits.
 - **One consolidated server and port.** The daemon serves a combined index at
   `http://127.0.0.1:7381/` listing every live mount, and routes individual mount
   dashboards and API/V1 endpoints under subpaths (e.g., `http://127.0.0.1:7381/mounts/<uuid>/`). Change the port with `--ui-port`.
+- **Runs in the foreground or detached.** `janusfs daemon` runs in the
+  foreground (Ctrl-C to stop) — best for development. `janusfs daemon
+  --background` detaches from the terminal, redirects its output to
+  `~/.janusfs/logs/daemon.log`, and returns once the control socket is up;
+  `janusfs logs [-f]` tails that log.
 - **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
   dashboard. If FUSE does not release a mount cleanly within the grace window,
   JanusFS falls back to OS-level unmount commands (`diskutil`/`umount` on macOS,
   `fusermount3`/`fusermount`/`umount` on Linux) to avoid stale mountpoints.
 
 ```bash
-janusfs daemon             # start it (add & to background, or use a terminal)
+janusfs daemon --background # start it detached (or `janusfs daemon` in the foreground)
+janusfs logs -f            # tail the background daemon's log
 janusfs mount ~/proj       # hand a mount to the daemon; returns at once
 janusfs mount ~/proj ~/pv  # or mount at a short path you choose (existing empty dirs are OK)
 janusfs update ~/proj      # re-apply edited .janusignore/.janusmask (no remount)
@@ -307,7 +312,7 @@ Before mounting for the first time, run this quick checklist to reduce friction:
 
 5. Start the daemon and bring the mount up:
 
-   janusfs daemon &
+   janusfs daemon --background
    janusfs mount .
 
 
@@ -410,7 +415,8 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | Command | Purpose |
 |---------|---------|
 | `janusfs install` | One-time setup: choose a mount root (saved to `~/.janusfs/settings.json`) so `janusfs mount <src>` needs no `--mount-root`. `--global-rules` also seeds `~/.janusfs/config/`. |
-| `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
+| `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--background` detaches and logs to `~/.janusfs/logs/daemon.log`; `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
+| `janusfs logs [-f]` | Show the background daemon's log (`~/.janusfs/logs/daemon.log`); `-f` follows it like `tail -f`. |
 | `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an empty `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
 | `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusignore`/`.janusmask` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
 | `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
@@ -419,7 +425,7 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
 | `janusfs check [path]` | Static linter: unknown builtins, bad regex, zero-match globs, directory-mask globs, hidden-dir/global-floor negations that have no effect, duplicate rules. `--json` for machine output; exit 1 on errors. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
-| `janusfs doctor` | Runtime health: macFUSE status, active mounts, engine state, history DB stats, cache memory. |
+| `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
 
 All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
 
@@ -478,14 +484,14 @@ For details on building, formatting, running unit and FUSE integration tests, an
 
 ## Status
 
-**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Hot-reload (`internal/watch`) detects config and data-file changes, debounces, and triggers engine recompilation plus cache invalidation. The observability stack (`internal/obs` + `internal/api`) serves a live dashboard with stat cards, top paths, latency percentiles, and a real-time SSE event feed — with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting. Mounts are owned by a long-running daemon (`janusfs daemon`) that resumes them across reboots and serves one combined dashboard; `janusfs mount`/`umount` are thin clients over a local control socket.
+**Currently:** Phases 0–4 landed. The engine (`.janusignore`/`.janusmask` discovery, resolution, precedence, fail-closed folding, the global-floor amendment), the built-in pattern library, the static linter (`janusfs check`) and per-file tracer (`janusfs explain`) all work against a real directory tree. The mount implements FR-7's full Allowed/Masked/Hidden matrix end-to-end — `internal/redact` (streaming size-preserving redaction) and `internal/provider` (RAM cache with stale-serve/rebuild) are wired into the FUSE adapter (`internal/mount`). Reloads are on demand — there is no file watcher (`janusfs update` recompiles the rule set and invalidates the cache; FR-20). The observability stack (`internal/obs` + `internal/api`) serves a live dashboard (coverage, cache stats, a real-time SSE event feed) and a Prometheus `/metrics` endpoint, with per-mount bearer token auth. History rollups (`internal/history`) persist to SQLite with configurable retention and batched writes off the event bus. Diagnostics include `janusfs doctor` for runtime health and `janusfs check` for static linting. Mounts are owned by a long-running daemon (`janusfs daemon`) that resumes them across reboots and serves one combined dashboard; `janusfs mount`/`umount` are thin clients over a local control socket.
 
 Roadmap:
 
 - [x] Phase 0 — walking-skeleton macFUSE passthrough
 - [x] Phase 1 — rule engine, three-state resolution, `janusfs init`/`check`/`explain`
 - [x] Phase 2 — pattern-based masking wired into the mount, leak oracle green
-- [x] Phase 3 — hot reload, watcher, race-tight leak oracle
+- [x] Phase 3 — on-demand reload (`janusfs update`), race-tight leak oracle
 - [x] Phase 4 — dashboard, history, HTTP API, per-mount token auth
 - [x] Phase 5 — diagnostics maturity (`janusfs doctor`, conflicts.json)
 

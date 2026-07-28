@@ -1,6 +1,6 @@
 package main
 
-import "errors"
+import "github.com/sarathsp06/janusfs/internal/control"
 
 // This file is the single home for CLI error sentinels and the recurring
 // user-facing guidance that would otherwise drift across commands. It is
@@ -10,17 +10,18 @@ import "errors"
 // than one caller, or (b) is guidance repeated in more than one place, earns
 // a spot here.
 
-// errDaemonNotRunning is returned by daemonCall when no daemon is listening on
-// the control socket, so commands can react (mount errors out with a start
-// hint; umount falls back to a direct OS unmount). daemonCall translates
-// internal/control.ErrDaemonNotRunning to this local sentinel at the package
-// boundary, so every existing errors.Is(err, errDaemonNotRunning) call site in
-// this package keeps working unchanged.
-var errDaemonNotRunning = errors.New("no janusfs daemon is running")
+// errDaemonNotRunning is the local short name for the control-socket sentinel
+// returned when no daemon is listening, so commands can react (mount errors
+// out with a start hint; umount falls back to a direct OS unmount). It is the
+// same value as internal/control.ErrDaemonNotRunning — aliased, not
+// re-declared, so the two can never drift out of sync.
+var errDaemonNotRunning = control.ErrDaemonNotRunning
 
 const (
 	// hintStartDaemon is shown when a command needs the daemon but none is up.
-	hintStartDaemon = "no janusfs daemon is running; start it first with: janusfs daemon"
+	hintStartDaemon = "no janusfs daemon is running; start one first:\n" +
+		"  foreground (dev):  janusfs daemon\n" +
+		"  background:        janusfs daemon --background"
 
 	// hintNoMountRoot is shown when a mount is requested but no mount root is
 	// configured to derive the mountpoint under.

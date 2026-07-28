@@ -99,6 +99,22 @@ deliberately: a client cannot ask the daemon to treat its request as a resume,
 because resume is allowed to create a recorded mountpoint directory that a
 fresh mount is not.
 
+The client commands share one error-shaping helper, `callDaemon(name, req)`:
+it turns a not-running daemon into the start hint, wraps transport errors, and
+surfaces a `!OK` response — each prefixed with the command name. `umount` is the
+deliberate exception (its not-running branch falls back to a direct OS unmount).
+
+# Daemon process layout
+
+The daemon's code is split by concern across three files in `cmd/janusfs`:
+`daemon.go` (control-socket dispatch and the mount lifecycle), `dashboard.go`
+(the combined HTTP index at `/` and the `/mounts/<uuid>/` routing), and
+`daemonize.go` (running detached). `janusfs daemon` runs in the foreground;
+`janusfs daemon --background` re-execs itself under `setsid`, redirects output
+to `~/.janusfs/logs/daemon.log`, and returns once the control socket answers.
+`janusfs logs [-f]` tails that log. The control socket — not a pidfile — is the
+single source of truth for whether a daemon is running.
+
 # Mount lifecycle
 
 `doMount` (`daemon.go:284`) holds `opsMu` across the entire
@@ -175,10 +191,16 @@ user sees every attempt rather than only the last.
 
 # Pidfiles
 
+A live mount's on-disk footprint — its pidfile, its `mounts.json` registry
+entry, and its mirror directories — is owned by one pair: `recordMount(rt)`
+writes all three when a mount goes live, and `forgetMount(mp)` removes all three
+when it is unmounted for good. Daemon *shutdown* is deliberately different: it
+removes only the pidfiles and keeps the registry entries, so every mount resumes
+on the next start.
+
 `~/.janusfs/run/<sha256-of-abs-mountpoint>.pid`, mode `0600`, directory `0700`
 (`cmd/janusfs/pidfile.go:18`). The daemon writes its **own** PID for each
-mountpoint (`daemon.go:350`), so the file identifies the owning process, not a
-per-mount process.
+mountpoint, so the file identifies the owning process, not a per-mount process.
 
 The file carries two lines: the PID on the first, the absolute mountpoint on
 the second (`writePidfile`, `pidfile.go:36`). The mountpoint line exists
@@ -254,11 +276,12 @@ only automatic crash recovery is unavailable.
 
 # Dashboard multiplexing
 
-One HTTP listener on `127.0.0.1:<ui-port>` serves everything
-(`daemon.go:148`). `handleHTTP` (`:537`) routes `/` to a hand-rolled combined
-index and `/mounts/<uuid>/...` to that mount's `api.Server` after stripping the
-prefix from `r.URL.Path` (`:560`). Per-mount listeners were removed in favour
-of this single port.
+One HTTP listener on `127.0.0.1:<ui-port>` serves everything. `handleHTTP`
+(`cmd/janusfs/dashboard.go`) routes `/` to a hand-rolled combined index and
+`/mounts/<uuid>/...` to that mount's `api.Server` after stripping the prefix
+from `r.URL.Path`. Per-mount listeners were removed in favour of this single
+port. The provider-stats snapshot the API renders crosses the daemon→api seam
+as a typed `api.VFSStats` value, not a positional tuple.
 
 Each mount gets a `crypto/rand` 16-byte hex bearer token at startup
 (`cmd/janusfs/runtime.go:88`).

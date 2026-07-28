@@ -25,9 +25,9 @@ func testServer() *Server {
 
 func TestSummaryEndpoint(t *testing.T) {
 	s := testServer()
-	s.SetVFSMeta("/src/project", func() (int, int64, uint64, uint64, uint64) {
-		return 2, 4096, 3, 4, 5
-	}, nil, nil, func() uint64 { return 9 })
+	s.SetVFSMeta("/src/project", func() VFSStats {
+		return VFSStats{Entries: 2, Bytes: 4096, Hits: 3, Misses: 4, Rebuilds: 5}
+	}, nil, func() uint64 { return 9 })
 
 	req := httptest.NewRequest("GET", "/api/v1/summary", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -204,7 +204,7 @@ func TestRevealViewAndEdit(t *testing.T) {
 	}
 
 	s := testServer()
-	s.SetVFSMeta(root, nil, nil, nil, nil)
+	s.SetVFSMeta(root, nil, nil, nil)
 
 	get := func() string {
 		req := httptest.NewRequest("GET", "/api/v1/reveal?path=secret.env&token=test-token", nil)
@@ -264,7 +264,7 @@ func TestReloadEndpoint(t *testing.T) {
 func TestConfigSaveTriggersReload(t *testing.T) {
 	root := t.TempDir()
 	s := testServer()
-	s.SetVFSMeta(root, nil, nil, nil, nil)
+	s.SetVFSMeta(root, nil, nil, nil)
 	called := 0
 	s.SetReload(func() error { called++; return nil })
 

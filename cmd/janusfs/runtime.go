@@ -122,13 +122,13 @@ func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRu
 
 	apiSrv := api.New(ui.FS, bearerToken, recorder.Registry(), rt.hist)
 	apiSrv.SetMountInfo(cfg.Src, cfg.Mountpoint)
-	apiSrv.SetVFSMeta(cfg.Src, func() (int, int64, uint64, uint64, uint64) {
+	apiSrv.SetVFSMeta(cfg.Src, func() api.VFSStats {
 		ps := prov.Stats()
-		return ps.Entries, ps.Bytes, ps.Hits, ps.Misses, ps.Rebuilds
+		return api.VFSStats{Entries: ps.Entries, Bytes: ps.Bytes, Hits: ps.Hits, Misses: ps.Misses, Rebuilds: ps.Rebuilds}
 	}, func(relPath string, isDir bool) (string, []string, string) {
 		res := eng.Resolve(relPath, isDir)
 		return res.Decision.String(), res.PatternNames, res.RuleRef
-	}, func() bool { return true }, eng.Generation) // no watcher; rules reload on demand
+	}, eng.Generation)
 	apiSrv.SetReload(rt.reload)
 	rt.apiSrv = apiSrv
 
