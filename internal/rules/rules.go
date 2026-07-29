@@ -77,6 +77,9 @@ type IgnoreLevel struct {
 	// Hidden rather than silently skip the broken line (see Resolve).
 	Poisoned bool
 	LineErrs []error
+
+	IsGlobal bool
+	RelDir   string // relative to rs.Root (with slashes)
 }
 
 // RawLine is one non-blank, non-comment line of a config file, kept for
@@ -102,17 +105,21 @@ type MaskLevel struct {
 	Dir     string
 	File    string
 	Entries []MaskEntry
+
+	IsGlobal bool
+	RelDir   string // relative to rs.Root (with slashes)
 }
 
 // RuleSet is the immutable, compiled result of discovery. Levels are ordered
 // shallowest first; the global level, if present, is always index 0.
 type RuleSet struct {
-	Root         string
-	GlobalDir    string
-	IgnoreLevels []IgnoreLevel
-	MaskLevels   []MaskLevel
-	DiscoverErrs []error  // non-fatal discovery errors (unreadable files etc.), reported by janusfs check
-	PolicyDirs   []string // directories where .janusfs.yml existed, even if it compiled to no levels
+	Root          string
+	GlobalDir     string
+	GlobalRelRoot string // relative path from GlobalDir to Root, in slash form
+	IgnoreLevels  []IgnoreLevel
+	MaskLevels    []MaskLevel
+	DiscoverErrs  []error  // non-fatal discovery errors (unreadable files etc.), reported by janusfs check
+	PolicyDirs    []string // directories where .janusfs.yml existed, even if it compiled to no levels
 
 	// FoldCase is true when Root's backing volume treats two spellings of a
 	// name as the same file (the APFS/HFS+ default). Every pattern in
@@ -136,6 +143,9 @@ func Discover(root string) (*RuleSet, error) {
 
 	if gd, err := GlobalDir(); err == nil {
 		rs.GlobalDir = gd
+		if rel, err := filepath.Rel(gd, rootAbs); err == nil {
+			rs.GlobalRelRoot = filepath.ToSlash(rel)
+		}
 		rs.loadLevel(gd)
 	}
 
@@ -169,10 +179,28 @@ func (rs *RuleSet) loadLevel(dir string) {
 	}
 	ignore, hasIgnore, mask, hasMask, errs := loadPolicyLevel(dir, rs.FoldCase)
 	if hasIgnore {
+		ignore.IsGlobal = (rs.GlobalDir != "" && dir == rs.GlobalDir)
+		if !ignore.IsGlobal {
+			if rel, err := filepath.Rel(rs.Root, dir); err == nil {
+				ignore.RelDir = filepath.ToSlash(rel)
+				if ignore.RelDir == "." {
+					ignore.RelDir = ""
+				}
+			}
+		}
 		rs.IgnoreLevels = append(rs.IgnoreLevels, ignore)
 		rs.DiscoverErrs = append(rs.DiscoverErrs, ignore.LineErrs...)
 	}
 	if hasMask {
+		mask.IsGlobal = (rs.GlobalDir != "" && dir == rs.GlobalDir)
+		if !mask.IsGlobal {
+			if rel, err := filepath.Rel(rs.Root, dir); err == nil {
+				mask.RelDir = filepath.ToSlash(rel)
+				if mask.RelDir == "." {
+					mask.RelDir = ""
+				}
+			}
+		}
 		rs.MaskLevels = append(rs.MaskLevels, mask)
 	}
 	rs.DiscoverErrs = append(rs.DiscoverErrs, errs...)
