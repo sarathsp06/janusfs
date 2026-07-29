@@ -1,0 +1,24 @@
+# JanusFS policy. Preview with: janusfs check
+version: 1
+
+hide:
+  - "*.pem"
+  - "*.key"
+  - id_rsa*
+  - "*.p12"
+  - .aws/credentials
+  - "*.keychain"
+
+mask:
+  - paths:
+      - "*.env*"
+    patterns:
+      - env-value
+
+  - paths:
+      - "**/application*.yml"
+      - "**/application*.yaml"
+      - "**/application*.properties"
+    patterns:
+      - generic-secret
+      - db-uri
