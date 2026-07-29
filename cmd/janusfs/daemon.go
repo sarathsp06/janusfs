@@ -456,11 +456,17 @@ func (d *daemon) resume() {
 		return
 	}
 	for _, rec := range records {
+		if err := defaultStatDir(rec.Src); err != nil {
+			d.logger.Warn("forgetting recorded mount with missing source", "src", rec.Src, "mountpoint", rec.Mountpoint, "error", err)
+			d.forgetMount(rec.Mountpoint)
+			continue
+		}
 		resp := d.doMount(daemonRequest{Cmd: "mount", Src: rec.Src, Mountpoint: rec.Mountpoint, Label: rec.Label, Resume: true})
 		if resp.OK {
 			d.logger.Info("resumed mount", "src", rec.Src, "mountpoint", rec.Mountpoint)
 		} else {
-			d.logger.Warn("failed to resume mount", "mountpoint", rec.Mountpoint, "error", resp.Error)
+			d.logger.Warn("failed to resume mount; forgetting record", "mountpoint", rec.Mountpoint, "error", resp.Error)
+			d.forgetMount(rec.Mountpoint)
 		}
 	}
 }

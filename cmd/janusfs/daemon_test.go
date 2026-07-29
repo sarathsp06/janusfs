@@ -14,6 +14,7 @@ import (
 
 	"github.com/sarathsp06/janusfs/internal/config"
 	"github.com/sarathsp06/janusfs/internal/control"
+	"github.com/sarathsp06/janusfs/internal/logging"
 )
 
 // fakeRuntime builds a mountRuntime with just the fields the daemon's
@@ -400,5 +401,64 @@ func TestRunPaths_ListsKnownLocations(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("paths output missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+func TestResumePrunesMissingSourceRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	missingSrc := filepath.Join(home, "missing")
+	mp := filepath.Join(home, ".janusfs", "mounts", "missing")
+	if err := os.MkdirAll(mp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.RecordMount(missingSrc, mp, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &daemon{base: config.Default(), mounts: map[string]*mountRuntime{}, logger: logging.New("test")}
+	d.resume()
+
+	records, err := config.LoadMounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("missing source record should be pruned, got %#v", records)
+	}
+}
+
+func TestResumePrunesUnrecoverableRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, "src")
+	mp := filepath.Join(home, ".janusfs", "mounts", "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(mp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.RecordMount(src, mp, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	origStart := startMountFunc
+	t.Cleanup(func() {
+		startMountFunc = origStart
+	})
+	startMountFunc = func(context.Context, config.Config, bool) (*mountRuntime, error) {
+		return nil, errors.New("resume failed")
+	}
+
+	d := &daemon{base: config.Default(), mounts: map[string]*mountRuntime{}, logger: logging.New("test")}
+	d.resume()
+
+	records, err := config.LoadMounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("unrecoverable stale record should be pruned, got %#v", records)
 	}
 }
