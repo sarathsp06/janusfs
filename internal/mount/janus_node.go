@@ -364,7 +364,7 @@ func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, f
 		// return it as-is — the correctness gap is what existed before,
 		// not a regression.
 		if lf, ok := fh.(*fs.LoopbackFile); ok {
-			return &revocableHandle{LoopbackFile: lf, node: n}, ff, 0
+			return &revocableHandle{LoopbackFile: lf, node: n}, ff | fuse.FOPEN_DIRECT_IO, 0
 		}
 		return fh, ff, errno
 	}

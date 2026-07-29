@@ -3,6 +3,7 @@
 package mount
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,7 +36,7 @@ func TestReloadRevokesOpenPassthroughHandle(t *testing.T) {
 
 	// First read succeeds — still ALLOWED.
 	buf := make([]byte, 64)
-	if _, err := fd.ReadAt(buf, 0); err != nil {
+	if n, err := fd.ReadAt(buf, 0); err != nil && !(err == io.EOF && n > 0) {
 		t.Fatalf("first read (pre-reload): %v", err)
 	}
 

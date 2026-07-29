@@ -48,6 +48,15 @@ func (r *revocableHandle) stillAllowed(op string, start time.Time) syscall.Errno
 	return syscall.EACCES
 }
 
+// PassthroughFd is deliberately disabled on the revocable wrapper. If the
+// kernel were handed the real backing fd directly (go-fuse's
+// FOPEN_PASSTHROUGH path), subsequent reads on an already-open handle would
+// bypass this wrapper's Read method entirely, defeating reload-time
+// revocation.
+func (r *revocableHandle) PassthroughFd() (int, bool) {
+	return 0, false
+}
+
 var _ = (fs.FileReader)((*revocableHandle)(nil))
 
 func (r *revocableHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

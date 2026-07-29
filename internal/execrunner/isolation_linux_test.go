@@ -27,6 +27,18 @@ import (
 	"time"
 )
 
+const unsupportedPrivateMountMsg = "nsmount: making the mount tree recursively private: permission denied"
+
+func skipIfUnsupportedPrivateMount(t *testing.T, err error, output string) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if strings.Contains(output, unsupportedPrivateMountMsg) {
+		t.Skip("runner kernel does not allow recursively-private remount inside this unprivileged namespace")
+	}
+}
+
 // buildJanusfsBinary compiles cmd/janusfs into a temp directory and returns
 // its path. Cached per test run via t.TempDir() (not across tests) since the
 // build is what's under test indirectly — a stale binary would be the wrong
@@ -101,6 +113,7 @@ func TestNamespaceIsolation_HostMountTableUnaffected(t *testing.T) {
 
 	select {
 	case err := <-done:
+		skipIfUnsupportedPrivateMount(t, err, stderr.String())
 		if err != nil {
 			t.Fatalf("janusfs exec failed: %v\nstderr: %s", err, stderr.String())
 		}
@@ -164,6 +177,7 @@ func TestNamespaceIsolation_NoDaemonRequired(t *testing.T) {
 	cmd.Dir = src
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	out, err := cmd.CombinedOutput()
+	skipIfUnsupportedPrivateMount(t, err, string(out))
 	if err != nil {
 		t.Fatalf("janusfs exec failed with no daemon running: %v\noutput: %s", err, out)
 	}
@@ -187,7 +201,8 @@ func TestNamespaceIsolation_ExitCodeAndSignals(t *testing.T) {
 
 	cmd := exec.Command(bin, "exec", "--", "sh", "-c", "exit 42")
 	cmd.Dir = src
-	err := cmd.Run()
+	out, err := cmd.CombinedOutput()
+	skipIfUnsupportedPrivateMount(t, err, string(out))
 	exitErr, ok := err.(*exec.ExitError)
 	if !ok {
 		t.Fatalf("expected an *exec.ExitError, got %v (%T)", err, err)
@@ -220,6 +235,7 @@ func TestNamespaceIsolation_TeardownRestoresNormalAccess(t *testing.T) {
 	cmd := exec.Command(bin, "exec", "--", "true")
 	cmd.Dir = src
 	if out, err := cmd.CombinedOutput(); err != nil {
+		skipIfUnsupportedPrivateMount(t, err, string(out))
 		t.Fatalf("janusfs exec failed: %v\n%s", err, out)
 	}
 
