@@ -32,13 +32,14 @@ Registered in `newRootCmd` (`cmd/janusfs/main.go:48`). Every command except
 |---|---|---|
 | `daemon` | run the long-lived owner of all mounts | `--debug`, `--no-open`, `--ui-port` |
 | `mount <src> [mountpoint]` | ask the daemon to mount | `--name`, `--no-history` |
+| `mounts` | list active and recorded mounts | `--json` |
 | `update [src\|mountpoint\|configpath]` | recompile rules for one or all mounts | — |
 | `umount <mountpoint\|src>` | unmount via daemon, or directly if none is running | — |
 | `install` | optional setup: choose and save a custom mount root | `--root`, `--global-rules` |
 | `init [dir]` | write template `.janusfs.yml` | `--global`, `--force` |
 | `paths` | list config/data paths and whether each exists | — |
 | `path <src>` | print the mountpoint for a mounted source, for `cd`/scripting | — |
-| `check [path]` | static config linter; optional heuristic scan for Allowed secret-looking files/content | `--json`, `--secrets` |
+| `check [path]` | static config linter; optional heuristic scan and Hidden/Masked match preview | `--json`, `--secrets`, `--matches` |
 | `patterns` | list built-in `.janusfs.yml` mask pattern names and exact regexes | `--json` |
 | `explain <path>` | show the derivation of one path's decision | — |
 | `doctor` | runtime diagnostics | `--verbose` |

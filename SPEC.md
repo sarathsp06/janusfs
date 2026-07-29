@@ -143,8 +143,10 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 
 - **FR-5** Mounts recorded in `~/.janusfs/mounts.json` are resumed at daemon
   start, before the control socket accepts connections. One unresumable record
-  logs a warning and does not prevent the others. An explicit `umount` removes
-  the record so resume does not revive a mount the user stopped.
+  logs a warning and does not prevent the others. Records whose source no longer
+  exists, or whose mount cannot be recovered during resume, are pruned from the
+  registry. An explicit `umount` removes the record so resume does not revive a
+  mount the user stopped.
 
 ### 3.2 Decision semantics
 
@@ -552,8 +554,10 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   grouped by file and sorted by severity. `--secrets` enables an opt-in,
   heuristic scan for likely secret filenames and built-in secret-pattern content
   that currently resolves Allowed; those findings are warnings only and must not
-  be presented as proof of complete coverage. Exit 1 on errors. `--json` for
-  tooling.
+  be presented as proof of complete coverage. `--matches` adds a policy preview
+  of paths that currently resolve `HIDDEN` or `MASKED`, excluding `ALLOWED` paths
+  by default. Exit 1 on errors. `--json` for tooling, including matches when
+  requested.
 
 - **FR-48a** `janusfs patterns [--json]` lists every reserved built-in
   `.janusfs.yml` mask pattern name with its description and exact RE2 regex source.
@@ -570,7 +574,9 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   supervisor's status (FR-35); and in path-preserving mode the identity-lookup
   hit rate and mean latency (FR-32). `--verbose` adds the compiled rule dump.
 
-- **FR-51** `janusfs paths` lists every config and data path with presence.
+- **FR-51** `janusfs mounts [--json]` lists active daemon mounts plus recorded
+  registry entries with status: `mounted`, `recorded`, `missing-src`, `stale`,
+  or `error`. `janusfs paths` lists every config and data path with presence.
   `janusfs path <src>` prints just the mountpoint, for `cd "$(...)"`.
 
 - **FR-52** JanusFS has a built-in mount root default of `~/.janusfs/mounts` so

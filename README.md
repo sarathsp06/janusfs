@@ -152,6 +152,7 @@ janusfs install --root ~/.janusfs/mounts
 
 # 4) preview what those rules will do BEFORE you mount
 janusfs check --secrets         # linter + opt-in heuristic scan for likely Allowed secrets
+janusfs check --matches         # preview Hidden/Masked policy matches
 janusfs explain .env            # per-file trace: which rule decided this file's fate
 
 # 5) start the daemon (owns mounts, serves the dashboard, resumes past mounts)
@@ -201,7 +202,9 @@ client that talks to it over `~/.janusfs/daemon.sock` and exits.
 - **Restart-safe.** `janusfs mount` records every successful mount in
   `~/.janusfs/mounts.json`. `janusfs umount` removes that entry. If the daemon
   is stopped or crashes without an explicit unmount, the registry entry remains
-  and the next `janusfs daemon` start remounts it automatically.
+  and the next `janusfs daemon` start remounts it automatically. Startup prunes
+  records whose source disappeared or cannot be recovered, so stale entries do
+  not accumulate forever.
 - **One consolidated server and port.** The daemon serves a combined index at
   `http://127.0.0.1:7381/` listing every live mount, and routes individual mount
   dashboards and API/V1 endpoints under subpaths (e.g., `http://127.0.0.1:7381/mounts/<uuid>/`). Change the port with `--ui-port`.
@@ -223,6 +226,7 @@ janusfs mount ~/proj ~/pv  # or mount at a short path you choose (existing empty
 janusfs update ~/proj      # re-apply edited .janusfs.yml (no remount)
 janusfs path ~/proj        # print the mountpoint:  cd "$(janusfs path ~/proj)"
 janusfs umount ~/proj      # unmount by source path OR mountpoint
+janusfs mounts             # list active and recorded mounts
 janusfs paths              # show where settings, the registry, and rules live
 ```
 
@@ -460,12 +464,13 @@ whole-file      Masks every byte of the file; no regex...   —
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--background` detaches and logs to `~/.janusfs/logs/daemon.log`; `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
 | `janusfs logs [-f]` | Show the background daemon's log (`~/.janusfs/logs/daemon.log`); `-f` follows it like `tail -f`. |
 | `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an explicit `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
+| `janusfs mounts [--json]` | List active daemon mounts plus recorded mount entries, including `mounted`, `recorded`, `missing-src`, `stale`, and `error` status. |
 | `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusfs.yml` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
 | `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
-| `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
+| `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global policy, mount root) and whether each exists. |
 | `janusfs init [dir]` | Write secure-default `.janusfs.yml` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
-| `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed; this is a safety aid, not proof of full coverage. `--json` for machine output; exit 1 on errors only. |
+| `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed. Add `--matches` to list files/directories currently resolving Hidden or Masked; `--json` includes matches when requested. |
 | `janusfs patterns` | List every reserved built-in `.janusfs.yml` mask pattern name with its description and exact regex source. `--json` for machine-readable output. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
 | `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
