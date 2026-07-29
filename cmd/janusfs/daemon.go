@@ -241,7 +241,7 @@ func (d *daemon) doReload(req daemonRequest) daemonResponse {
 		}
 	} else {
 		// Match the mount by its mountpoint, its source, OR any path inside
-		// either tree — so `janusfs update <the .janusmask you just edited>`
+		// either tree — so `janusfs update <the .janusfs.yml you just edited>`
 		// resolves to the mount that owns it. Most specific (longest matching
 		// base) wins.
 		want, _ := filepath.Abs(req.Mountpoint)

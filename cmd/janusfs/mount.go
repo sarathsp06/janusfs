@@ -53,9 +53,9 @@ func newMountCmd() *cobra.Command {
 func newUpdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update [src|mountpoint|configpath]",
-		Short: "Reload .janusignore/.janusmask rules for a mount (or all mounts) without remounting",
+		Short: "Reload .janusfs.yml rules for a mount (or all mounts) without remounting",
 		Long: "Recompiles the rule set from disk and clears the redaction cache so edits to\n" +
-			".janusignore/.janusmask take effect. The argument may be a mount's source path,\n" +
+			".janusfs.yml take effect. The argument may be a mount's source path,\n" +
 			"its mountpoint, or any file inside either tree (e.g. the config file you just\n" +
 			"edited); the daemon resolves it to the owning mount. With no argument, reloads\n" +
 			"every mount.",

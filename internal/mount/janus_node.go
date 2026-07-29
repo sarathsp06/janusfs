@@ -112,12 +112,11 @@ func newJanusRoot(src string, eng *engine.Engine, prov *provider.RamCache, obser
 	return rootNode, jr, nil
 }
 
-// isConfigFile reports whether the given relative path is a .janusignore or
-// .janusmask file — these must be read-only through the mount (agents must
-// never be able to weaken policy by editing config files).
+// isConfigFile reports whether the given relative path is the JanusFS policy
+// file, which must be read-only through the mount (agents must never be able to
+// weaken policy by editing config files).
 func isConfigFile(relPath string) bool {
-	base := path.Base(relPath)
-	return base == ".janusignore" || base == ".janusmask"
+	return path.Base(relPath) == ".janusfs.yml"
 }
 
 // observe emits an event about this operation if an Observe callback
@@ -183,7 +182,7 @@ func (n *JanusNode) resolve() (res engine.Resolution) {
 	return n.root.Engine.Resolve(n.relPath(), n.isDir)
 }
 
-// reloadIfStale checks whether any .janusignore/.janusmask between this
+// reloadIfStale checks whether any .janusfs.yml between this
 // node and the mount root has appeared, disappeared, or changed on disk
 // since the loaded rule-set generation was compiled, and recompiles if so —
 // closing the gap where editing (or newly adding) a rule silently has no
@@ -332,7 +331,7 @@ func (n *JanusNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 
 // MASKED denies any write-intent open and otherwise returns a virtual
 // handle serving redacted bytes; ALLOWED passes through to LoopbackNode.
-// Config files (.janusignore/.janusmask) are unconditionally read-only:
+// Config files (.janusfs.yml) are unconditionally read-only:
 // any write-intent open is denied so an agent cannot weaken policy.
 func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	start := time.Now()

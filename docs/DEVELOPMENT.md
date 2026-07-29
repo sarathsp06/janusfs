@@ -23,7 +23,7 @@ Refer to **[`SPEC.md`](../SPEC.md)** for the detailed engineering contract and *
 
 - `cmd/janusfs/`: CLI entrypoints and command dispatch.
 - `internal/config/`: Single-source configuration and validation.
-- `internal/rules/`: Policy compiler and `.janusignore`/`.janusmask` parsing.
+- `internal/rules/`: Policy compiler and `.janusfs.yml` parsing.
 - `internal/engine/`: Pure decision resolution logic.
 - `internal/redact/`: Size-preserving `*` redaction pipeline.
 - `internal/provider/`: Content cache and memory-management layers.

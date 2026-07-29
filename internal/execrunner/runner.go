@@ -4,8 +4,8 @@
 // runner_linux.go): the child sees a filtered view at the source's own path,
 // with no path rewriting needed, because the kernel — not a string
 // substitution — is what makes the two paths the same path. Everything in
-// this file (CWD hijacking, argv rewriting, stream rewriting) exists only to
-// simulate that path parity on a platform (macOS) with no per-process mount
+// this file (CWD hijacking and argv rewriting) exists only to simulate that
+// path parity on a platform (macOS) with no per-process mount
 // namespaces, and is therefore darwin-only.
 package execrunner
 
@@ -77,11 +77,9 @@ func findSourceAndMount(cwd string) (string, string, error) {
 			return currAbs, mp, nil
 		}
 
-		// Check for .janusignore or .janusmask
+		// Check for a JanusFS policy file.
 		if foundSrc == "" {
-			if _, err := os.Stat(filepath.Join(currAbs, ".janusignore")); err == nil {
-				foundSrc = currAbs
-			} else if _, err := os.Stat(filepath.Join(currAbs, ".janusmask")); err == nil {
+			if _, err := os.Stat(filepath.Join(currAbs, ".janusfs.yml")); err == nil {
 				foundSrc = currAbs
 			}
 		}
@@ -186,11 +184,11 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 	cmd.Env = scrubbedEnv
 	cmd.Stdin = os.Stdin
 
-	// Streaming outputs
-	stdoutRewriter := NewStreamRewriter(os.Stdout, mountpoint, src)
-	stderrRewriter := NewStreamRewriter(os.Stderr, mountpoint, src)
-	cmd.Stdout = stdoutRewriter
-	cmd.Stderr = stderrRewriter
+	// Preserve stdout/stderr exactly. In particular, keep TTY identity for
+	// interactive CLIs; macOS path parity cannot be made correct by rewriting
+	// output bytes after the fact.
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	// Start command
 	if err := cmd.Start(); err != nil {
@@ -225,10 +223,6 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 	// Clean up signal listener
 	signal.Stop(sigChan)
 	close(sigChan)
-
-	// Flush streaming rewriters
-	_ = stdoutRewriter.Close()
-	_ = stderrRewriter.Close()
 
 	if waitErr != nil {
 		var exitError *exec.ExitError

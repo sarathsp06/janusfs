@@ -129,7 +129,7 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 }
 
 // discoverSourceRoot walks up from cwd looking for a directory containing
-// .janusignore or .janusmask, and refuses rather than defaulting to cwd when
+// .janusfs.yml, and refuses rather than defaulting to cwd when
 // it finds neither — defaulting would provision an unpoliced view over
 // whatever directory happens to be current (a user's entire home directory,
 // in the worst case), which is the opposite of what this tool exists to
@@ -142,10 +142,7 @@ func discoverSourceRoot(cwd string) (string, error) {
 		if err != nil {
 			break
 		}
-		if _, err := os.Stat(filepath.Join(currAbs, ".janusignore")); err == nil {
-			return currAbs, nil
-		}
-		if _, err := os.Stat(filepath.Join(currAbs, ".janusmask")); err == nil {
+		if _, err := os.Stat(filepath.Join(currAbs, ".janusfs.yml")); err == nil {
 			return currAbs, nil
 		}
 		parent := filepath.Dir(currAbs)

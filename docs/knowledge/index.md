@@ -10,7 +10,7 @@ okf_version: "0.2"
 
 # The read path (how a byte gets decided)
 
-* [Policy engine](policy-engine.md) - `.janusignore`/`.janusmask` discovery, compilation, and precedence into one Decision.
+* [Policy engine](policy-engine.md) - `.janusfs.yml` discovery, compilation, and precedence into one Decision.
 * [Masking pipeline](masking-pipeline.md) - length-preserving redaction, the RAM cache, and its validity key.
 * [FUSE adapter](fuse-adapter.md) - the as-built operation matrix over go-fuse, and the synthetic `.janusfs` directory.
 

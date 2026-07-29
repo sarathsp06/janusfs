@@ -2,10 +2,7 @@
 
 package execrunner
 
-import (
-	"bytes"
-	"testing"
-)
+import "testing"
 
 func TestReplacePaths(t *testing.T) {
 	oldPath := []byte("/Users/dev/projects/app")
@@ -65,42 +62,5 @@ func TestReplacePaths(t *testing.T) {
 				t.Errorf("expected %q, got %q", tc.expected, string(got))
 			}
 		})
-	}
-}
-
-func TestStreamRewriter(t *testing.T) {
-	var out bytes.Buffer
-	oldPath := "/Users/dev/projects/app"
-	newPath := "/Users/dev/.janusfs/mounts/app"
-
-	sr := NewStreamRewriter(&out, oldPath, newPath)
-
-	// Write in chunks to verify chunk boundary stitching.
-	chunks := []string{
-		"some text ",
-		"/Users/dev/p",
-		"rojects/app",
-		"/src/main.go and ",
-		"/Users/dev/projects/app-",
-		"other sibling.",
-	}
-
-	for _, chunk := range chunks {
-		n, err := sr.Write([]byte(chunk))
-		if err != nil {
-			t.Fatalf("unexpected write error: %v", err)
-		}
-		if n != len(chunk) {
-			t.Fatalf("expected to write %d bytes, wrote %d", len(chunk), n)
-		}
-	}
-
-	if err := sr.Flush(); err != nil {
-		t.Fatalf("unexpected flush error: %v", err)
-	}
-
-	expected := "some text /Users/dev/.janusfs/mounts/app/src/main.go and /Users/dev/projects/app-other sibling."
-	if out.String() != expected {
-		t.Errorf("expected %q, got %q", expected, out.String())
 	}
 }

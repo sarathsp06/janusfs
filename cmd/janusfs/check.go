@@ -31,7 +31,7 @@ func newCheckCmd() *cobra.Command {
 	var secrets bool
 	cmd := &cobra.Command{
 		Use:   "check [path]",
-		Short: "Statically analyze .janusignore/.janusmask for conflicts",
+		Short: "Statically analyze .janusfs.yml for conflicts",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."

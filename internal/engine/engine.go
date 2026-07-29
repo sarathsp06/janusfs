@@ -88,8 +88,8 @@ type Engine struct {
 	configFP     atomic.Pointer[map[string]dirConfigFP]
 }
 
-// dirConfigFP is one directory's on-disk config-file fingerprint: whether
-// .janusignore/.janusmask exist there and, if so, their mtime and size. Two
+// dirConfigFP is one directory's on-disk policy-file fingerprint: whether
+// .janusfs.yml exists there and, if so, its mtime and size. Two
 // fingerprints differing means the policy on disk has changed since the
 // fingerprint was taken — the file appeared, disappeared, or was edited. Size
 // is tracked alongside mtime as belt-and-suspenders: an edit that lands in the
@@ -97,22 +97,17 @@ type Engine struct {
 // nanosecond) is still caught as long as it changed the file's length, the
 // same reason the redaction cache key carries both.
 type dirConfigFP struct {
-	ignoreOK, maskOK           bool
-	ignoreMTimeNS, maskMTimeNS int64
-	ignoreSize, maskSize       int64
+	ok      bool
+	mtimeNS int64
+	size    int64
 }
 
 func statConfigFP(dir string) dirConfigFP {
 	var fp dirConfigFP
-	if st, err := os.Stat(filepath.Join(dir, ".janusignore")); err == nil {
-		fp.ignoreOK = true
-		fp.ignoreMTimeNS = st.ModTime().UnixNano()
-		fp.ignoreSize = st.Size()
-	}
-	if st, err := os.Stat(filepath.Join(dir, ".janusmask")); err == nil {
-		fp.maskOK = true
-		fp.maskMTimeNS = st.ModTime().UnixNano()
-		fp.maskSize = st.Size()
+	if st, err := os.Stat(filepath.Join(dir, rules.PolicyFileName)); err == nil {
+		fp.ok = true
+		fp.mtimeNS = st.ModTime().UnixNano()
+		fp.size = st.Size()
 	}
 	return fp
 }
@@ -122,7 +117,12 @@ func statConfigFP(dir string) dirConfigFP {
 // config-file count, not tree size) set of directories Discover already
 // found — so it costs nothing beyond what Discover/Reload already paid.
 func buildConfigSnapshot(rs *rules.RuleSet) map[string]dirConfigFP {
-	snap := make(map[string]dirConfigFP, len(rs.IgnoreLevels)+len(rs.MaskLevels))
+	snap := make(map[string]dirConfigFP, len(rs.PolicyDirs)+len(rs.IgnoreLevels)+len(rs.MaskLevels))
+	for _, dir := range rs.PolicyDirs {
+		if _, ok := snap[dir]; !ok {
+			snap[dir] = statConfigFP(dir)
+		}
+	}
 	for _, lvl := range rs.IgnoreLevels {
 		if _, ok := snap[lvl.Dir]; !ok {
 			snap[lvl.Dir] = statConfigFP(lvl.Dir)
@@ -232,7 +232,7 @@ func (e *Engine) Reload(root string) error {
 	return nil
 }
 
-// StaleAncestors reports whether any .janusignore/.janusmask between
+// StaleAncestors reports whether any .janusfs.yml between
 // relPath's own directory (if relPath is itself a directory) or its parent
 // (if relPath is a file) and the rule tree's root has appeared, disappeared,
 // or changed mtime since the current generation was compiled — including a

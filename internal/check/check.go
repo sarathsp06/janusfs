@@ -196,7 +196,7 @@ func secretFindings(root string, eng *engine.Engine, entries []treeEntry) []Find
 				Severity:   SeverityWarn,
 				File:       filepath.Join(root, filepath.FromSlash(te.rel)),
 				Message:    fmt.Sprintf("likely secret file %s is currently Allowed (%s)", te.rel, reason),
-				Suggestion: "add a .janusignore rule to hide it, or a .janusmask rule if the file is useful after redaction",
+				Suggestion: "add a hide rule to .janusfs.yml, or a mask rule if the file is useful after redaction",
 			})
 			continue
 		}
@@ -206,7 +206,7 @@ func secretFindings(root string, eng *engine.Engine, entries []treeEntry) []Find
 				Severity:   SeverityWarn,
 				File:       filepath.Join(root, filepath.FromSlash(te.rel)),
 				Message:    fmt.Sprintf("likely secret content in %s is currently Allowed (%s)", te.rel, reason),
-				Suggestion: "add a .janusmask rule for this file if agents need structure, or .janusignore if they do not need it",
+				Suggestion: "add a mask rule to .janusfs.yml if agents need structure, or a hide rule if they do not need it",
 			})
 		}
 	}

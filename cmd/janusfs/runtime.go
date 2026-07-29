@@ -48,7 +48,7 @@ type mountRuntime struct {
 }
 
 // reload recompiles the rule set from disk and invalidates the redaction cache
-// so the next read reflects edited .janusignore/.janusmask files. Called by
+// so the next read reflects edited .janusfs.yml files. Called by
 // `janusfs update` and the dashboard (config save + Reload button).
 func (rt *mountRuntime) reload() error {
 	if rt.eng == nil {

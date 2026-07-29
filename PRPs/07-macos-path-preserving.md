@@ -79,11 +79,11 @@ reason reads would. PRP 05 explicitly deferred this split to a follow-up;
 it lands here.
 
 **Exec integration.** With path-preserving mode on, `janusfs exec` on
-darwin becomes trivial: no argv/stream rewriting is needed because the
-child already sees `src` as the filtered view. `Run` becomes: register a
+darwin becomes trivial: no argv rewriting is needed because the child
+already sees `src` as the filtered view. `Run` becomes: register a
 session with the daemon (PRP 06 Task 3), stamp `JANUSFS_SESSION` into
 the child env, spawn with a barrier so registration finishes before the
-child's first FS op, exec the target. The rewriter/CWD-hijack code
+child's first FS op, exec the target. The argv-rewriter/CWD-hijack code
 becomes dead in this mode and can be gated off.
 
 ## Tasks
@@ -111,8 +111,8 @@ becomes dead in this mode and can be gated off.
    same file and get asterisks; `git add` of the masked file from the
    host must stage the real content.
 6. **Simplify darwin exec** — with path-preserving mode active, gate off
-   the argv/stream/CWD-hijack rewriter path in
-   `internal/execrunner/runner.go` (darwin) and delete it once the
+   the argv/CWD-hijack rewriter path in `internal/execrunner/runner.go`
+   (darwin) and delete it once the
    disjoint model is fully retired. Keep it for now behind the flag —
    deleting it before path-preserving mode is validated on real macOS
    loses the fallback.

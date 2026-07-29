@@ -1,9 +1,9 @@
-// Package rules discovers, parses, and compiles .janusignore/.janusmask
-// files into a RuleSet that Resolve (resolve.go)
+// Package rules discovers, parses, and compiles .janusfs.yml policy files
+// into a RuleSet that Resolve (resolve.go)
 // evaluates paths against.
 //
 // Discovery is hierarchical: a machine-wide global level at GlobalDir(), plus
-// every directory under a mount root that contains either file. Gitignore
+// every directory under a mount root that contains a policy file. Gitignore
 // semantics are implemented directly in glob.go rather than via a third-party
 // library; that package's doc explains why.
 //
@@ -15,7 +15,6 @@
 package rules
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,14 +22,11 @@ import (
 	"strings"
 
 	"github.com/sarathsp06/janusfs/internal/patterns"
+	"gopkg.in/yaml.v3"
 )
 
-// IgnoreFileName and MaskFileName are the two config file names discovered
-// at every level.
-const (
-	IgnoreFileName = ".janusignore"
-	MaskFileName   = ".janusmask"
-)
+// PolicyFileName is the config file name discovered at every level.
+const PolicyFileName = ".janusfs.yml"
 
 // GlobalDir returns ~/.janusfs/config, the machine-wide rule directory. It sits
 // outside every source tree, which is what makes it a floor an in-tree rule
@@ -66,16 +62,16 @@ func (d Decision) String() string {
 	}
 }
 
-// IgnoreLevel is one directory's compiled .janusignore.
+// IgnoreLevel is one directory's compiled hide/allow policy.
 type IgnoreLevel struct {
 	Dir      string // absolute directory this level applies to and below
-	File     string // absolute path to the .janusignore
+	File     string // absolute path to the policy file
 	Patterns []*ignorePattern
 	RawLines []RawLine
 
 	// Poisoned is true if any line in this file failed to compile, which folds
 	// every path this level covers to Hidden. The reasoning:
-	// since .janusignore lines only ever widen what's Hidden, a line we
+	// since hide lines only ever widen what's Hidden, a line we
 	// couldn't compile could not be evaluated safely, so the conservative
 	// (less-visible) reading is to fold every path this level covers to
 	// Hidden rather than silently skip the broken line (see Resolve).
@@ -90,18 +86,18 @@ type RawLine struct {
 	Text   string
 }
 
-// MaskEntry is one .janusmask line: a glob and the pattern names or
+// MaskEntry is one mask rule path: a glob and the pattern names or
 // custom regexes that apply to files it matches.
 type MaskEntry struct {
 	LineNo      int
 	Glob        string
-	GlobPattern *ignorePattern // mask globs use the same gitignore-style syntax as .janusignore
+	GlobPattern *ignorePattern // mask globs use the same gitignore-style syntax as hide rules
 	PatternRefs []string       // raw references, e.g. "env-value" or "/regex/"
 	Patterns    []*patterns.Pattern
 	CompileErr  error // set if the glob or any PatternRefs entry failed to compile; fails this entry closed
 }
 
-// MaskLevel is one directory's compiled .janusmask.
+// MaskLevel is one directory's compiled mask policy.
 type MaskLevel struct {
 	Dir     string
 	File    string
@@ -115,7 +111,8 @@ type RuleSet struct {
 	GlobalDir    string
 	IgnoreLevels []IgnoreLevel
 	MaskLevels   []MaskLevel
-	DiscoverErrs []error // non-fatal discovery errors (unreadable files etc.), reported by janusfs check
+	DiscoverErrs []error  // non-fatal discovery errors (unreadable files etc.), reported by janusfs check
+	PolicyDirs   []string // directories where .janusfs.yml existed, even if it compiled to no levels
 
 	// FoldCase is true when Root's backing volume treats two spellings of a
 	// name as the same file (the APFS/HFS+ default). Every pattern in
@@ -125,7 +122,7 @@ type RuleSet struct {
 }
 
 // Discover walks the global config directory and root, compiling every
-// .janusignore/.janusmask found. It never returns a nil *RuleSet:
+// .janusfs.yml found. It never returns a nil *RuleSet:
 // per-file errors are collected in DiscoverErrs and also cause that file's
 // affected entries to fail closed, but discovery itself only
 // fails outright if root cannot be walked at all.
@@ -165,95 +162,118 @@ func Discover(root string) (*RuleSet, error) {
 	return rs, nil
 }
 
-// loadLevel loads dir's .janusignore/.janusmask (if present) into rs.
+// loadLevel loads dir's .janusfs.yml (if present) into rs.
 func (rs *RuleSet) loadLevel(dir string) {
-	if lvl, ok, err := loadIgnoreLevel(dir, rs.FoldCase); ok {
-		rs.IgnoreLevels = append(rs.IgnoreLevels, lvl)
-		rs.DiscoverErrs = append(rs.DiscoverErrs, lvl.LineErrs...)
-	} else if err != nil {
-		rs.DiscoverErrs = append(rs.DiscoverErrs, err)
+	if _, err := os.Stat(filepath.Join(dir, PolicyFileName)); err == nil {
+		rs.PolicyDirs = append(rs.PolicyDirs, dir)
 	}
-	if lvl, ok, err := loadMaskLevel(dir, rs.FoldCase); ok {
-		rs.MaskLevels = append(rs.MaskLevels, lvl)
-	} else if err != nil {
-		rs.DiscoverErrs = append(rs.DiscoverErrs, err)
+	ignore, hasIgnore, mask, hasMask, errs := loadPolicyLevel(dir, rs.FoldCase)
+	if hasIgnore {
+		rs.IgnoreLevels = append(rs.IgnoreLevels, ignore)
+		rs.DiscoverErrs = append(rs.DiscoverErrs, ignore.LineErrs...)
 	}
+	if hasMask {
+		rs.MaskLevels = append(rs.MaskLevels, mask)
+	}
+	rs.DiscoverErrs = append(rs.DiscoverErrs, errs...)
 }
 
-func readRawLines(path string) ([]RawLine, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
+type policyFile struct {
+	Version int          `yaml:"version"`
+	Hide    []string     `yaml:"hide"`
+	Allow   []string     `yaml:"allow"`
+	Mask    []policyMask `yaml:"mask"`
+}
 
-	var lines []RawLine
-	sc := bufio.NewScanner(f)
+type policyMask struct {
+	Paths    []string `yaml:"paths"`
+	Patterns []string `yaml:"patterns"`
+}
+
+func loadPolicyLevel(dir string, foldCase bool) (IgnoreLevel, bool, MaskLevel, bool, []error) {
+	file := filepath.Join(dir, PolicyFileName)
+	if _, err := os.Stat(file); err != nil {
+		return IgnoreLevel{}, false, MaskLevel{}, false, nil
+	}
+
+	data, err := os.ReadFile(file)
+	if err != nil {
+		lvl := IgnoreLevel{Dir: dir, File: file, Poisoned: true}
+		return lvl, true, MaskLevel{}, false, []error{fmt.Errorf("rules: reading %s: %w", file, err)}
+	}
+
+	var pf policyFile
+	if err := yaml.Unmarshal(data, &pf); err != nil {
+		lvl := IgnoreLevel{Dir: dir, File: file, Poisoned: true}
+		return lvl, true, MaskLevel{}, false, []error{fmt.Errorf("rules: parsing %s: %w", file, err)}
+	}
+	if pf.Version != 1 {
+		lvl := IgnoreLevel{Dir: dir, File: file, Poisoned: true}
+		return lvl, true, MaskLevel{}, false, []error{fmt.Errorf("rules: %s: unsupported policy version %d", file, pf.Version)}
+	}
+
+	ignore, hasIgnore := compileIgnorePolicy(file, dir, foldCase, pf.Hide, pf.Allow)
+	mask, hasMask := compileMaskPolicy(file, dir, foldCase, pf.Mask)
+	return ignore, hasIgnore, mask, hasMask, nil
+}
+
+func compileIgnorePolicy(file, dir string, foldCase bool, hide, allow []string) (IgnoreLevel, bool) {
+	if len(hide) == 0 && len(allow) == 0 {
+		return IgnoreLevel{}, false
+	}
+	lvl := IgnoreLevel{Dir: dir, File: file}
 	lineNo := 0
-	for sc.Scan() {
+	for _, glob := range hide {
 		lineNo++
-		text := strings.TrimRight(sc.Text(), " \t")
-		trimmed := strings.TrimSpace(text)
-		if trimmed == "" {
-			continue
-		}
-		// "#" starts a comment unless escaped: "\#" is a literal leading hash.
-		if strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, `\#`) {
-			continue
-		}
-		lines = append(lines, RawLine{LineNo: lineNo, Text: text})
+		addIgnorePattern(&lvl, file, lineNo, strings.TrimSpace(glob), foldCase)
 	}
-	if err := sc.Err(); err != nil {
-		return nil, err
+	for _, glob := range allow {
+		lineNo++
+		glob = strings.TrimSpace(glob)
+		if glob != "" && !strings.HasPrefix(glob, "!") {
+			glob = "!" + glob
+		}
+		addIgnorePattern(&lvl, file, lineNo, glob, foldCase)
 	}
-	return lines, nil
+	return lvl, true
 }
 
-func loadIgnoreLevel(dir string, foldCase bool) (IgnoreLevel, bool, error) {
-	file := filepath.Join(dir, IgnoreFileName)
-	if _, err := os.Stat(file); err != nil {
-		return IgnoreLevel{}, false, nil
-	}
-	raw, err := readRawLines(file)
+func addIgnorePattern(lvl *IgnoreLevel, file string, lineNo int, glob string, foldCase bool) {
+	lvl.RawLines = append(lvl.RawLines, RawLine{LineNo: lineNo, Text: glob})
+	p, err := compilePatternFold(lineNo, glob, foldCase)
 	if err != nil {
-		return IgnoreLevel{}, false, fmt.Errorf("rules: reading %s: %w", file, err)
+		lvl.Poisoned = true
+		lvl.LineErrs = append(lvl.LineErrs, fmt.Errorf("%s:%d: %w", file, lineNo, err))
+		return
 	}
-
-	lvl := IgnoreLevel{Dir: dir, File: file, RawLines: raw}
-	for _, l := range raw {
-		p, err := compilePatternFold(l.LineNo, l.Text, foldCase)
-		if err != nil {
-			lvl.Poisoned = true
-			lvl.LineErrs = append(lvl.LineErrs, fmt.Errorf("%s:%d: %w", file, l.LineNo, err))
-			continue
-		}
-		lvl.Patterns = append(lvl.Patterns, p)
-	}
-	return lvl, true, nil
+	lvl.Patterns = append(lvl.Patterns, p)
 }
 
-func loadMaskLevel(dir string, foldCase bool) (MaskLevel, bool, error) {
-	file := filepath.Join(dir, MaskFileName)
-	if _, err := os.Stat(file); err != nil {
-		return MaskLevel{}, false, nil
+func compileMaskPolicy(file, dir string, foldCase bool, masks []policyMask) (MaskLevel, bool) {
+	if len(masks) == 0 {
+		return MaskLevel{}, false
 	}
-	raw, err := readRawLines(file)
-	if err != nil {
-		return MaskLevel{}, false, fmt.Errorf("rules: reading %s: %w", file, err)
-	}
-
 	lvl := MaskLevel{Dir: dir, File: file}
-	for _, l := range raw {
-		entry, err := parseMaskLine(l.LineNo, l.Text, foldCase)
-		if err != nil && entry.CompileErr == nil {
-			entry.CompileErr = err
+	lineNo := 0
+	for _, m := range masks {
+		patternsPart := strings.Join(m.Patterns, ", ")
+		for _, path := range m.Paths {
+			lineNo++
+			line := strings.TrimSpace(path)
+			if patternsPart != "" {
+				line += " : " + patternsPart
+			}
+			entry, err := parseMaskLine(lineNo, line, foldCase)
+			if err != nil && entry.CompileErr == nil {
+				entry.CompileErr = err
+			}
+			lvl.Entries = append(lvl.Entries, entry)
 		}
-		lvl.Entries = append(lvl.Entries, entry)
 	}
-	return lvl, true, nil
+	return lvl, true
 }
 
-// parseMaskLine parses one .janusmask line, whose grammar is:
+// parseMaskLine parses one synthesized mask rule line, whose grammar is:
 //
 //	<file-glob> [: <pattern>[, <pattern>...]]
 //

@@ -122,7 +122,7 @@ Directory mode `0700`, file mode `0600`, everywhere.
 | `daemon.sock` | daemon | control socket (`cmd/janusfs/daemon.go:605`) |
 | `settings.json` | `install` | `{"mount_root": "..."}` (`config.go:156`) |
 | `mounts.json` | daemon on mount/unmount | resume registry (`config.go:210`) |
-| `config/` | `init --global` | machine-wide `.janusignore`/`.janusmask` (`internal/rules/rules.go:44`) |
+| `config/` | `init --global` | machine-wide `.janusfs.yml` (`internal/rules/rules.go`) |
 | `run/<sha256-of-mountpoint>.pid` | daemon per mount | owning PID (`cmd/janusfs/pidfile.go:18`) |
 | `history/<basename>-<hash12>.db` | per mount | SQLite rollups (`cmd/janusfs/mount.go:109`) |
 | `mounts/<full-src-path>/` | derived mountpoints | the sanitized views themselves |

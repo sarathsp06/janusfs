@@ -17,11 +17,10 @@ simulate what this now provides for real.
 The mountpoint is never the source path: `ResolveMountpoint` mirrors the source's
 full path *under* the mount root and `Validate` rejects any overlap
 (`internal/config/config.go:345`, `:418`). So `janusfs exec` today compensates by
-rewriting strings — the cwd, argv, and stdout/stderr
-(`internal/execrunner/runner.go:162`, `:180`, `:201`).
+rewriting strings — the cwd and argv, with stdout/stderr now deliberately
+passed through unchanged for terminal compatibility.
 
-That cannot be made correct. The rewriter reaches argv, stdout, and stderr. It
-cannot reach: files the agent writes (a generated `tsconfig.json`, a lockfile, a
+That cannot be made correct. The argv rewriter cannot reach: files the agent writes (a generated `tsconfig.json`, a lockfile, a
 `compile_commands.json`), the git index, `cargo`/`go`/`tsc` build caches keyed on
 absolute paths, debug paths baked into artefacts, or anything the agent spawns
 that talks over a socket. The full analysis is in
@@ -141,8 +140,8 @@ cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr   // no rewri
 cmd.Dir = cwd                                                        // no hijack
 ```
 
-Note what is absent: no `StreamRewriter`, no `ReplacePaths` on argv, no cwd
-hijack, no readiness poll on `<mountpoint>/.janusfs`. Paths are identical on both
+Note what is absent: no `ReplacePaths` on argv, no cwd hijack, no readiness poll
+on `<mountpoint>/.janusfs`. Paths are identical on both
 sides, so there is nothing to translate.
 
 5. Keep the existing signal forwarding (`runner.go:212`) and exit-code propagation
@@ -210,9 +209,9 @@ which have no such capability.
 
 ### Task 4 — Delete the rewriter on Linux
 
-Once Task 3 works: `ReplacePaths` and `StreamRewriter`
-(`internal/execrunner/rewriter.go`) are unreachable from the Linux path. Move them
-behind `//go:build darwin` along with the cwd-hijack and argv-rewrite blocks.
+Once Task 3 works: `ReplacePaths` (`internal/execrunner/rewriter.go`) is
+unreachable from the Linux path. Move it behind `//go:build darwin` along with
+the cwd-hijack and argv-rewrite blocks.
 
 Do not keep them "just in case" on Linux. Two disagreeing sources of truth about
 where a file lives is worse than either alone.

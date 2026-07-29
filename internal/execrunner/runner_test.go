@@ -59,10 +59,10 @@ func TestRunMockE2E(t *testing.T) {
 	}
 
 	// A policy marker: findSourceAndMount refuses to provision a mount over a
-	// directory with no .janusignore/.janusmask ancestor, so this test's
-	// implicit "cwd has policy" assumption must be made explicit.
-	if err := os.WriteFile(filepath.Join(srcDir, ".janusignore"), []byte("*.secret\n"), 0o644); err != nil {
-		t.Fatalf("failed to write .janusignore: %v", err)
+	// directory with no .janusfs.yml ancestor, so this test's implicit "cwd has
+	// policy" assumption must be made explicit.
+	if err := os.WriteFile(filepath.Join(srcDir, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.secret\"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write .janusfs.yml: %v", err)
 	}
 
 	// Create dummy file in mount to simulate the FUSE view.
@@ -216,19 +216,20 @@ func main() {
 	stdoutStr := stdoutBuf.String()
 	t.Logf("Captured stdout:\n%s", stdoutStr)
 
-	// Verify CWD hijacking: our compiled helper ran inside hijackedCWD which is mountDir.
-	// BUT because of reverse output stream rewriting, any mention of mountDir in the output
-	// should have been rewritten back to srcDir!
-	if !strings.Contains(stdoutStr, "CWD:"+srcDir) {
-		t.Errorf("expected CWD output to reference srcDir %q (via reverse translation), stdout: %q", srcDir, stdoutStr)
+	// Verify CWD hijacking: our compiled helper ran inside hijackedCWD, which is mountDir.
+	// stdout is byte-faithful, so the child-visible mount path is not rewritten on output.
+	if !strings.Contains(stdoutStr, "CWD:"+mountDir) {
+		t.Errorf("expected CWD output to reference mountDir %q, stdout: %q", mountDir, stdoutStr)
 	}
-	if strings.Contains(stdoutStr, mountDir) {
-		t.Errorf("expected no references to mountDir %q in stdout, but found them: %q", mountDir, stdoutStr)
+	if strings.Contains(stdoutStr, "CWD:"+srcDir) {
+		t.Errorf("expected CWD output not to be rewritten to srcDir %q, stdout: %q", srcDir, stdoutStr)
 	}
 
-	// Verify argument path translation
-	if !strings.Contains(stdoutStr, "ARG:"+argWithSrc) {
-		t.Errorf("expected ARG output to reference %q, got stdout: %q", argWithSrc, stdoutStr)
+	// Verify argument path translation: the child receives the sanitized mount path,
+	// and stdout preserves that byte-for-byte.
+	argWithMount := filepath.Join(mountDir, "somefile.txt")
+	if !strings.Contains(stdoutStr, "ARG:"+argWithMount) {
+		t.Errorf("expected ARG output to reference mount path %q, got stdout: %q", argWithMount, stdoutStr)
 	}
 
 	// Verify env scrubbing
@@ -259,7 +260,7 @@ func TestRunDaemonNotRunning(t *testing.T) {
 }
 
 // TestFindSourceAndMountRefusesToGuess asserts that a cwd with no active mount
-// and no .janusignore/.janusmask ancestor is refused rather than silently
+// and no .janusfs.yml ancestor is refused rather than silently
 // mounted — defaulting to cwd would provision an unpoliced mount over whatever
 // directory happens to be current (a user's entire home directory, in the
 // worst case), which is the opposite of what this tool exists to prevent.
@@ -273,7 +274,7 @@ func TestFindSourceAndMountRefusesToGuess(t *testing.T) {
 	_ = os.Setenv("HOME", tmpHome)
 	defer func() { _ = os.Setenv("HOME", origHome) }()
 
-	// A policy-free directory: no .janusignore, no .janusmask anywhere in its
+	// A policy-free directory: no .janusfs.yml anywhere in its
 	// ancestry within this isolated temp tree.
 	policyFreeCwd, err := os.MkdirTemp("", "janusfs-nopolicy")
 	if err != nil {

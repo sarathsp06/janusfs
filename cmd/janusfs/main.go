@@ -49,7 +49,7 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "janusfs",
 		Short:         "A sanitized filesystem view for AI agents",
-		Long:          "JanusFS mounts a sanitized view of a directory: every file is Allowed, Masked, or Hidden, per .janusignore/.janusmask rules.",
+		Long:          "JanusFS mounts a sanitized view of a directory: every file is Allowed, Masked, or Hidden, per .janusfs.yml policy.",
 		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceErrors: true,
 		SilenceUsage:  true,

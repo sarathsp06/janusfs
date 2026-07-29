@@ -16,8 +16,8 @@ func newPatternsCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "patterns",
-		Short: "List built-in .janusmask pattern names and regexes",
-		Long: "Print the reserved built-in pattern names accepted in .janusmask, along\n" +
+		Short: "List built-in .janusfs.yml mask pattern names and regexes",
+		Long: "Print the reserved built-in pattern names accepted in .janusfs.yml mask rules, along\n" +
 			"with what each one masks and the exact RE2 regex source JanusFS uses.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

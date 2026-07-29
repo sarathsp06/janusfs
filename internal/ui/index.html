@@ -474,8 +474,8 @@
     var el = document.getElementById(id);
     if (entries.length === 0) {
       var msg = kind === 'masked'
-        ? 'No masked files found. Add .janusmask rules or run janusfs init.'
-        : 'No hidden files found. Add .janusignore rules if you want to block paths.';
+        ? 'No masked files found. Add mask rules to .janusfs.yml or run janusfs init.'
+        : 'No hidden files found. Add hide rules to .janusfs.yml if you want to block paths.';
       el.innerHTML = '<div class="empty-state">' + msg + '</div>';
       return;
     }
@@ -540,7 +540,7 @@
   function renderConfig(files) {
     var el = document.getElementById('config-editor');
     if (files.length === 0) {
-      el.innerHTML = '<div class="empty-state">No .janusignore or .janusmask files found</div>';
+      el.innerHTML = '<div class="empty-state">No .janusfs.yml files found</div>';
       return;
     }
     el.innerHTML = '';

@@ -15,7 +15,7 @@
 ## In one minute
 
 - Point JanusFS at a real source directory, then point your agent at the policy-enforced mountpoint instead of the source.
-- Configure policy with familiar `.gitignore`-style files: `.janusignore` hides paths, `.janusmask` redacts secrets inside otherwise useful files.
+- Configure policy in one human-editable `.janusfs.yml`: `hide` blocks paths, `mask` redacts secrets inside otherwise useful files.
 - Policy is enforced on every open, read, and directory listing; real files are never modified.
 - Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
 - A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
@@ -32,8 +32,7 @@
 - [The daemon](#the-daemon)
 - [The three faces](#the-three-faces)
 - [Configuration files](#configuration-files)
-  - [`.janusignore`](#janusignore)
-  - [`.janusmask`](#janusmask)
+  - [`.janusfs.yml`](#janusfsyml)
   - [Global rules](#global-rules-machine-wide-defaults)
 - [Built-in patterns](#built-in-patterns)
 - [CLI reference](#cli-reference)
@@ -121,7 +120,7 @@ the mountpoint — where each file wears one of three faces.
                                             Real files on disk (never modified)
 ```
 
-The rule engine reads `.janusignore` and `.janusmask` from the mount root down (and from `~/.janusfs/config/` if it exists — see [Global rules](#global-rules-machine-wide-defaults)) and compiles them into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so file sizes and offsets stay identical — tools don't see short reads and don't get confused. Any error — parser failure, missing rules, anything — resolves to **Hidden**.
+The rule engine reads `.janusfs.yml` from the mount root down (and from `~/.janusfs/config/` if it exists — see [Global rules](#global-rules-machine-wide-defaults)) and compiles policy into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so file sizes and offsets stay identical — tools don't see short reads and don't get confused. Any error — parser failure, missing rules, anything — resolves to **Hidden**.
 
 ## Quickstart
 
@@ -146,7 +145,7 @@ The rule engine reads `.janusignore` and `.janusmask` from the mount root down (
 ```bash
 # 2) drop secure defaults into your project
 cd my-project
-janusfs init                    # writes .janusignore + .janusmask templates
+janusfs init                    # writes a .janusfs.yml template
 
 # Optional: choose a custom mount root instead of ~/.janusfs/mounts
 janusfs install --root ~/.janusfs/mounts
@@ -221,7 +220,7 @@ janusfs daemon --background # start it detached (or `janusfs daemon` in the fore
 janusfs logs -f            # tail the background daemon's log
 janusfs mount ~/proj       # hand a mount to the daemon; returns at once
 janusfs mount ~/proj ~/pv  # or mount at a short path you choose (existing empty dirs are OK)
-janusfs update ~/proj      # re-apply edited .janusignore/.janusmask (no remount)
+janusfs update ~/proj      # re-apply edited .janusfs.yml (no remount)
 janusfs path ~/proj        # print the mountpoint:  cd "$(janusfs path ~/proj)"
 janusfs umount ~/proj      # unmount by source path OR mountpoint
 janusfs paths              # show where settings, the registry, and rules live
@@ -236,7 +235,7 @@ the same guarantee:
   file's `(mtime, size, inode)` before serving, so a concurrent edit to the
   file's *content* is always caught, on every single read.
 - **In-tree rule changes are picked up the next time anything is opened
-  near them.** Editing, or adding, a `.janusignore`/`.janusmask` file on disk
+  near them.** Editing, or adding, a `.janusfs.yml` file on disk
   takes effect automatically the next time a file or directory near it is
   opened — no explicit action needed. If nothing gets opened after the edit
   (e.g. an agent only keeps reading already-open handles), or you edit
@@ -346,57 +345,68 @@ Before mounting for the first time, run this quick checklist to reduce friction:
 
 ## Configuration files
 
-### `.janusignore`
+### `.janusfs.yml`
 
-Pure `.gitignore` syntax. Paths matched here resolve to **Hidden**.
+One policy file controls all three concepts:
 
-```gitignore
-# hide entire files / trees
-*.pem
-*.key
-id_rsa*
-.aws/credentials
-.terraform/
+```yaml
+version: 1
 
-# directory-only patterns
-node_modules/
-build/
+hide:
+  - "*.pem"
+  - "*.key"
+  - id_rsa*
+  - .aws/credentials
+  - .terraform/
+  - node_modules/
+  - build/
 
-# negation: un-hide a specific file
-!.aws/known_public_config
+allow:
+  - .aws/known_public_config
+
+mask:
+  - paths:
+      - "*.env*"
+    patterns:
+      - env-value
+
+  - paths:
+      - "**/*"
+    patterns:
+      - aws-key
+      - github-token
+      - private-key
+      - jwt
+
+  - paths:
+      - config/**/*.yaml
+    patterns:
+      - generic-secret
+      - db-uri
+
+  - paths:
+      - secrets/*   # no patterns → whole-file mask
+
+  - paths:
+      - "**/*.log"
+    patterns:
+      - /token=([A-Za-z0-9_-]{20,})/
 ```
 
-Rules are **hierarchical** and follow git semantics exactly: files further down the tree override shallower ones, and negation (`!`) can re-include a previously-excluded file — but **never** something under a directory that itself resolves to Hidden (a hidden ancestor short-circuits every descendant), and **never** a path the [global rule level](#global-rules-machine-wide-defaults) already hid (the global level is a fail-closed floor no in-tree rule can lift).
+`hide` and `allow` use gitignore-style glob semantics. Rules are **hierarchical**: files further down the tree override shallower ones, and `allow` can re-include a previously hidden file — but **never** something under a directory that itself resolves to Hidden, and **never** a path the [global rule level](#global-rules-machine-wide-defaults) already hid.
 
-### `.janusmask`
-
-Two dimensions per line: *which files* to redact, and *what inside them* to redact.
-
-```
-# <file-glob> [: <pattern>[, <pattern>...]]
-# pattern = <built-in-name> | /<regex>/
-# no pattern → whole-file mask
-
-*.env*                              : env-value
-**/*                                : aws-key, github-token, private-key, jwt
-config/**/*.yaml                    : generic-secret, db-uri
-secrets/*                                # no pattern → whole-file mask
-
-# custom regex (RE2, anti-ReDoS)
-**/*.log                            : /token=([A-Za-z0-9_-]{20,})/
-```
+`mask` has two dimensions: *which files* to redact (`paths`) and *what inside them* to redact (`patterns`). Omit `patterns` to mask the whole file.
 
 - Masked spans are replaced byte-for-byte with `*`. **File sizes never change.**
 - Capture group 1 of a regex is the masked span; without a group, the whole match is masked.
-- Multiple lines for the same glob **accumulate** (set union of patterns).
-- A literal `:` in a glob is escaped as `\:`.
+- Multiple mask rules for the same path **accumulate** (set union of patterns).
 
 ### Global rules (machine-wide defaults)
 
 Set rules that apply to every mount on your machine — for personal always-hide patterns you don't want to duplicate into every repo:
 
 ```bash
-janusfs init --global    # writes ~/.janusfs/config/{.janusignore,.janusmask}
+janusfs init --global    # writes ~/.janusfs/config/.janusfs.yml
 ```
 
 Global rules are treated as an **ancestor level above every mount root**, and act as a **fail-closed floor**: a repo's own rules (including negation) can freely override each other as usual, but no in-tree rule may re-include a path the global level Hid, or un-mask a path it Masked. `janusfs check`/`explain` flag any in-tree negation that has no effect for this reason.
@@ -405,7 +415,7 @@ The `.janusfs` directory layout mirrors other JanusFS on-disk state:
 
 ```
 ~/.janusfs/
-├── config/           # global .janusignore, .janusmask
+├── config/           # global .janusfs.yml
 ├── run/              # pidfiles for active mounts
 └── history/          # SQLite rollups for the dashboard
 ```
@@ -450,16 +460,16 @@ whole-file      Masks every byte of the file; no regex...   —
 | `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--background` detaches and logs to `~/.janusfs/logs/daemon.log`; `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
 | `janusfs logs [-f]` | Show the background daemon's log (`~/.janusfs/logs/daemon.log`); `-f` follows it like `tail -f`. |
 | `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an explicit `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
-| `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusignore`/`.janusmask` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
+| `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusfs.yml` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
 | `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
 | `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
 | `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global rules, mount root) and whether each exists. |
-| `janusfs init [dir]` | Write secure-default `.janusignore` + `.janusmask` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
+| `janusfs init [dir]` | Write secure-default `.janusfs.yml` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
 | `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed; this is a safety aid, not proof of full coverage. `--json` for machine output; exit 1 on errors only. |
-| `janusfs patterns` | List every reserved built-in `.janusmask` pattern name with its description and exact regex source. `--json` for machine-readable output. |
+| `janusfs patterns` | List every reserved built-in `.janusfs.yml` mask pattern name with its description and exact regex source. `--json` for machine-readable output. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
 | `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
-| `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. **Linux:** real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. **macOS:** advisory only — sets the child's working directory to a disjoint sanitized mount, scrubs `JANUSFS_*` env vars, and rewrites the mountpoint back to the source path in argv and in stdout/stderr as a best-effort compatibility shim, but the real source path remains directly reachable by the child through any other means (a subprocess, a config file, a cache), and content the child prints containing the mountpoint string is rewritten too — not a faithful byte reproduction. Refuses to run if no `.janusignore`/`.janusmask` exists anywhere in the tree, rather than guessing. |
+| `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. **Linux:** real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. **macOS:** advisory only — sets the child's working directory to a disjoint sanitized mount, scrubs `JANUSFS_*` env vars, and rewrites source-path argv entries to the mountpoint as a best-effort compatibility shim, but the real source path remains directly reachable by the child through any other means (a subprocess, a config file, a cache). Stdout/stderr are passed through byte-faithfully so interactive tools keep their terminal behavior; output may show the internal JanusFS mountpoint. Refuses to run if no `.janusfs.yml` exists anywhere in the tree, rather than guessing. |
 
 All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
 
@@ -469,24 +479,24 @@ All commands support `--help` and exit codes suitable for scripting. Errors are 
 $ janusfs explain --root ~/proj ~/proj/.env
 .env -> MASKED
   patterns: [env-value]
-  deciding rule: /Users/you/proj/.janusmask:3
+  deciding rule: /Users/you/proj/.janusfs.yml:3
   evaluation trace (in order applied):
-    /Users/you/.janusfs/config/.janusmask:6  "*.env*"  -> masked
-    /Users/you/proj/.janusmask:3             "*.env*"  -> masked
+    /Users/you/.janusfs/config/.janusfs.yml:6  "*.env*"  -> masked
+    /Users/you/proj/.janusfs.yml:3             "*.env*"  -> masked
 ```
 
 ### `janusfs check` example
 
 ```
 $ janusfs check --secrets
-/Users/you/proj/.janusmask
+/Users/you/proj/.janusfs.yml
   [error]:2 invalid mask rule "*.log" — files it matches are Hidden (fail-closed) until this is fixed: compiling custom regex "[": error parsing regexp: missing closing ]: `[`
   [warn]:8  mask glob "secrets" also matches a directory, which can never be Masked — the directory match is a harmless no-op
       suggestion: rewrite to "secrets/**" if you meant to mask only the files inside
 
 /Users/you/proj/.env
   [warn] likely secret file .env is currently Allowed (env file name)
-    suggestion: add a .janusignore rule to hide it, or a .janusmask rule if the file is useful after redaction
+    suggestion: add a hide rule to .janusfs.yml, or a mask rule if the file is useful after redaction
 
 1 error(s), 2 warning(s) across 42 files, 7 directories.
 ```
@@ -494,11 +504,11 @@ $ janusfs check --secrets
 ## Security model
 
 - **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **This boundary is only kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace). On macOS both the disjoint mount and `janusfs exec` are advisory: the real source directory stays reachable at its own path by any means other than the mountpoint. JanusFS is explicitly not a sandbox against a process that has, or can find, another way to the source (see Non-goals in `SPEC.md`) — on macOS today, "another way to the source" is simply "the source's own path," reachable with no exploit needed.
-- **Agents cannot weaken policy.** `.janusignore` and `.janusmask` are read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (edit a revealed file, save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount.
+- **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (edit a revealed file, save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount.
 - **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
 - **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
 - **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector (there is no file watcher).
-- **Opens and directory listings check rule freshness too.** Every `open`/`opendir` probes the ancestor chain of `.janusignore`/`.janusmask` files for on-disk changes (edited, added, or removed) and recompiles before resolving if anything moved — bounded by path depth, never a tree walk. This closes the gap where tightening a rule (or adding one to a previously bare directory) would otherwise silently have no effect until an explicit `janusfs update`. It does not cover global rules (`~/.janusfs/config/`) or paths nothing has opened since the edit — `janusfs update` remains the way to force those.
+- **Opens and directory listings check rule freshness too.** Every `open`/`opendir` probes the ancestor chain of `.janusfs.yml` files for on-disk changes (edited, added, or removed) and recompiles before resolving if anything moved — bounded by path depth, never a tree walk. This closes the gap where tightening a rule (or adding one to a previously bare directory) would otherwise silently have no effect until an explicit `janusfs update`. It does not cover global rules (`~/.janusfs/config/`) or paths nothing has opened since the edit — `janusfs update` remains the way to force those.
 - **Descriptor-relative reads.** The daemon opens the source directory once at mount time and every masked read goes through that retained descriptor with `O_NOFOLLOW`. Swapping a checked path for a symlink between the policy decision and the read cannot make the read follow the swap — the descriptor sees the file the decision was made against, not whatever the path string now resolves to.
 - **`~/.janusfs/` perms:** directory `0700`, files `0600`.
 

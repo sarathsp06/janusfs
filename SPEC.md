@@ -92,8 +92,7 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 - **Redaction** — byte-length-preserving replacement of a matched span with `*`
   (0x2A). File size never changes.
 - **Rule set** — the compiled, immutable result of discovering every
-  `.janusignore` and `.janusmask` applicable to a source tree, plus the global
-  level.
+  `.janusfs.yml` applicable to a source tree, plus the global level.
 - **Generation** — a monotonic counter identifying one compiled rule set.
   Reloading produces a new generation; anything keyed to a rule set carries it.
 - **Level** — one directory's config files. Levels are ordered shallowest first,
@@ -189,8 +188,8 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   and every descendant is `HIDDEN` regardless of deeper rules. A hidden ancestor
   cannot be re-allowed below it.
 
-- **FR-10** Directories are never `MASKED`. A `.janusmask` glob matching a
-  directory applies to the files within it, equivalent to `dir/**`.
+- **FR-10** Directories are never `MASKED`. A `.janusfs.yml` mask path matching
+  a directory applies to the files within it, equivalent to `dir/**`.
   `janusfs check` flags directory-matching mask globs and reports the rewrite.
 
 - **FR-11** Hard links. A Decision is per path, not per inode, so two links to
@@ -216,23 +215,39 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 
 ### 3.3 Configuration
 
-- **FR-14** `.janusignore` uses gitignore semantics exactly: glob patterns,
-  `**`, trailing-`/` directory patterns, `!` negation, `#` comments, escaping.
-  Later matches win, deeper levels are later, subject to FR-9 and FR-17.
+- **FR-14** `.janusfs.yml` is the single policy file. Version 1 has three
+  top-level rule sections:
 
-- **FR-15** `.janusmask` is line-oriented UTF-8:
-
+  ```yaml
+  version: 1
+  hide: ["*.pem"]
+  allow: ["public.pem"]
+  mask:
+    - paths: ["*.env"]
+      patterns: [env-value]
   ```
-  <file-glob> [: <pattern>[, <pattern>...]]
-  pattern := <builtin-name> | /<RE2-regex>/
+
+  `hide` and `allow` use gitignore-style glob semantics: `**`, trailing-`/`
+  directory patterns, and escaping. `allow` is the explicit form of gitignore
+  negation. Later matches win, deeper levels are later, subject to FR-9 and
+  FR-17.
+
+- **FR-15** `.janusfs.yml` `mask` rules list file globs under `paths` and
+  optional pattern references under `patterns`:
+
+  ```yaml
+  mask:
+    - paths: ["*.env", "config/*.yaml"]
+      patterns: [env-value, db-uri]
+    - paths: ["secrets/*"] # no patterns means whole-file
   ```
 
-  No pattern means `whole-file`. Multiple lines for one glob accumulate patterns
-  as a set union. Blank lines and `#` comments are ignored, with `#` inside a
-  `/.../` regex treated literally. A literal `:` in a glob escapes as `\:`.
-  Custom regexes compile with Go `regexp` (RE2). **A compile failure fails that
-  level's whole rule set closed** — every path its globs would have touched
-  becomes `HIDDEN`, with a config-error event — and other levels are unaffected.
+  A pattern is either a builtin name or a `/RE2-regex/` custom regex. No
+  `patterns` means `whole-file`. Multiple mask rules for one glob accumulate
+  patterns as a set union. Custom regexes compile with Go `regexp` (RE2).
+  **A compile failure fails that level's whole rule set closed** — every path
+  its globs would have touched becomes `HIDDEN`, with a config-error event — and
+  other levels are unaffected.
 
 - **FR-16** The masked span is capture group 1 when the regex defines at least
   one group, otherwise the whole match. The replacement is `*` repeated for the
@@ -268,8 +283,8 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   false-positive traps. A change to a builtin bumps a `patterns_version` reported
   by `doctor` and the dashboard.
 
-- **FR-19** `janusfs init [dir]` writes template `.janusignore` and `.janusmask`
-  to `dir` (default cwd); `--global` writes them to `~/.janusfs/config`. It
+- **FR-19** `janusfs init [dir]` writes template `.janusfs.yml` to `dir`
+  (default cwd); `--global` writes it to `~/.janusfs/config`. It
   refuses to overwrite without `--force`, and explains what it wrote and why in
   at most ten lines.
 
@@ -279,8 +294,8 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   `janusfs update [src|mountpoint|configpath]`, the dashboard's reload button, a
   config save through the dashboard editor, or — for in-tree rule files only —
   automatically, the next time `open`/`opendir` resolves a path whose ancestor
-  chain's `.janusignore`/`.janusmask` set has changed on disk since the loaded
-  generation was compiled (FR-20a). A recompile builds a full new snapshot
+  chain's `.janusfs.yml` set has changed on disk since the loaded generation was
+  compiled (FR-20a). A recompile builds a full new snapshot
   off-thread and swaps it atomically; filesystem operations are never blocked by
   recompilation, and the previous generation serves until the swap. The
   rationale for having no *continuous* watcher: on macOS a per-directory watch
@@ -331,7 +346,7 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   child's exit code, and exits `125` when it cannot start the child.
 
 - **FR-26** `exec` **refuses to guess**. If neither an active mount nor a
-  directory containing `.janusignore` or `.janusmask` is found at or above the
+  directory containing `.janusfs.yml` is found at or above the
   current directory, it fails with a cause and a remedy (`janusfs init` here or
   in an ancestor). It must never default to mounting the current directory: for a
   user in their home directory that would provision an unpoliced mount over
@@ -370,8 +385,8 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
      only. `janusfs exec` must work with no daemon running.
 
 - **FR-29** With FR-28 in place, path rewriting is prohibited on Linux. The
-  working-directory hijack, argv rewriting, and stdout/stderr rewriting are
-  removed, not merely bypassed. String rewriting cannot be made correct — it
+  working-directory hijack and argv rewriting are removed, not merely bypassed.
+  String rewriting cannot be made correct — it
   cannot reach files the agent writes, the git index, build caches, artefacts
   containing debug paths, or anything the agent spawns that communicates over a
   socket — and retaining it alongside a path-preserving mount would produce two
@@ -381,6 +396,10 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   project source. Mounting a whole home directory or any other system-wide
   location is not a supported configuration. This confines FUSE latency and the
   blast radius of a failure to the project the user is actually working in.
+  In the default disjoint-mount model, `exec` may rewrite source-path argv
+  entries to the sanitized mountpoint, but stdout and stderr are passed through
+  byte-for-byte so interactive tools retain terminal semantics. Output may
+  therefore expose the internal mountpoint path.
 
 - **FR-31** **macOS: path-preserving mode**, mounting over the source path, is
   **opt-in and off by default**, and refuses to enable unless both FR-33 (the
@@ -537,7 +556,7 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   tooling.
 
 - **FR-48a** `janusfs patterns [--json]` lists every reserved built-in
-  `.janusmask` pattern name with its description and exact RE2 regex source.
+  `.janusfs.yml` mask pattern name with its description and exact RE2 regex source.
   `whole-file` is shown as a sentinel with no regex. The output is for operator
   inspection and tooling, not part of the masking hot path.
 

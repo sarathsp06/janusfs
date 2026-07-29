@@ -1,9 +1,11 @@
 package rules
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -17,8 +19,17 @@ func withGlobalDir(t *testing.T) string {
 	return filepath.Join(home, ".janusfs", "config")
 }
 
+const (
+	legacyIgnoreFileName = ".janusignore"
+	legacyMaskFileName   = ".janusmask"
+)
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+	if filepath.Base(path) == legacyIgnoreFileName || filepath.Base(path) == legacyMaskFileName {
+		writeLegacyPolicyFixture(t, path, content)
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -27,12 +38,87 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func TestResolveBasicHiddenMaskedAllowed(t *testing.T) {
+func writeLegacyPolicyFixture(t *testing.T, path, content string) {
+	t.Helper()
+	policyPath := filepath.Join(filepath.Dir(path), PolicyFileName)
+	if err := os.MkdirAll(filepath.Dir(policyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(policyPath); os.IsNotExist(err) {
+		if err := os.WriteFile(policyPath, []byte("version: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var b strings.Builder
+	if filepath.Base(path) == legacyIgnoreFileName {
+		var hide, allow []string
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if strings.HasPrefix(line, "!") {
+				allow = append(allow, strings.TrimPrefix(line, "!"))
+			} else {
+				hide = append(hide, line)
+			}
+		}
+		if len(hide) > 0 {
+			b.WriteString("hide:\n")
+			for _, line := range hide {
+				b.WriteString(fmt.Sprintf("  - %q\n", line))
+			}
+		}
+		if len(allow) > 0 {
+			b.WriteString("allow:\n")
+			for _, line := range allow {
+				b.WriteString(fmt.Sprintf("  - %q\n", line))
+			}
+		}
+	} else {
+		b.WriteString("mask:\n")
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			glob, refs, hasRefs := strings.Cut(line, ":")
+			b.WriteString("  - paths:\n")
+			b.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(glob)))
+			if hasRefs && strings.TrimSpace(refs) != "" {
+				b.WriteString("    patterns:\n")
+				for _, ref := range strings.Split(refs, ",") {
+					b.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(ref)))
+				}
+			}
+		}
+	}
+	f, err := os.OpenFile(policyPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString(b.String()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscoverYAMLPolicy(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
 
-	writeFile(t, filepath.Join(root, IgnoreFileName), "*.pem\nid_rsa*\n")
-	writeFile(t, filepath.Join(root, MaskFileName), "*.env : env-value\nsecrets/* \n")
+	writeFile(t, filepath.Join(root, PolicyFileName), `version: 1
+hide:
+  - "*.pem"
+  - id_rsa*
+mask:
+  - paths:
+      - "*.env"
+    patterns:
+      - env-value
+  - paths:
+      - secrets/*
+`)
 	writeFile(t, filepath.Join(root, "secrets", "x.txt"), "irrelevant")
 	writeFile(t, filepath.Join(root, "README.md"), "hi")
 
@@ -60,11 +146,15 @@ func TestResolveBasicHiddenMaskedAllowed(t *testing.T) {
 	}
 }
 
+func TestResolveBasicHiddenMaskedAllowed(t *testing.T) {
+	TestDiscoverYAMLPolicy(t)
+}
+
 func TestResolveHiddenWinsOverMasked(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, IgnoreFileName), "secret.env\n")
-	writeFile(t, filepath.Join(root, MaskFileName), "*.env : env-value\n")
+	writeFile(t, filepath.Join(root, legacyIgnoreFileName), "secret.env\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "*.env : env-value\n")
 	writeFile(t, filepath.Join(root, "secret.env"), "X=1")
 
 	rs, err := Discover(root)
@@ -82,8 +172,8 @@ func TestResolveDeeperIgnoreNegatesShallower(t *testing.T) {
 	// is unchanged; only the global tier is a fail-closed floor.
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, IgnoreFileName), "*.log\n")
-	writeFile(t, filepath.Join(root, "keep", IgnoreFileName), "!important.log\n")
+	writeFile(t, filepath.Join(root, legacyIgnoreFileName), "*.log\n")
+	writeFile(t, filepath.Join(root, "keep", legacyIgnoreFileName), "!important.log\n")
 	writeFile(t, filepath.Join(root, "keep", "important.log"), "x")
 	writeFile(t, filepath.Join(root, "other.log"), "x")
 
@@ -106,8 +196,8 @@ func TestResolveHiddenDirectoryBlocksNegationBeneath(t *testing.T) {
 	// resurface a path whose ancestor directory is itself Hidden.
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, IgnoreFileName), "secretdir/\n")
-	writeFile(t, filepath.Join(root, "secretdir", IgnoreFileName), "!keep.txt\n")
+	writeFile(t, filepath.Join(root, legacyIgnoreFileName), "secretdir/\n")
+	writeFile(t, filepath.Join(root, "secretdir", legacyIgnoreFileName), "!keep.txt\n")
 	writeFile(t, filepath.Join(root, "secretdir", "keep.txt"), "x")
 
 	rs, err := Discover(root)
@@ -129,7 +219,7 @@ func TestResolveHiddenDirectoryBlocksNegationBeneath(t *testing.T) {
 func TestResolveNegationCannotEscapeItsOwnHiddenDirButSiblingIsUnaffected(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, IgnoreFileName), "secretdir/\n")
+	writeFile(t, filepath.Join(root, legacyIgnoreFileName), "secretdir/\n")
 	writeFile(t, filepath.Join(root, "other.txt"), "x")
 
 	rs, err := Discover(root)
@@ -144,7 +234,7 @@ func TestResolveNegationCannotEscapeItsOwnHiddenDirButSiblingIsUnaffected(t *tes
 func TestResolveDirectoryNeverMasked(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, MaskFileName), "secrets\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "secrets\n")
 	writeFile(t, filepath.Join(root, "secrets"), "") // file named exactly "secrets" for the mask test below
 	if err := os.Remove(filepath.Join(root, "secrets")); err != nil {
 		t.Fatal(err)
@@ -165,7 +255,7 @@ func TestResolveDirectoryNeverMasked(t *testing.T) {
 
 func TestResolveGlobalLevelLowestPrecedence(t *testing.T) {
 	globalDir := withGlobalDir(t)
-	writeFile(t, filepath.Join(globalDir, IgnoreFileName), "*.pem\n")
+	writeFile(t, filepath.Join(globalDir, legacyIgnoreFileName), "*.pem\n")
 
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "server.pem"), "x")
@@ -186,10 +276,10 @@ func TestResolveGlobalFloorCannotBeLiftedByInTreeNegation(t *testing.T) {
 	// overrides shallower *in-tree* rules (see
 	// TestResolveDeeperIgnoreNegatesShallower).
 	globalDir := withGlobalDir(t)
-	writeFile(t, filepath.Join(globalDir, IgnoreFileName), "*.pem\n")
+	writeFile(t, filepath.Join(globalDir, legacyIgnoreFileName), "*.pem\n")
 
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, IgnoreFileName), "!server.pem\n")
+	writeFile(t, filepath.Join(root, legacyIgnoreFileName), "!server.pem\n")
 	writeFile(t, filepath.Join(root, "server.pem"), "x")
 
 	rs, err := Discover(root)
@@ -206,10 +296,10 @@ func TestResolveInTreeNegationStillWorksWhenNoGlobalFloorApplies(t *testing.T) {
 	// an in-tree rule with no corresponding global rule can still be
 	// negated normally by a deeper in-tree file.
 	globalDir := withGlobalDir(t)
-	writeFile(t, filepath.Join(globalDir, IgnoreFileName), "*.pem\n") // unrelated to *.secret below
+	writeFile(t, filepath.Join(globalDir, legacyIgnoreFileName), "*.pem\n") // unrelated to *.secret below
 
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, IgnoreFileName), "*.secret\n!keep.secret\n")
+	writeFile(t, filepath.Join(root, legacyIgnoreFileName), "*.secret\n!keep.secret\n")
 	writeFile(t, filepath.Join(root, "keep.secret"), "x")
 
 	rs, err := Discover(root)
@@ -224,8 +314,8 @@ func TestResolveInTreeNegationStillWorksWhenNoGlobalFloorApplies(t *testing.T) {
 func TestResolveMaskUnionAcrossLevels(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, MaskFileName), "**/*.env : env-value\n")
-	writeFile(t, filepath.Join(root, "app", MaskFileName), "*.env : aws-key\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "**/*.env : env-value\n")
+	writeFile(t, filepath.Join(root, "app", legacyMaskFileName), "*.env : aws-key\n")
 	writeFile(t, filepath.Join(root, "app", ".env"), "X=1")
 
 	rs, err := Discover(root)
@@ -248,7 +338,7 @@ func TestResolveMaskUnionAcrossLevels(t *testing.T) {
 func TestMaskFailClosedOnBadRegex(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, MaskFileName), "bad.txt : /[/\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "bad.txt : /[/\n")
 	writeFile(t, filepath.Join(root, "bad.txt"), "x")
 
 	rs, err := Discover(root)
@@ -264,7 +354,7 @@ func TestMaskFailClosedOnBadRegex(t *testing.T) {
 func TestMaskWholeFileSentinelNoPattern(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, MaskFileName), "secrets/*\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "secrets/*\n")
 	writeFile(t, filepath.Join(root, "secrets", "a.txt"), "x")
 
 	rs, err := Discover(root)
@@ -337,7 +427,7 @@ func TestDiscoverNoConfigFiles(t *testing.T) {
 func TestResolveCaseFoldMatchesUppercaseVariant(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, MaskFileName), "*.env : env-value\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "*.env : env-value\n")
 
 	rs, err := Discover(root)
 	if err != nil {
@@ -362,7 +452,7 @@ func TestResolveCaseFoldMatchesUppercaseVariant(t *testing.T) {
 func TestResolveCaseSensitiveDoesNotFoldByDefault(t *testing.T) {
 	withGlobalDir(t)
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, MaskFileName), "*.env : env-value\n")
+	writeFile(t, filepath.Join(root, legacyMaskFileName), "*.env : env-value\n")
 
 	rs, err := Discover(root)
 	if err != nil {

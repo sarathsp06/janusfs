@@ -1,9 +1,9 @@
 // Package patterns implements the built-in redaction pattern library
-// and the custom-regex wrapper used by .janusmask.
+// and the custom-regex wrapper used by .janusfs.yml mask rules.
 //
 // This package only compiles and describes patterns; it does not find spans
 // or redact bytes (that's internal/redact, Phase 2) and it is not wired into
-// the mount yet. It exists now because .janusmask lines reference pattern
+// the mount yet. It exists now because .janusfs.yml mask rules reference pattern
 // names, and janusfs check/explain must
 // be able to validate those names and report what they mean without waiting
 // for the full masking pipeline.
@@ -250,7 +250,7 @@ func IsReserved(name string) bool {
 }
 
 // ParsePatternRef parses one comma-separated pattern reference from a
-// .janusmask line — `<builtin-name>` or `/<RE2-regex>/` — into
+// .janusfs.yml mask pattern reference — `<builtin-name>` or `/<RE2-regex>/` — into
 // either a builtin lookup or a compiled custom Pattern.
 //
 // A custom pattern's Name is set to its literal source ("/regex/", without

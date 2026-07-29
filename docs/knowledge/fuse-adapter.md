@@ -127,8 +127,8 @@ operation.
 
 # Config-file immunity
 
-`isConfigFile(relPath)` (`:82`) matches any basename equal to `.janusignore` or
-`.janusmask`. Those files are unconditionally read-only through the mount,
+`isConfigFile(relPath)` matches any basename equal to `.janusfs.yml`. That file
+is unconditionally read-only through the mount,
 checked *before* the policy lookup, in `Open` (`:219`), `Setattr` (`:271`),
 `Unlink` (`:289`), `Rename` as both source and destination (`:336`, `:342`),
 and `Create` (`:409`). The observation decision string is
@@ -223,5 +223,5 @@ also why memoizing `engine.Engine.Resolve` (see
 layer, most of the latency this deliberate zero-caching gives up at the kernel
 layer. Verified behaviourally by
 `TestReloadTakesEffectWithoutRemount` (`internal/mount/integration_test.go`):
-tighten a file from Allowed to Hidden via `.janusignore` plus a live
+tighten a file from Allowed to Hidden via `.janusfs.yml` plus a live
 `Engine.Reload`, with no remount, and the very next read fails closed.

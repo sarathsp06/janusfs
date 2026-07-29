@@ -10,32 +10,32 @@ import (
 	"github.com/sarathsp06/janusfs/internal/rules"
 )
 
-// janusignoreTemplate is the secure-default .janusignore: standard
-// secrets, keypairs, and credential stores hidden out of the box.
-const janusignoreTemplate = `# JanusFS — paths listed here are Hidden: they appear in listings but
-# every read/write is denied (EACCES). Syntax mirrors .gitignore exactly.
-#
-# Preview the effect of these rules with: janusfs check
+// policyTemplate is the secure-default JanusFS policy: common key material is
+// hidden, while secret-bearing config files are preserved but redacted.
+const policyTemplate = `# JanusFS policy. Preview with: janusfs check
+version: 1
 
-*.pem
-*.key
-id_rsa*
-*.p12
-.aws/credentials
-*.keychain
-`
+hide:
+  - "*.pem"
+  - "*.key"
+  - id_rsa*
+  - "*.p12"
+  - .aws/credentials
+  - "*.keychain"
 
-// janusmaskTemplate is the secure-default .janusmask: common
-// secret-bearing file shapes, masked with the built-in pattern library.
-const janusmaskTemplate = `# JanusFS — <glob> : <pattern>[, <pattern>...] masks matched spans with
-# '*', preserving file size. A glob with no pattern masks the whole file.
-#
-# Preview the effect of these rules with: janusfs check
+mask:
+  - paths:
+      - "*.env*"
+    patterns:
+      - env-value
 
-*.env*                              : env-value
-**/application*.yml                 : generic-secret, db-uri
-**/application*.yaml                : generic-secret, db-uri
-**/application*.properties          : generic-secret, db-uri
+  - paths:
+      - "**/application*.yml"
+      - "**/application*.yaml"
+      - "**/application*.properties"
+    patterns:
+      - generic-secret
+      - db-uri
 `
 
 func newInitCmd() *cobra.Command {
@@ -44,7 +44,7 @@ func newInitCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init [dir]",
-		Short: "Generate template .janusignore and .janusmask files with secure defaults",
+		Short: "Generate a template .janusfs.yml policy with secure defaults",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if global {
@@ -60,7 +60,7 @@ func newInitCmd() *cobra.Command {
 			return runInit(dir, force)
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing .janusignore/.janusmask files")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing .janusfs.yml file")
 	cmd.Flags().BoolVar(&global, "global", false, "write to ~/.janusfs/config instead, applied to every mount")
 	return cmd
 }
@@ -68,19 +68,14 @@ func newInitCmd() *cobra.Command {
 // runInit writes the secure-default templates, refusing to overwrite without
 // --force, and explains what it wrote and why.
 func runInit(dir string, force bool) error {
-	ignorePath := filepath.Join(dir, ".janusignore")
-	maskPath := filepath.Join(dir, ".janusmask")
+	policyPath := filepath.Join(dir, rules.PolicyFileName)
 
-	if err := writeTemplate(ignorePath, janusignoreTemplate, force); err != nil {
-		return fmt.Errorf("init: %w", err)
-	}
-	if err := writeTemplate(maskPath, janusmaskTemplate, force); err != nil {
+	if err := writeTemplate(policyPath, policyTemplate, force); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 
 	// Keep this short: what was written, why, and where to look next.
-	fmt.Printf("Wrote %s — hides *.pem/*.key/id_rsa*/*.p12/.aws credentials/*.keychain by default.\n", ignorePath)
-	fmt.Printf("Wrote %s — masks .env files and Spring-style application config\n", maskPath)
+	fmt.Printf("Wrote %s — hides key material and masks .env files plus Spring-style application config\n", policyPath)
 	fmt.Printf("  (application*.yml/.yaml/.properties) where secrets commonly live.\n")
 	fmt.Println("Targeted by design: add lines like `**/* : aws-key` only if you want a")
 	fmt.Println("repo-wide secret scan (it masks every file — slower, noisier).")
@@ -100,18 +95,14 @@ func runInitGlobal(force bool) error {
 		return fmt.Errorf("init: creating %s: %w", dir, err)
 	}
 
-	ignorePath := filepath.Join(dir, ".janusignore")
-	maskPath := filepath.Join(dir, ".janusmask")
+	policyPath := filepath.Join(dir, rules.PolicyFileName)
 
-	if err := writeTemplate(ignorePath, janusignoreTemplate, force); err != nil {
-		return fmt.Errorf("init: %w", err)
-	}
-	if err := writeTemplate(maskPath, janusmaskTemplate, force); err != nil {
+	if err := writeTemplate(policyPath, policyTemplate, force); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	fmt.Printf("Wrote %s and %s — applied to every mount, lowest precedence (any repo's own\n", ignorePath, maskPath)
-	fmt.Println("  .janusignore/.janusmask can override these).")
+	fmt.Printf("Wrote %s — applied to every mount, lowest precedence (any repo's own\n", policyPath)
+	fmt.Println("  .janusfs.yml can override these).")
 	fmt.Println("Run `janusfs check <dir>` on any repo to preview the combined effect.")
 	return nil
 }

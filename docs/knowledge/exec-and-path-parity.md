@@ -11,7 +11,7 @@ sources:
     title: Run, findSourceAndMount, CWD hijack, env scrub
   - id: rewriter
     resource: /internal/execrunner/rewriter.go
-    title: ReplacePaths, StreamRewriter
+    title: ReplacePaths
   - id: execcmd
     resource: /cmd/janusfs/exec.go
     title: exec cobra command
@@ -56,7 +56,7 @@ then does six things:
 1. **Find or provision a mount.** `findSourceAndMount` (`:61`) asks the daemon
    for its mount list, then walks up from the cwd. If an ancestor is an active
    mount source, that pairing is used. Otherwise the shallowest ancestor
-   containing a `.janusignore` or `.janusmask` becomes the source, defaulting to
+   containing a `.janusfs.yml` becomes the source, defaulting to
    the cwd, and a `mount` request is sent to provision it.
 2. **Wait for readiness.** Poll for `<mountpoint>/.janusfs` every 50 ms up to
    2000 ms (`:147`). This is why the synthetic `.janusfs` directory is
@@ -68,35 +68,35 @@ then does six things:
    replaced with the mountpoint via `ReplacePaths`.
 5. **Scrub the environment** (`:186`): every `JANUSFS_*` variable is dropped, so
    the child cannot read or influence JanusFS configuration.
-6. **Rewrite stdout and stderr** (`:201`): both are wrapped in a
-   `StreamRewriter` that replaces the mountpoint with the source path on the way
-   out, so the agent's output names paths the user recognises.
+6. **Pass stdout and stderr through unchanged** (`:189`): output is not path
+   rewritten. This keeps TTY semantics for interactive CLIs and makes stdout and
+   stderr byte-faithful, at the cost that output may show the internal mountpoint.
 
 Signals `SIGINT`, `SIGTERM`, `SIGHUP` are forwarded to the child, and the
 child's exit code is propagated. A failure to start returns `125`, matching
 `env`/`timeout` convention.
 
-# The rewriter
+# The argv rewriter
 
 `ReplacePaths` (`internal/execrunner/rewriter.go:18`) is a boundary-aware
-substring replace: a match only counts if the preceding byte is not a path
-character and the following byte is `/` or not a name character. That stops
-`/a/app` from matching inside `/a/application`.
+substring replace used for argv only: a match only counts if the preceding byte
+is not a path character and the following byte is `/` or not a name character.
+That stops `/a/app` from matching inside `/a/application`.
 
-`StreamRewriter` (`:65`) handles the harder streaming case. Because a path
-string can be split across two `Write` calls, it holds back the longest suffix
-of its buffer that is also a prefix of the search string
-(`longestPrefixSuffix`, `:50`), flushes everything before that, and carries the
-rest. `Close` flushes the remainder.
+JanusFS deliberately does not rewrite stdout or stderr. The former stream
+rewriter broke interactive CLIs by hiding their terminal and made output non
+byte-faithful for only cosmetic path names.
 
-This is careful, correct code for the problem it solves. The problem is that the
-problem is unsolvable.
+The remaining argv rewrite is still a best-effort compatibility shim, not path
+parity.
 
 # Why string rewriting cannot be made correct
 
-The rewriter can only touch what passes through argv, stdout, and stderr. Every
-other channel through which a path escapes is unreachable:
+The argv rewriter can only touch command-line arguments. Every other channel
+through which a path escapes is unreachable:
 
+- **Terminal output.** JanusFS now leaves stdout and stderr untouched so tools
+  can use the terminal normally; printed paths may therefore name the mountpoint.
 - **Files the agent writes.** A generated `tsconfig.json`, a `.env.local`, a
   lockfile, a `compile_commands.json`, a coverage report, an editor workspace
   file — all get the mountpoint baked in, and stay wrong after the mount goes
@@ -114,16 +114,11 @@ other channel through which a path escapes is unreachable:
   can breach shebang and `sun_path` limits, and code that compares a path
   against a configured root will not match.
 
-There is also a correctness hazard in the other direction: `StreamRewriter`
-rewrites *all* occurrences of the mountpoint in the child's output, including
-inside file content the child happens to `cat`. That is cosmetic today but it
-means stdout is not a faithful reproduction of bytes read.
-
 The conclusion is not "improve the rewriter". It is that **path parity must be
 provided by the filesystem, not simulated in a wrapper**. Once the sanitized
 view is available at the same absolute path as the source, every step above
-disappears: no cwd hijack, no argv rewrite, no stream rewrite, no readiness
-race. See [platform isolation models](platform-isolation.md).
+disappears: no cwd hijack, no argv rewrite, no readiness race. See
+[platform isolation models](platform-isolation.md).
 
 # Two defects, now fixed
 

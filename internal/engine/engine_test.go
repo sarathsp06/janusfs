@@ -4,16 +4,79 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+	switch filepath.Base(path) {
+	case ".janusignore":
+		writePolicyFixture(t, filepath.Dir(path), content, "hide")
+		return
+	case ".janusmask":
+		writePolicyFixture(t, filepath.Dir(path), content, "mask")
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writePolicyFixture(t *testing.T, dir, content, kind string) {
+	t.Helper()
+	path := filepath.Join(dir, ".janusfs.yml")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, []byte("version: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var b strings.Builder
+	if kind == "hide" {
+		b.WriteString("hide:\n")
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				b.WriteString(fmt.Sprintf("  - %q\n", line))
+			}
+		}
+		appendPolicyFixture(t, path, b.String())
+		return
+	}
+	b.WriteString("mask:\n")
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		glob, refs, hasRefs := strings.Cut(line, ":")
+		b.WriteString("  - paths:\n")
+		b.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(glob)))
+		if hasRefs && strings.TrimSpace(refs) != "" {
+			b.WriteString("    patterns:\n")
+			for _, ref := range strings.Split(refs, ",") {
+				b.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(ref)))
+			}
+		}
+	}
+	appendPolicyFixture(t, path, b.String())
+}
+
+func appendPolicyFixture(t *testing.T, path, content string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString(content); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -230,7 +293,7 @@ func BenchmarkResolveCacheMiss(b *testing.B) {
 	b.Setenv("HOME", home)
 
 	root := b.TempDir()
-	// A ten-level directory hierarchy, each with its own .janusignore, so
+	// A ten-level directory hierarchy, each with its own .janusfs.yml, so
 	// resolving the deepest path exercises a ten-level miss.
 	dir := root
 	for i := 0; i < 10; i++ {
@@ -238,7 +301,7 @@ func BenchmarkResolveCacheMiss(b *testing.B) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			b.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, ".janusignore"), []byte("*.tmp\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.tmp\"\n"), 0o644); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -269,11 +332,26 @@ func BenchmarkResolveCacheMiss(b *testing.B) {
 // TestStaleAncestorsDetectsEditedFile covers the case a manual `janusfs
 // update` already handles, as a baseline: editing a known rule file's
 // content (and therefore its mtime) must be detected.
+func TestStaleAncestorsEmptyPolicyIsTracked(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusfs.yml"), "version: 1\n")
+	writeFile(t, filepath.Join(root, "plain.txt"), "x")
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.StaleAncestors("plain.txt", false) {
+		t.Fatal("empty policy file should be present in the freshness snapshot")
+	}
+}
+
 func TestStaleAncestorsDetectsEditedFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
-	ignorePath := filepath.Join(root, ".janusignore")
-	writeFile(t, ignorePath, "*.pem\n")
+	ignorePath := filepath.Join(root, ".janusfs.yml")
+	writeFile(t, ignorePath, "version: 1\nhide:\n  - \"*.pem\"\n")
 	writeFile(t, filepath.Join(root, "secret.env"), "x")
 
 	e, err := New(root)
@@ -286,10 +364,10 @@ func TestStaleAncestorsDetectsEditedFile(t *testing.T) {
 
 	// Editing the file: content + mtime change, but no NEW file appears.
 	time.Sleep(2 * time.Millisecond) // ensure a distinguishable mtime
-	writeFile(t, ignorePath, "*.pem\n*.env\n")
+	writeFile(t, ignorePath, "version: 1\nhide:\n  - \"*.pem\"\n  - \"*.env\"\n")
 
 	if !e.StaleAncestors("secret.env", false) {
-		t.Fatal("expected StaleAncestors to detect the edited .janusignore")
+		t.Fatal("expected StaleAncestors to detect the edited .janusfs.yml")
 	}
 	if err := e.Reload(root); err != nil {
 		t.Fatal(err)
@@ -301,7 +379,7 @@ func TestStaleAncestorsDetectsEditedFile(t *testing.T) {
 
 // TestStaleAncestorsDetectsNewFileInPreviouslyBareDir is the case a naive
 // "did any known file's mtime change" check misses entirely: a brand-new
-// .janusignore dropped into a subdirectory that had no config file at all
+// .janusfs.yml dropped into a subdirectory that had no config file at all
 // when the engine was constructed changes no tracked file's mtime, so the
 // check must independently probe for newly-appeared files, not just diff
 // already-known ones.
@@ -322,12 +400,12 @@ func TestStaleAncestorsDetectsNewFileInPreviouslyBareDir(t *testing.T) {
 		t.Fatal("freshly-discovered rule set (no config files at all) must not report stale")
 	}
 
-	// A brand-new .janusignore in a directory that had NONE before — no
+	// A brand-new .janusfs.yml in a directory that had NONE before — no
 	// previously-known file's mtime changes.
 	writeFile(t, filepath.Join(subdir, ".janusignore"), "*.env\n")
 
 	if !e.StaleAncestors("subdir/secret.env", false) {
-		t.Fatal("expected StaleAncestors to detect the newly-added .janusignore in a previously bare directory")
+		t.Fatal("expected StaleAncestors to detect the newly-added .janusfs.yml in a previously bare directory")
 	}
 	if err := e.Reload(root); err != nil {
 		t.Fatal(err)
@@ -344,8 +422,8 @@ func TestStaleAncestorsDetectsNewFileInPreviouslyBareDir(t *testing.T) {
 func TestStaleAncestorsDetectsSizeChangeEvenIfMTimeIsRestored(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
-	cfg := filepath.Join(root, ".janusignore")
-	writeFile(t, cfg, "secret.env\n")
+	cfg := filepath.Join(root, ".janusfs.yml")
+	writeFile(t, cfg, "version: 1\nhide:\n  - secret.env\n")
 	writeFile(t, filepath.Join(root, "secret.env"), "x\n")
 
 	e, err := New(root)
@@ -362,7 +440,7 @@ func TestStaleAncestorsDetectsSizeChangeEvenIfMTimeIsRestored(t *testing.T) {
 	}
 	mod := st.ModTime()
 
-	writeFile(t, cfg, "secret.env\nvery-secret.env\n")
+	writeFile(t, cfg, "version: 1\nhide:\n  - secret.env\n  - very-secret.env\n")
 	if err := os.Chtimes(cfg, mod, mod); err != nil {
 		t.Fatal(err)
 	}

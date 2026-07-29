@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// ignorePattern is one compiled line of a .janusignore file, or one glob
-// half of a .janusmask line. Implemented from scratch rather
+// ignorePattern is one compiled hide/allow glob, or one mask path glob.
+// Implemented from scratch rather
 // than via a third-party gitignore library. The previously-vendored
 // github.com/sabhiram/go-gitignore is low-activity and its per-file negation
 // model doesn't compose across hierarchical levels: a deeper file's negation
@@ -35,7 +35,7 @@ type ignorePattern struct {
 }
 
 // compilePatternFold parses and compiles one non-blank, non-comment line — a
-// .janusignore line or a .janusmask glob — into an ignorePattern, with foldCase
+// policy glob — hide, allow, or mask path — into an ignorePattern, with foldCase
 // controlling whether the compiled regex matches case-insensitively. This must agree with the backing
 // filesystem: on a case-insensitive volume (APFS/HFS+ default), the kernel
 // resolves "SECRET.ENV" and "secret.env" to the same inode, so a

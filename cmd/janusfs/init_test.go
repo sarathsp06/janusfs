@@ -7,26 +7,21 @@ import (
 	"testing"
 )
 
-func TestRunInit_WritesBothTemplates(t *testing.T) {
+func TestRunInit_WritesPolicyTemplate(t *testing.T) {
 	dir := t.TempDir()
 	if err := runInit(dir, false); err != nil {
 		t.Fatalf("runInit() error = %v", err)
 	}
 
-	ignore, err := os.ReadFile(filepath.Join(dir, ".janusignore"))
+	policy, err := os.ReadFile(filepath.Join(dir, ".janusfs.yml"))
 	if err != nil {
-		t.Fatalf("reading .janusignore: %v", err)
+		t.Fatalf("reading .janusfs.yml: %v", err)
 	}
-	if !strings.Contains(string(ignore), "*.pem") {
-		t.Error(".janusignore missing expected *.pem entry")
+	if !strings.Contains(string(policy), "*.pem") {
+		t.Error(".janusfs.yml missing expected *.pem entry")
 	}
-
-	mask, err := os.ReadFile(filepath.Join(dir, ".janusmask"))
-	if err != nil {
-		t.Fatalf("reading .janusmask: %v", err)
-	}
-	if !strings.Contains(string(mask), "env-value") {
-		t.Error(".janusmask missing expected env-value pattern")
+	if !strings.Contains(string(policy), "env-value") {
+		t.Error(".janusfs.yml missing expected env-value pattern")
 	}
 }
 
@@ -59,11 +54,8 @@ func TestRunInitGlobal_WritesUnderHomeJanusfsConfig(t *testing.T) {
 	}
 
 	wantDir := filepath.Join(home, ".janusfs", "config")
-	if _, err := os.Stat(filepath.Join(wantDir, ".janusignore")); err != nil {
-		t.Errorf("expected .janusignore under %s: %v", wantDir, err)
-	}
-	if _, err := os.Stat(filepath.Join(wantDir, ".janusmask")); err != nil {
-		t.Errorf("expected .janusmask under %s: %v", wantDir, err)
+	if _, err := os.Stat(filepath.Join(wantDir, ".janusfs.yml")); err != nil {
+		t.Errorf("expected .janusfs.yml under %s: %v", wantDir, err)
 	}
 }
 

@@ -268,7 +268,7 @@ func TestConfigSaveTriggersReload(t *testing.T) {
 	called := 0
 	s.SetReload(func() error { called++; return nil })
 
-	body := `{"path":".janusmask","content":"*.env : env-value\n"}`
+	body := `{"path":".janusfs.yml","content":"version: 1\nmask:\n  - paths:\n      - \"*.env\"\n    patterns:\n      - env-value\n"}`
 	req := httptest.NewRequest("POST", "/api/v1/config?token=test-token", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
@@ -278,7 +278,7 @@ func TestConfigSaveTriggersReload(t *testing.T) {
 	if called != 1 {
 		t.Errorf("saving config should trigger reload; callback called %d times", called)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".janusmask")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".janusfs.yml")); err != nil {
 		t.Errorf("config file not written: %v", err)
 	}
 }

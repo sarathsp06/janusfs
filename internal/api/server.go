@@ -412,8 +412,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleConfigGet returns all .janusignore and .janusmask files found in the
-// source tree, with their full content, for the config editor.
+// handleConfigGet returns all .janusfs.yml files found in the source tree, with
+// their full content, for the config editor.
 func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	if s.root == "" {
 		writeJSON(w, map[string]any{"files": []any{}})
@@ -424,8 +424,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		base := d.Name()
-		if base != ".janusignore" && base != ".janusmask" {
+		if d.Name() != ".janusfs.yml" {
 			return nil
 		}
 		rel, _ := filepath.Rel(s.root, fpath)
@@ -472,10 +471,9 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing path", http.StatusBadRequest)
 		return
 	}
-	// Only allow .janusignore and .janusmask files.
-	base := filepath.Base(req.Path)
-	if base != ".janusignore" && base != ".janusmask" {
-		http.Error(w, "only .janusignore and .janusmask files are editable", http.StatusForbidden)
+	// Only allow JanusFS policy files.
+	if filepath.Base(req.Path) != ".janusfs.yml" {
+		http.Error(w, "only .janusfs.yml files are editable", http.StatusForbidden)
 		return
 	}
 	realPath := filepath.Join(s.root, filepath.FromSlash(req.Path))

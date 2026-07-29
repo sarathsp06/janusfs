@@ -1,7 +1,7 @@
 ---
 type: Subsystem
 title: Policy engine
-description: How .janusignore and .janusmask become one Decision per path, including the two-tier precedence floor.
+description: How .janusfs.yml becomes one Decision per path, including the two-tier precedence floor.
 tags: [rules, engine, precedence, gitignore]
 status: stable
 generated: { by: claude-code/claude-fable-5, at: 2026-07-26T00:00:00Z }
@@ -34,32 +34,29 @@ correctly anywhere other than next to `Resolve`.
 
 # Compilation
 
-`rules.Discover(root)` (`rules.go:133`) builds an immutable `*RuleSet`:
+`rules.Discover(root)` builds an immutable `*RuleSet`:
 
-1. load the global level at `~/.janusfs/config` (`GlobalDir()`, `rules.go:44`);
+1. load the global level at `~/.janusfs/config` (`GlobalDir()`);
 2. `filepath.WalkDir` the whole source tree collecting directories, then sort
    them lexicographically — which is also shallowest-first, because an
-   ancestor path is a string prefix of its descendants (`rules.go:160`);
-3. for each directory, load `.janusignore` into an `IgnoreLevel` and
-   `.janusmask` into a `MaskLevel`.
+   ancestor path is a string prefix of its descendants;
+3. for each directory, load `.janusfs.yml`, compiling `hide`/`allow` into an
+   `IgnoreLevel` and `mask` into a `MaskLevel`.
 
 Discovery never returns a nil `RuleSet`. Per-file problems accumulate in
 `DiscoverErrs` and *also* fail closed; only an unwalkable root is fatal.
 
-A `.janusignore` line that fails to compile sets `IgnoreLevel.Poisoned`
-(`rules.go:228`), which folds every path that level covers to `Hidden`. The
-reasoning, spelled out at `rules.go:81`: an ignore line only ever widens what is
-hidden, so a line that could not be evaluated must be read conservatively rather
+A malformed `.janusfs.yml`, unsupported `version`, or hide/allow glob that fails
+compile sets `IgnoreLevel.Poisoned`, which folds every path that level covers to
+`Hidden`. The reasoning is unchanged: a hide rule only ever widens what is
+hidden, so a rule that could not be evaluated must be read conservatively rather
 than skipped.
 
-`.janusmask` grammar is `<file-glob> [: <pattern>[, <pattern>...]]`, parsed by
-`parseMaskLine` (`rules.go:266`). No colon means the `whole-file` sentinel. A
-literal `:` in a glob escapes as `\:`. Pattern references split on commas that
-are not inside a `/.../` regex (`splitPatternRefs`, `rules.go:339`), and inline
-`#` comments are stripped only outside a regex (`stripMaskInlineComment`,
-`rules.go:322`). A glob or pattern that fails to compile sets
-`MaskEntry.CompileErr` while still populating `Glob`, so `janusfs check` can
-report which line is affected.
+`mask` rules list `paths` and optional `patterns`; omitted patterns mean the
+`whole-file` sentinel. Pattern references may be builtin names or `/RE2/` custom
+regexes. A glob or pattern that fails to compile sets `MaskEntry.CompileErr`
+while still populating `Glob`, so `janusfs check` can report which path is
+affected.
 
 Gitignore matching is implemented in-house in `internal/rules/glob.go`, not via
 a library. The rationale is recorded at `rules.go:1`.
@@ -110,10 +107,10 @@ folds any internal inconsistency to `Hidden`. Order of operations:
 `resolveIgnore` (`resolve.go:145`) implements gitignore's "later match wins"
 with one deliberate change. The global level (`~/.janusfs/config`) is a
 **fail-closed floor**: once the global tier's own self-consistent evaluation
-decides a path is hidden, no in-tree `.janusignore` may negate it with `!`.
+decides a path is hidden, no in-tree `.janusfs.yml` `allow` rule may negate it.
 
-Negation still works normally *within* the in-tree tier (deeper files override
-shallower ones) and *within* the global level itself (a later global line
+Allow rules still work normally *within* the in-tree tier (deeper files override
+shallower ones) and *within* the global level itself (a later global rule
 overrides an earlier one). Only an in-tree actor lifting a global verdict is
 blocked, because the in-tree files live inside the tree the agent can see.
 

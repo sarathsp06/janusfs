@@ -19,7 +19,7 @@ import (
 // (relative to [root], default cwd) through the same internal/engine used
 // by the (future) mount, and prints every rule that contributed to the
 // final Decision, in the order they were evaluated (global level first,
-// then shallowest to deepest .janusignore/.janusmask).
+// then shallowest to deepest .janusfs.yml policy).
 func newExplainCmd() *cobra.Command {
 	var jsonOut bool
 	var root string

@@ -99,7 +99,7 @@ shelling out to `fusermount`. `mount_linux.go` does not set it today
 Two re-exec stages, matching the constraints above:
 
 - **Stage 1**, `internal/execrunner/runner_linux.go` (`//go:build linux`):
-  discovers the source tree by walking up for `.janusignore`/`.janusmask`
+  discovers the source tree by walking up for `.janusfs.yml`
   (refusing, per [PRP 01](/PRPs/01-correctness-fixes.md)'s reasoning, rather
   than defaulting to cwd), then re-execs `os.Executable()` as
   `janusfs __nsmount --src <path> -- <command> [args...]` with
@@ -131,7 +131,7 @@ mount is established, it bind-mounts `src` to a private temporary shadow path
 (`unix.Mount(src, shadow, "", MS_BIND, "")`) and backs the adapter by the
 *shadow* path while mounting the FUSE server at the *real* `src`:
 `adapter.Mount(ctx, shadow, src)`. A bind mount is the same file content at an
-independent VFS path, so `.janusignore`/`.janusmask` discovery and every
+independent VFS path, so `.janusfs.yml` discovery and every
 backing read the server performs go through `shadow`, never through `src` —
 regardless of what ends up mounted at `src`, there is no path through which the
 server's own backing I/O can re-enter its own mount.
