@@ -58,6 +58,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newDaemonCmd())
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newMountCmd())
+	root.AddCommand(newMountsCmd())
 	root.AddCommand(newUpdateCmd())
 	root.AddCommand(newUmountCmd())
 	root.AddCommand(newInstallCmd())
