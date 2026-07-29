@@ -107,7 +107,7 @@ func TestRunCheck_CleanTree_ExitZero(t *testing.T) {
 	writeFile(t, filepath.Join(root, "server.pem"), "x")
 
 	out := captureStdout(t, func() {
-		if err := runCheck(root, false, false); err != nil {
+		if err := runCheck(root, false, false, false); err != nil {
 			t.Errorf("expected nil error for clean tree, got %v", err)
 		}
 	})
@@ -123,7 +123,7 @@ func TestRunCheck_ErrorFindings_ExitOne(t *testing.T) {
 	writeFile(t, filepath.Join(root, "a.txt"), "x")
 
 	out := captureStdout(t, func() {
-		if err := runCheck(root, false, false); err != errSilentNonZero {
+		if err := runCheck(root, false, false, false); err != errSilentNonZero {
 			t.Errorf("expected errSilentNonZero, got %v", err)
 		}
 	})
@@ -144,7 +144,7 @@ func TestRunCheck_JSONOutput_ValidSchema(t *testing.T) {
 	writeFile(t, filepath.Join(root, "secrets", "a.txt"), "x")
 
 	out := captureStdout(t, func() {
-		_ = runCheck(root, true, false)
+		_ = runCheck(root, true, false, false)
 	})
 	var report struct {
 		Findings []struct {
@@ -172,7 +172,7 @@ func TestRunCheck_SecretsFlagReportsAllowedSecret(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
 
 	out := captureStdout(t, func() {
-		if err := runCheck(root, false, true); err != nil {
+		if err := runCheck(root, false, true, false); err != nil {
 			t.Errorf("expected nil error for heuristic secret warnings, got %v", err)
 		}
 	})
@@ -187,7 +187,7 @@ func TestRunCheck_SecretsJSONOutput(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".env"), "API_KEY=super-secret-value\n")
 
 	out := captureStdout(t, func() {
-		if err := runCheck(root, true, true); err != nil {
+		if err := runCheck(root, true, true, false); err != nil {
 			t.Errorf("expected nil error for heuristic secret warnings, got %v", err)
 		}
 	})
@@ -207,8 +207,64 @@ func TestRunCheck_SecretsJSONOutput(t *testing.T) {
 
 func TestRunCheck_NonexistentRoot_ReturnsError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	err := runCheck(filepath.Join(t.TempDir(), "does-not-exist"), false, false)
+	err := runCheck(filepath.Join(t.TempDir(), "does-not-exist"), false, false, false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent root")
+	}
+}
+
+func TestRunCheckMatchesHumanOutput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusfs.yml"), `version: 1
+hide:
+  - "*.pem"
+mask:
+  - paths:
+      - "*.env"
+    patterns:
+      - env-value
+`)
+	writeFile(t, filepath.Join(root, "server.pem"), "x")
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=secret\n")
+
+	out := captureStdout(t, func() {
+		if err := runCheck(root, false, false, true); err != nil {
+			t.Fatalf("runCheck returned error: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Policy matches:") {
+		t.Fatalf("expected Policy matches section, got %q", out)
+	}
+	if !strings.Contains(out, "HIDDEN") || !strings.Contains(out, "server.pem") {
+		t.Fatalf("expected hidden match, got %q", out)
+	}
+	if !strings.Contains(out, "MASKED") || !strings.Contains(out, ".env") || !strings.Contains(out, "env-value") {
+		t.Fatalf("expected masked match with pattern name, got %q", out)
+	}
+}
+
+func TestRunCheckMatchesJSONOutput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusfs.yml"), "version: 1\nhide:\n  - \"*.pem\"\n")
+	writeFile(t, filepath.Join(root, "server.pem"), "x")
+
+	out := captureStdout(t, func() {
+		if err := runCheck(root, true, false, true); err != nil {
+			t.Fatalf("runCheck returned error: %v", err)
+		}
+	})
+	var report struct {
+		Matches []struct {
+			Decision string `json:"decision"`
+			Path     string `json:"path"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if len(report.Matches) != 1 || report.Matches[0].Decision != "HIDDEN" || report.Matches[0].Path != "server.pem" {
+		t.Fatalf("unexpected matches: %#v", report.Matches)
 	}
 }

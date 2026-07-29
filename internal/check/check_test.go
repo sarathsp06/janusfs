@@ -304,3 +304,41 @@ func TestCheckCleanTreeNoFindings(t *testing.T) {
 		t.Fatal("expected non-zero file count")
 	}
 }
+
+func TestCheckMatchesReportsHiddenAndMaskedOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".janusfs.yml"), `version: 1
+hide:
+  - "*.pem"
+mask:
+  - paths:
+      - "*.env"
+    patterns:
+      - env-value
+`)
+	writeFile(t, filepath.Join(root, "server.pem"), "x")
+	writeFile(t, filepath.Join(root, ".env"), "API_KEY=secret\n")
+	writeFile(t, filepath.Join(root, "README.md"), "hello")
+
+	r, err := RunWithOptions(root, Options{Matches: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Matches) != 2 {
+		t.Fatalf("expected hidden+masked matches only, got %#v", r.Matches)
+	}
+	got := map[string]string{}
+	for _, m := range r.Matches {
+		got[m.Path] = m.Decision
+	}
+	if got["server.pem"] != "HIDDEN" {
+		t.Fatalf("server.pem decision = %q, want HIDDEN; matches=%#v", got["server.pem"], r.Matches)
+	}
+	if got[".env"] != "MASKED" {
+		t.Fatalf(".env decision = %q, want MASKED; matches=%#v", got[".env"], r.Matches)
+	}
+	if _, ok := got["README.md"]; ok {
+		t.Fatalf("ALLOWED README.md should not be included by --matches: %#v", r.Matches)
+	}
+}

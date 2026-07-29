@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -29,6 +30,7 @@ var errSilentNonZero = errors.New("")
 func newCheckCmd() *cobra.Command {
 	var jsonOut bool
 	var secrets bool
+	var matches bool
 	cmd := &cobra.Command{
 		Use:   "check [path]",
 		Short: "Statically analyze .janusfs.yml for conflicts",
@@ -38,16 +40,17 @@ func newCheckCmd() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runCheck(dir, jsonOut, secrets)
+			return runCheck(dir, jsonOut, secrets, matches)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	cmd.Flags().BoolVar(&secrets, "secrets", false, "also warn about likely secret files/content that currently resolve Allowed")
+	cmd.Flags().BoolVar(&matches, "matches", false, "also list files and directories that currently resolve Hidden or Masked")
 	return cmd
 }
 
-func runCheck(dir string, jsonOut bool, secrets bool) error {
-	report, err := check.RunWithOptions(dir, check.Options{Secrets: secrets})
+func runCheck(dir string, jsonOut bool, secrets bool, matches bool) error {
+	report, err := check.RunWithOptions(dir, check.Options{Secrets: secrets, Matches: matches})
 	if err != nil {
 		return fmt.Errorf("check: %w", err)
 	}
@@ -72,6 +75,9 @@ func runCheck(dir string, jsonOut bool, secrets bool) error {
 	}
 
 	printCheckReport(report)
+	if matches {
+		printCheckMatches(report.Matches)
+	}
 	if report.HasErrors() {
 		return errSilentNonZero
 	}
@@ -82,6 +88,37 @@ func runCheck(dir string, jsonOut bool, secrets bool) error {
 // sorts by severity then file then line), each with file:line and a
 // suggested fix where one exists. Only warnings and errors are shown — info
 // findings (redundancies, etc.) are suppressed since they're not actionable.
+func printCheckMatches(matches []check.Match) {
+	fmt.Println()
+	fmt.Println("Policy matches:")
+	if len(matches) == 0 {
+		fmt.Println("  none")
+		return
+	}
+	for _, decision := range []string{"HIDDEN", "MASKED"} {
+		printedHeader := false
+		for _, m := range matches {
+			if m.Decision != decision {
+				continue
+			}
+			if !printedHeader {
+				fmt.Println()
+				fmt.Println(decision)
+				printedHeader = true
+			}
+			extra := m.RuleRef
+			if len(m.PatternNames) > 0 {
+				extra = strings.TrimSpace(extra + "  [" + strings.Join(m.PatternNames, " ") + "]")
+			}
+			if extra == "" {
+				fmt.Printf("  %s\n", m.Path)
+			} else {
+				fmt.Printf("  %-32s %s\n", m.Path, extra)
+			}
+		}
+	}
+}
+
 func printCheckReport(report check.Report) {
 	var findings []check.Finding
 	for _, f := range report.Findings {

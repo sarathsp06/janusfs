@@ -61,11 +61,20 @@ type Finding struct {
 	Suggestion string   `json:"suggestion,omitempty"`
 }
 
+// Match is one file or directory whose policy decision is worth previewing.
+type Match struct {
+	Decision     string   `json:"decision"`
+	Path         string   `json:"path"`
+	RuleRef      string   `json:"ruleRef,omitempty"`
+	PatternNames []string `json:"patternNames,omitempty"`
+}
+
 // Report is the full result of Run: findings plus the counted tree size,
 // so callers (and janusfs check's human-readable printer) can say "0 of
 // 400 files affected" style context.
 type Report struct {
 	Findings  []Finding `json:"findings"`
+	Matches   []Match   `json:"matches,omitempty"`
 	FileCount int       `json:"fileCount"`
 	DirCount  int       `json:"dirCount"`
 }
@@ -98,6 +107,9 @@ type Options struct {
 	// Secrets enables a conservative best-effort scan for files that look like
 	// secrets but currently resolve Allowed. It reports warnings, never errors.
 	Secrets bool
+
+	// Matches includes Hidden and Masked policy matches in the report.
+	Matches bool
 }
 
 // Run discovers root's rule tree and lints it against root's real contents.
@@ -159,7 +171,29 @@ func RunWithOptions(root string, opts Options) (Report, error) {
 		}
 	}
 
-	return Report{Findings: findings, FileCount: fileCount, DirCount: dirCount}, nil
+	var matches []Match
+	if opts.Matches {
+		matches = policyMatches(eng, entries)
+	}
+
+	return Report{Findings: findings, Matches: matches, FileCount: fileCount, DirCount: dirCount}, nil
+}
+
+func policyMatches(eng *engine.Engine, entries []treeEntry) []Match {
+	var out []Match
+	for _, te := range entries {
+		res := eng.Resolve(te.rel, te.isDir)
+		switch res.Decision {
+		case engine.Hidden, engine.Masked:
+			out = append(out, Match{
+				Decision:     res.Decision.String(),
+				Path:         te.rel,
+				RuleRef:      res.RuleRef,
+				PatternNames: append([]string(nil), res.PatternNames...),
+			})
+		}
+	}
+	return out
 }
 
 func walkTree(root string) ([]treeEntry, error) {
