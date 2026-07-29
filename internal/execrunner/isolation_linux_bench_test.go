@@ -77,7 +77,7 @@ func BenchmarkHostRead_WithActiveExecSession(b *testing.B) {
 	}
 
 	execSrc := b.TempDir()
-	if err := os.WriteFile(filepath.Join(execSrc, ".janusignore"), []byte("*.secret\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(execSrc, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.secret\"\n"), 0o644); err != nil {
 		b.Fatal(err)
 	}
 

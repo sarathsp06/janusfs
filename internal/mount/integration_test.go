@@ -42,10 +42,10 @@ func TestCreateGating(t *testing.T) {
 	}
 
 	// 3. Creating a config file should fail with EACCES.
-	f, err = os.OpenFile(filepath.Join(mountpoint, ".janusignore"), os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err = os.OpenFile(filepath.Join(mountpoint, ".janusfs.yml"), os.O_CREATE|os.O_WRONLY, 0o644)
 	if err == nil {
 		f.Close()
-		t.Fatal("expected EACCES creating config file .janusignore, but succeeded")
+		t.Fatal("expected EACCES creating config file .janusfs.yml, but succeeded")
 	}
 	if !os.IsPermission(err) {
 		t.Errorf("expected permission error, got %v", err)
@@ -177,7 +177,7 @@ func TestListxattrGating(t *testing.T) {
 }
 
 // TestReloadTakesEffectWithoutRemount asserts that a policy tightening (here,
-// a file newly added to .janusignore) is visible on the very next lookup and
+// a file newly added to .janusfs.yml) is visible on the very next lookup and
 // open of that path, with no remount. This is the behavioural counterpart to
 // the zero attribute/entry/negative-lookup FUSE timeouts set in
 // mount_darwin.go/mount_linux.go: if the kernel were allowed to cache a
@@ -201,7 +201,7 @@ func TestReloadTakesEffectWithoutRemount(t *testing.T) {
 		t.Fatalf("expected the file to be readable before any rule exists, got %v", err)
 	}
 
-	// Tighten policy: add it to .janusignore, then reload the SAME engine the
+	// Tighten policy: add it to policy, then reload the SAME engine the
 	// live mount already uses — no remount, no new Adapter.
 	writeFixture(t, filepath.Join(src, ".janusignore"), "soon-hidden.txt\n")
 	if err := a.Engine.Reload(src); err != nil {

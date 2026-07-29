@@ -65,7 +65,7 @@ func TestReadTOCTOUWindowClosed(t *testing.T) {
 }
 
 // TestStalePolicyPickedUpOnOpen is the end-to-end regression for the
-// stale-rules-fail-open fix: editing (or adding) a .janusignore/.janusmask
+// stale-rules-fail-open fix: editing (or adding) a .janusfs.yml
 // file on disk must be picked up the next time anything is opened near it —
 // without an explicit `janusfs update` — because Open/OpendirHandle now
 // probe for on-disk config staleness before resolving.
@@ -87,13 +87,13 @@ func TestStalePolicyPickedUpOnOpen(t *testing.T) {
 		t.Fatalf("expected raw content before any rule exists, got %q", buf)
 	}
 
-	// Add a brand-new .janusignore directly on the real backing disk — no
+	// Add a brand-new policy file directly on the real backing disk — no
 	// `janusfs update`, no daemon restart. The next open must see it.
 	writeFixture(t, filepath.Join(src, ".janusignore"), "secret.env\n")
 
 	_, err = os.ReadFile(filepath.Join(mountpoint, "secret.env"))
 	if err == nil {
-		t.Fatal("expected the newly-added .janusignore to take effect on the next open (EACCES), got a successful read")
+		t.Fatal("expected the newly-added .janusfs.yml to take effect on the next open (EACCES), got a successful read")
 	}
 }
 

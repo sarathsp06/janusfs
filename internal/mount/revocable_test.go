@@ -39,7 +39,7 @@ func TestReloadRevokesOpenPassthroughHandle(t *testing.T) {
 		t.Fatalf("first read (pre-reload): %v", err)
 	}
 
-	// Tighten policy on the fly: add the file to .janusignore, reload.
+	// Tighten policy on the fly: add the file to .janusfs.yml, reload.
 	writeFixture(t, filepath.Join(src, ".janusignore"), "become-hidden.txt\n")
 	if err := a.Engine.Reload(src); err != nil {
 		t.Fatalf("Engine.Reload: %v", err)

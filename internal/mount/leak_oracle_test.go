@@ -17,6 +17,7 @@ package mount
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,10 +84,80 @@ func mountForTest(t *testing.T, src, mountpoint string) (*Adapter, func()) {
 
 func writeFixture(t *testing.T, path, content string) {
 	t.Helper()
+	switch filepath.Base(path) {
+	case ".janusignore", ".janusmask":
+		appendPolicyFixture(t, path, content)
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendPolicyFixture(t *testing.T, path, content string) {
+	t.Helper()
+	policyPath := filepath.Join(filepath.Dir(path), ".janusfs.yml")
+	if err := os.MkdirAll(filepath.Dir(policyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(policyPath); os.IsNotExist(err) {
+		if err := os.WriteFile(policyPath, []byte("version: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var b strings.Builder
+	if filepath.Base(path) == ".janusignore" {
+		var hide, allow []string
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if strings.HasPrefix(line, "!") {
+				allow = append(allow, strings.TrimPrefix(line, "!"))
+			} else {
+				hide = append(hide, line)
+			}
+		}
+		if len(hide) > 0 {
+			b.WriteString("hide:\n")
+			for _, line := range hide {
+				b.WriteString(fmt.Sprintf("  - %q\n", line))
+			}
+		}
+		if len(allow) > 0 {
+			b.WriteString("allow:\n")
+			for _, line := range allow {
+				b.WriteString(fmt.Sprintf("  - %q\n", line))
+			}
+		}
+	} else {
+		b.WriteString("mask:\n")
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			glob, refs, hasRefs := strings.Cut(line, ":")
+			b.WriteString("  - paths:\n")
+			b.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(glob)))
+			if hasRefs && strings.TrimSpace(refs) != "" {
+				b.WriteString("    patterns:\n")
+				for _, ref := range strings.Split(refs, ",") {
+					b.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(ref)))
+				}
+			}
+		}
+	}
+	f, err := os.OpenFile(policyPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString(b.String()); err != nil {
 		t.Fatal(err)
 	}
 }

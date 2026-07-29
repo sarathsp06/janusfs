@@ -84,7 +84,7 @@ func TestNamespaceIsolation_HostMountTableUnaffected(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte(secretValue+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, ".janusmask"), []byte("secret.env : env-value\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\nmask:\n  - paths:\n      - \"secret.env\"\n    patterns:\n      - env-value\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -149,7 +149,7 @@ func TestNamespaceIsolation_NoDaemonRequired(t *testing.T) {
 	bin := buildJanusfsBinary(t)
 
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, ".janusignore"), []byte("*.secret\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.secret\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(src, "hello.txt"), []byte("hello"), 0o644); err != nil {
@@ -181,7 +181,7 @@ func TestNamespaceIsolation_ExitCodeAndSignals(t *testing.T) {
 	bin := buildJanusfsBinary(t)
 
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, ".janusignore"), []byte("*.secret\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.secret\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +208,7 @@ func TestNamespaceIsolation_TeardownRestoresNormalAccess(t *testing.T) {
 	bin := buildJanusfsBinary(t)
 
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, ".janusignore"), []byte("*.secret\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.secret\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(src, "after.txt"), []byte("still here"), 0o644); err != nil {
