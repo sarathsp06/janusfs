@@ -49,9 +49,13 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 		relPath = ""
 	}
 
-	for _, ancestor := range ancestorDirs(relPath) {
-		if hidden, ref, poisoned, trace := rs.resolveIgnore(ancestor, true); hidden {
-			return Resolution{Decision: Hidden, RuleRef: ref, Poisoned: poisoned, Trace: trace}
+	// In-place zero-allocation ancestor loop
+	for i := 0; i < len(relPath); i++ {
+		if relPath[i] == '/' {
+			ancestor := relPath[:i]
+			if hidden, ref, poisoned, trace := rs.resolveIgnore(ancestor, true); hidden {
+				return Resolution{Decision: Hidden, RuleRef: ref, Poisoned: poisoned, Trace: trace}
+			}
 		}
 	}
 
@@ -72,7 +76,7 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 	maskRef := ""
 
 	for _, lvl := range rs.applicableMaskLevels(relPath) {
-		relToLevel := relativeToLevel(rs.Root, lvl.Dir, relPath)
+		relToLevel := lvl.relativeTo(rs, relPath)
 
 		for _, entry := range lvl.Entries {
 			if entry.GlobPattern == nil || !entry.GlobPattern.matches(relToLevel, false) {
@@ -156,7 +160,7 @@ func (rs *RuleSet) resolveIgnore(relPath string, isDir bool) (hidden bool, ruleR
 			continue
 		}
 
-		relToLevel := relativeToLevel(rs.Root, lvl.Dir, relPath)
+		relToLevel := lvl.relativeTo(rs, relPath)
 		for _, p := range lvl.Patterns {
 			if !p.matches(relToLevel, isDir) {
 				continue
@@ -215,11 +219,62 @@ func relativeToLevel(root, lvlDir, relPath string) string {
 	return filepath.ToSlash(rel)
 }
 
+func (lvl *IgnoreLevel) isApplicable(relPath string) bool {
+	if lvl.IsGlobal {
+		return true
+	}
+	if lvl.RelDir == "" {
+		return true
+	}
+	if lvl.RelDir == relPath {
+		return true
+	}
+	return strings.HasPrefix(relPath, lvl.RelDir+"/")
+}
+
+func (lvl *MaskLevel) isApplicable(relPath string) bool {
+	if lvl.IsGlobal {
+		return true
+	}
+	if lvl.RelDir == "" {
+		return true
+	}
+	if lvl.RelDir == relPath {
+		return true
+	}
+	return strings.HasPrefix(relPath, lvl.RelDir+"/")
+}
+
+func (lvl *IgnoreLevel) relativeTo(rs *RuleSet, relPath string) string {
+	if lvl.IsGlobal {
+		return relativeToLevel(rs.Root, lvl.Dir, relPath)
+	}
+	if lvl.RelDir == "" {
+		return relPath
+	}
+	if lvl.RelDir == relPath {
+		return "."
+	}
+	return relPath[len(lvl.RelDir)+1:]
+}
+
+func (lvl *MaskLevel) relativeTo(rs *RuleSet, relPath string) string {
+	if lvl.IsGlobal {
+		return relativeToLevel(rs.Root, lvl.Dir, relPath)
+	}
+	if lvl.RelDir == "" {
+		return relPath
+	}
+	if lvl.RelDir == relPath {
+		return "."
+	}
+	return relPath[len(lvl.RelDir)+1:]
+}
+
 func (rs *RuleSet) applicableIgnoreLevels(relPath string) []IgnoreLevel {
-	full := filepath.Join(rs.Root, relPath)
 	var out []IgnoreLevel
 	for _, lvl := range rs.IgnoreLevels {
-		if isGlobalOrAncestor(rs, lvl.Dir, full) {
+		if lvl.isApplicable(relPath) {
 			out = append(out, lvl)
 		}
 	}
@@ -227,10 +282,9 @@ func (rs *RuleSet) applicableIgnoreLevels(relPath string) []IgnoreLevel {
 }
 
 func (rs *RuleSet) applicableMaskLevels(relPath string) []MaskLevel {
-	full := filepath.Join(rs.Root, relPath)
 	var out []MaskLevel
 	for _, lvl := range rs.MaskLevels {
-		if isGlobalOrAncestor(rs, lvl.Dir, full) {
+		if lvl.isApplicable(relPath) {
 			out = append(out, lvl)
 		}
 	}

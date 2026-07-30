@@ -21,3 +21,12 @@ Furthermore, very fast parent lookup routines can outrun a spawned test subproce
 **Action:**
 Unified PPID and Start Time lookups into a single `parentAndStartTime` function, cutting OS file reads and system calls in half during ancestry walks. Built a high-performance, single-pass byte parser on Linux that reads `/proc/<pid>/stat` directly into a stack-allocated byte buffer using the low-level `unix` syscalls, achieving exactly zero heap allocations on the parse path. This reduced lookup times by over 56% and slashed allocations by 98.5%.
 Replaced the brief fixed delay in process-spawning tests with a condition-based wait for `JANUSFS_SESSION` to become visible in the child's environment before exercising the environ path.
+
+## 2026-07-28 - Zero-Allocation Ancestry and Path-Matching Bypass in Decision Engine
+
+**Learning:**
+Rule resolution and ancestor walks are highly critical hot-path operations within a FUSE filesystem. Eagerly building ancestor path segments via `strings.Split`/`strings.Join` and performing absolute path checks (`filepath.Join`, `filepath.Rel`) inside ancestry loops results in high system call rates, excessive memory allocation, and severe CPU cache/GC pressure.
+By caching boolean global status (`IsGlobal`) and relative slash-separated paths (`RelDir`) during the rule discovery phase, path matching during resolution can be converted into cheap, allocation-free string prefix and slicing checks. Furthermore, in-place index scanning of slashes avoids segment slice allocations completely.
+
+**Action:**
+Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
