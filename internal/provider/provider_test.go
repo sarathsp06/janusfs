@@ -275,3 +275,62 @@ func TestConcurrentReadsSinglePathNoRace(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func BenchmarkPatternSignature(b *testing.B) {
+	pats0 := []*patterns.Pattern{}
+	pats1 := []*patterns.Pattern{
+		{Name: "env-value"},
+	}
+	pats4 := []*patterns.Pattern{
+		{Name: "env-value"},
+		{Name: "aws-key"},
+		{Name: "jwt"},
+		{Name: "db-uri"},
+	}
+	pats16 := []*patterns.Pattern{
+		{Name: "env-value"},
+		{Name: "aws-key"},
+		{Name: "jwt"},
+		{Name: "db-uri"},
+		{Name: "github-token"},
+		{Name: "generic-secret"},
+		{Name: "private-key"},
+		{Name: "custom-pattern-1"},
+		{Name: "custom-pattern-2"},
+		{Name: "custom-pattern-3"},
+		{Name: "custom-pattern-4"},
+		{Name: "custom-pattern-5"},
+		{Name: "custom-pattern-6"},
+		{Name: "custom-pattern-7"},
+		{Name: "custom-pattern-8"},
+		{Name: "custom-pattern-9"},
+	}
+
+	b.Run("Zero", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = patternSignature(pats0)
+		}
+	})
+
+	b.Run("Single", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = patternSignature(pats1)
+		}
+	})
+
+	b.Run("Four", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = patternSignature(pats4)
+		}
+	})
+
+	b.Run("Sixteen", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = patternSignature(pats16)
+		}
+	})
+}
