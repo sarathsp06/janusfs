@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -177,6 +178,66 @@ func TestListxattrGating(t *testing.T) {
 	if err != unix.EACCES && err != unix.ENOTSUP && err != unix.ENOSYS {
 		t.Errorf("expected EACCES on Listxattr of hidden file, got %v", err)
 	}
+}
+
+// TestMaskedXattrSideChannel answers known-gaps.md item 1: does writing to a
+// MASKED file's extended attributes, directly on the backing source path (not
+// through the mount, since Setxattr on the mount already requires ALLOWED),
+// leak that data back out through Getxattr/Listxattr on the mount, which gate
+// only on denyHidden and so pass MASKED through untouched? The redaction
+// pipeline only ever processes the data fork; if xattr content set out of
+// band survives a mounted read, that is a real secret-leak side channel, not
+// just a theoretical one.
+func TestMaskedXattrSideChannel(t *testing.T) {
+	src := t.TempDir()
+	mountpoint := t.TempDir()
+
+	writeFixture(t, filepath.Join(src, ".janusmask"), "secret.env\n")
+	writeFixture(t, filepath.Join(src, "secret.env"), "SECRET=plaintext-value\n")
+
+	const attrName = "user.janusfs-leak-oracle"
+	secretXattr := []byte("xattr-carried-secret")
+	if err := unix.Setxattr(filepath.Join(src, "secret.env"), attrName, secretXattr, 0); err != nil {
+		t.Skipf("extended attributes unsupported on this filesystem: %v", err)
+	}
+
+	_, cleanup := mountForTest(t, src, mountpoint)
+	defer cleanup()
+
+	mountedPath := filepath.Join(mountpoint, "secret.env")
+
+	sz, err := unix.Listxattr(mountedPath, nil)
+	if err != nil {
+		t.Fatalf("Listxattr on masked file: %v", err)
+	}
+	buf := make([]byte, sz)
+	if _, err := unix.Listxattr(mountedPath, buf); err != nil {
+		t.Fatalf("Listxattr (read) on masked file: %v", err)
+	}
+	if !bytesContainCString(buf, attrName) {
+		t.Fatalf("expected xattr name %q to be listed for masked file (denyHidden passes MASKED through); listing was %q", attrName, buf)
+	}
+
+	readBack := make([]byte, len(secretXattr))
+	n, err := unix.Getxattr(mountedPath, attrName, readBack)
+	if err != nil {
+		t.Fatalf("Getxattr on masked file: %v", err)
+	}
+	if string(readBack[:n]) != string(secretXattr) {
+		t.Fatalf("expected xattr content to pass through unredacted, got %q", readBack[:n])
+	}
+
+	// Confirmed, not merely theoretical: xattr content set out of band on a
+	// MASKED file's backing path is readable in full, unredacted, through the
+	// mount. Getxattr/Listxattr gate on denyHidden (MASKED passes), and
+	// nothing in the redaction pipeline ever touches xattrs.
+}
+
+// bytesContainCString reports whether name (as a NUL-terminated C string)
+// appears anywhere in a Listxattr result buffer, which packs multiple
+// NUL-separated attribute names back to back.
+func bytesContainCString(buf []byte, name string) bool {
+	return strings.Contains(string(buf), name+"\x00")
 }
 
 // TestReloadTakesEffectWithoutRemount asserts that a policy tightening (here,

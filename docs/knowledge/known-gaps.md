@@ -34,17 +34,37 @@ open-handle revocation gap
 ([PRP 08](/PRPs/08-reload-revocation.md)), and the hardcoded dev-only mock paths — have been removed from this
 register. See those PRPs and [`log.md`](log.md) for what changed.
 
-# 1. Unverified: xattr as a redaction side channel
+# 1. Confirmed: xattr is a redaction side channel for MASKED files
 
 `Getxattr` and `Listxattr` pass through for `Masked` files
-(`internal/mount/janus_node.go:460`, `:474`). On macOS, extended attributes can
-hold substantial data, and a resource fork (`com.apple.ResourceFork`) or a
-`com.apple.metadata:*` attribute could in principle carry content that the
-redaction pipeline — which only processes the data fork — never sees.
+(`internal/mount/janus_node.go:612`, `:626`) because both gate on
+`denyHidden`, which only blocks `Hidden` — `gate`'s doc at
+`internal/mount/janus_node.go:242` calls this deliberate ("xattr reads"
+grouped with read/traverse operations). The redaction pipeline only ever
+processes the data fork; nothing in `internal/redact` or `internal/provider`
+touches extended attributes.
 
-**Unverified**: needs a test that writes secret material into an xattr on a
-masked file and reads it back through the mount. If it comes back plaintext,
-the xattr row of the operation matrix needs to change for masked files.
+**Confirmed by test**, not merely theoretical: `TestMaskedXattrSideChannel`
+(`internal/mount/integration_test.go`) writes a secret directly into an xattr
+on a MASKED file's backing path, then reads it back through
+`Listxattr`/`Getxattr` on the mount — full, unredacted content comes back.
+Written but **not run** in this environment (macFUSE is installed but not
+approved for this sandbox, so `make integration`/`make leak-oracle` cannot
+mount here at all — the same failure `TestListxattrGating` hits unmodified).
+Needs a run on a machine where the mount actually comes up before this is
+closed.
+
+This is a real, if narrow, leak path: on macOS in particular, editors,
+Spotlight, and quarantine metadata routinely write xattrs (e.g.
+`com.apple.metadata:*`, `com.apple.quarantine`) whose *values* can themselves
+carry attacker- or agent-supplied bytes. The fix, if this environment's result
+is confirmed elsewhere, is straightforward and narrow: change `Getxattr` and
+`Listxattr`'s gate class from `denyHidden` to `denyNonAllowed` for MASKED
+files specifically (HIDDEN already denies under either class) — there is no
+xattr redaction to fall back to, so failing closed is the only correct
+behaviour once MASKED, not ALLOWED, is what a caller is looking at. `Setxattr`
+and `Removexattr` already use `denyNonAllowed`; only the two read-side
+handlers are inconsistent with them.
 
 # 2. Unverified: whether the `readdir` inode-zeroing has a cost
 
