@@ -275,3 +275,59 @@ func TestConcurrentReadsSinglePathNoRace(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func BenchmarkPatternSignature0(b *testing.B) {
+	pats := []*patterns.Pattern{}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
+
+func BenchmarkPatternSignature1(b *testing.B) {
+	pats, err := patterns.ParsePatternRef("env-value")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
+
+func BenchmarkPatternSignature4(b *testing.B) {
+	var pats []*patterns.Pattern
+	for _, r := range []string{"env-value", "jwt", "github-token", "db-uri"} {
+		ps, err := patterns.ParsePatternRef(r)
+		if err != nil {
+			b.Fatal(err)
+		}
+		pats = append(pats, ps...)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
+
+func BenchmarkPatternSignature16(b *testing.B) {
+	var pats []*patterns.Pattern
+	for _, r := range []string{"env-value", "jwt", "github-token", "db-uri", "generic-secret", "private-key", "aws-key"} {
+		ps, err := patterns.ParsePatternRef(r)
+		if err != nil {
+			b.Fatal(err)
+		}
+		pats = append(pats, ps...)
+	}
+	for i := 0; i < 8; i++ {
+		pats = append(pats, &patterns.Pattern{Name: fmt.Sprintf("custom-pattern-%d", i)})
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = patternSignature(pats)
+	}
+}
