@@ -54,6 +54,7 @@ later blocks anything earlier.
 | 06 | [Process identity](06-process-identity.md) | 05 | M | Tasks 1-2 done; 3-4 deferred pending 07 |
 | 07 | [macOS path-preserving mode](07-macos-path-preserving.md) | 05, 06 | L | design captured; implementation gated on PRP 06 Tasks 3-4 |
 | 08 | [Reload revocation of open handles](08-reload-revocation.md) | 03 | S | done |
+| 09 | [macOS Seatbelt confinement for exec](09-macos-seatbelt-exec.md) | — | M | done — `--sandbox` flag, validated end-to-end against a real daemon/mount |
 
 **PRP 04 was implemented on a darwin-only development machine**, where the
 Linux-only mechanisms it depends on (`CLONE_NEWNS`/`CLONE_NEWUSER`,

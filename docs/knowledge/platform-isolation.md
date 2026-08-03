@@ -203,6 +203,54 @@ untrusted but not an adversary purpose-built to escape, and where a hostile loca
 process could simply read the source directory directly anyway. It is not
 acceptable to describe it as equivalent to the Linux guarantee.
 
+## Option D: Seatbelt confinement of the exec process tree (`--sandbox`, PRP 09)
+
+Orthogonal to A/B/C above — it does not touch where the mountpoint lives, only
+what a confined process tree can reach. `janusfs exec --sandbox` wraps the
+already-disjoint-mounted child (Option A) in a `sandbox-exec` profile that
+denies read **and** write of the real source subtree at the kernel level,
+while leaving the mountpoint itself untouched (`internal/execrunner/sandbox_darwin.go`).
+
+This is the one macOS mechanism, other than a signed system extension, that
+confines an entire subprocess tree — not one process, one channel, or one
+tool — without cgo. It closes the specific gap Option A leaves open (the child
+can still `open()` the real path directly): with `--sandbox`, it cannot,
+verified against a dynamically-discovered real path reaching the child through
+an environment variable (a channel argv-rewriting cannot touch) rather than a
+literal command-line string.
+
+It does not close the Option B/C gap. Seatbelt can only allow or deny; it
+cannot rewrite bytes. So `--sandbox` gives macOS a real **Hidden** (deny), but
+**Masked** is still served by FUSE through the mountpoint exactly as before —
+`--sandbox` constrains the agent to the masked view, it does not change how
+masking works. It is also opt-in and additive, not a replacement for path
+parity: an agent still sees the disjoint mountpoint path, not the source's own
+path, so Option A's argv-rewriting fragility (see
+[exec and path parity](exec-and-path-parity.md)) is unchanged.
+
+Two correctness properties that were **not** obvious until tested end-to-end
+against a real daemon and mount, both now covered by regression tests
+(`internal/execrunner/sandbox_darwin_integration_test.go`):
+
+- **Deny targets must be canonical, including the APFS firmlink form**
+  (`/Users/...` vs `/System/Volumes/Data/Users/...`), not just symlink-resolved
+  (`/var` vs `/private/var`) — Seatbelt matches the resolved path, and a deny
+  naming only one form is a silent, fail-open bypass.
+- **The mountpoint must be explicitly re-allowed last**, after every deny rule,
+  not merely left unnamed. The default mount root is `~/.janusfs/mounts/...`,
+  so a defense-in-depth deny of `~/.janusfs` (to keep a confined child from
+  reading JanusFS's own config/state) also denies the mountpoint whenever the
+  user hasn't customized `--root` — breaking the one thing `--sandbox`
+  promises to leave alone. Asserting the mountpoint last means it wins
+  regardless of which earlier deny rule happens to be its ancestor, including
+  ones added later.
+
+Untested: wrapping a signed/Electron harness (Cursor.app, the Claude Code app)
+rather than a plain CLI — TCC and hardened-runtime interactions are unknown.
+See [`docs/SEATBELT_SPIKE.md`](../SEATBELT_SPIKE.md) for the feasibility spike
+this was built from, and [PRP 09](/PRPs/09-macos-seatbelt-exec.md) for the
+as-built task list.
+
 ## The overmount recursion trap
 
 If the FUSE server resolves backing files by path, and the mount covers that

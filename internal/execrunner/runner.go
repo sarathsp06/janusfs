@@ -115,7 +115,7 @@ func findSourceAndMount(cwd string) (string, string, error) {
 	return foundSrc, mountResp.Mounts[0].Mountpoint, nil
 }
 
-func Run(ctx context.Context, targetArgs []string) (int, error) {
+func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
 	if len(targetArgs) == 0 {
 		return 125, fmt.Errorf("exec: no command specified to execute")
 	}
@@ -176,6 +176,46 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 		if !strings.HasPrefix(kv, "JANUSFS_") {
 			scrubbedEnv = append(scrubbedEnv, kv)
 		}
+	}
+
+	// Seatbelt confinement (opt-in): wrap finalArgs so the child process
+	// tree cannot read or write the real source at its own path, while the
+	// disjoint mountpoint above stays fully usable. This is additive to
+	// everything above (mount discovery, CWD hijack, argv rewrite, env
+	// scrub) — none of that changes.
+	if sandbox {
+		if err := sandboxAvailable(); err != nil {
+			// Fail closed: a user who asked for confinement and didn't get
+			// it is the worst outcome, so refuse rather than run the child
+			// unsandboxed.
+			return 125, fmt.Errorf("exec: %w", err)
+		}
+
+		denyRW, err := canonicalDenyTargets(src)
+		if err != nil {
+			return 125, fmt.Errorf("exec: --sandbox: %w", err)
+		}
+
+		var denyRO []string
+		if home, herr := os.UserHomeDir(); herr == nil {
+			denyRO, err = canonicalReadOnlyDenyTargets(home)
+			if err != nil {
+				return 125, fmt.Errorf("exec: --sandbox: %w", err)
+			}
+		}
+
+		mustAllow, err := canonicalizeWithFirmlinkTwin(mountpoint)
+		if err != nil {
+			return 125, fmt.Errorf("exec: --sandbox: %w", err)
+		}
+
+		profile, err := sandboxProfile(denyRW, denyRO, mustAllow)
+		if err != nil {
+			return 125, fmt.Errorf("exec: --sandbox: %w", err)
+		}
+
+		sandboxArgs := append([]string{"-p", profile, "--"}, finalArgs...)
+		finalArgs = append([]string{sandboxExecPath}, sandboxArgs...)
 	}
 
 	// Set up command

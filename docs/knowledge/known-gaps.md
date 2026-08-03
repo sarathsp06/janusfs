@@ -69,3 +69,22 @@ A related, definitely-real, now-fixed bug found in the same file:
 machine attempting `make integration` or `make leak-oracle`. Fixed by PRP 01 as
 a drive-by, switching to `golang.org/x/sys/unix.Listxattr`, which is defined
 identically on both platforms.
+
+# 3. `--sandbox` (PRP 09) leaves the daemon's loopback API reachable from a confined child
+
+`janusfs exec --sandbox`'s Seatbelt profile (`internal/execrunner/sandbox_darwin.go`)
+denies the real source subtree and `~/.janusfs`, but leaves loopback
+networking under `(allow default)` — denying it would break agents that
+legitimately need localhost (dev servers, package installs against a local
+registry). Consequence: a confined child can still reach
+`GET /api/v1/reveal` (`internal/api/server.go:107`), which serves raw source
+bytes.
+
+**Not currently exploitable**: the bearer token is in-memory only
+(`cmd/janusfs/runtime.go:87-92`), the static dashboard UI injects nothing
+(`server.go:117`), and the control socket's dashboard URL carries no token
+(`daemon.go:510`) — so a confined child has no way to obtain the token to call
+the endpoint. Recorded as a known gap rather than closed because it is a
+structural reachability issue (the endpoint is one token away from a raw-bytes
+read), not a defense the profile currently provides; a future hardened profile
+should scope-deny the daemon's port specifically rather than all loopback.

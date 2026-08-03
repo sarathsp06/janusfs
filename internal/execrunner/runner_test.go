@@ -192,7 +192,7 @@ func main() {
 	// Run our helper through execrunner.Run!
 	// We pass an argument containing the absolute src path to verify translation.
 	argWithSrc := filepath.Join(srcDir, "somefile.txt")
-	exitCode, runErr := Run(context.Background(), []string{binFile, argWithSrc})
+	exitCode, runErr := Run(context.Background(), []string{binFile, argWithSrc}, false)
 
 	// Restore stdout/stderr
 	_ = wOut.Close()
@@ -250,7 +250,7 @@ func TestRunDaemonNotRunning(t *testing.T) {
 	_ = os.Setenv("HOME", tmpHome)
 	defer func() { _ = os.Setenv("HOME", origHome) }()
 
-	exitCode, err := Run(context.Background(), []string{"echo", "hello"})
+	exitCode, err := Run(context.Background(), []string{"echo", "hello"}, false)
 	if exitCode != 125 {
 		t.Errorf("expected exit code 125, got %d", exitCode)
 	}

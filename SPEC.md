@@ -406,12 +406,27 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 - **FR-31** **macOS: path-preserving mode**, mounting over the source path, is
   **opt-in and off by default**, and refuses to enable unless both FR-33 (the
   retained-descriptor backing layer) and FR-32 (process identity) are in place.
-  The reason it cannot be the default is data loss, not performance: macOS has no
-  per-process mount view, so in path-preserving mode the user's own tools read the
-  filtered view, and `git add` on a masked file stages a buffer of asterisks. One
-  commit later the real secret is gone and the repository contains `****`. The
-  disjoint-mountpoint model of FR-1 remains the macOS default and must stay
-  supported.
+  The reason it cannot be the default is data loss, not performance: the
+  masked-write-back hazard below is general to every enforced view, but macOS has
+  no per-process mount view, so path-preserving mode extends it from the agent's
+  processes to **the user's own tools** — every editor, IDE, and shell on the
+  machine reads the filtered view, so an ordinary `git add` outside any agent
+  session can destroy a secret. The disjoint-mountpoint model of FR-1 remains the
+  macOS default and must stay supported.
+
+- **FR-31a** **Masked write-back is a general hazard of any enforced view, on
+  every platform.** `.git/` resolves Allowed and passes through to the real
+  object store, so a process reading a Masked file inside *any* enforced view —
+  the Linux `exec` namespace (FR-28) included — can write those `*` bytes back
+  into real, durable state: `git add`/`git stash`/`git archive`, a tar or Docker
+  build context, or any content-addressed tool (`go.sum`, lockfiles, cargo
+  checksums) hashing the masked bytes. Git's stat cache (real mtime, and size is
+  preserved by FR-9) hides the substitution from a plain `git status`. The
+  hazard is not macOS-specific and not path-preserving-specific; FR-31 is only
+  its widest blast radius. Any enforcement mode that ships must state which
+  mitigation it relies on (route the agent's git to a scratch clone/worktree, or
+  skip masked paths on stage/commit); hiding `.git` closes it but removes git
+  from the agent.
 
 - **FR-32** **Process identity.** In path-preserving mode the adapter determines,
   per operation, whether the calling process belongs to a registered agent
@@ -1129,6 +1144,15 @@ alone.
 - **`CLONE_NEWUSER` makes the child believe it is root.** Some tools behave
   differently as uid 0. Accepted as the price of unprivileged mounting; document
   it in `exec`'s help text.
+- **A process inside an enforced view can write masked bytes back into durable
+  state** (FR-31a) — `git add` of a Masked file stages `****` into the real
+  object store, on Linux as well as macOS, because `.git/` is Allowed
+  passthrough. Accepted for now because masked files are usually ignored by the
+  repo they live in, and because the alternatives each cost something real
+  (hiding `.git` removes git; a scratch clone adds a workflow). Not acceptable to
+  leave undocumented: it must be stated wherever an enforced view is
+  recommended, and a mitigation chosen before enforcement is marketed as safe
+  for agents with commit access.
 - **The history database writes path names to disk** (FR-58).
 - **Per-path, not per-inode decisions** (FR-11).
 - **Two marked shortcuts** carry `ponytail:` comments naming their ceiling and

@@ -32,7 +32,11 @@ import (
 )
 
 // Run is the Linux entry point for `janusfs exec -- <command> [args...]`.
-func Run(ctx context.Context, targetArgs []string) (int, error) {
+// sandbox is accepted-and-ignored here: the mount namespace already denies
+// the real source for both read and write, so a second confinement
+// mechanism would be redundant. Keeping the parameter (rather than erroring
+// on it) lets --sandbox stay a uniform, harmless flag across platforms.
+func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
 	if len(targetArgs) == 0 {
 		return 125, errors.New("exec: no command specified to execute")
 	}

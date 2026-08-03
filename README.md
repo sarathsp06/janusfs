@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**JanusFS is a policy-enforcing filesystem for AI agents.** It mounts a filtered virtual filesystem backed by your real project, enforcing rules at the filesystem boundary: allowed files pass through, sensitive spans are redacted in place, and forbidden files fail closed with `EACCES`.
+**JanusFS is a policy-enforcing filesystem for AI agents.** It mounts a filtered virtual filesystem backed by your real project and applies policy at the filesystem boundary: allowed files pass through, sensitive spans are redacted in place, and forbidden files fail closed with `EACCES`. The strongest way to use it is `janusfs exec -- <your-agent>`, which runs the agent *inside* that boundary — kernel-enforced on Linux (see [Enforcement](#enforcement-run-your-agent-inside-the-boundary)).
 
 ![JanusFS — Filesystem boundary illustration](docs/janus_art.png)
 
@@ -19,6 +19,7 @@
 - Policy is enforced on every open, read, and directory listing; real files are never modified.
 - Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
 - A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
+- **Two enforcement tiers, stated up front.** On **Linux**, `janusfs exec -- <your-agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source — a real, kernel-enforced boundary. On **macOS** the mount is **advisory** (the real source stays readable at its own path); [Enforcement](#enforcement-run-your-agent-inside-the-boundary) explains why and what's coming. JanusFS is a policy boundary, not a sandbox.
 
 ---
 
@@ -26,6 +27,7 @@
 
 - [Why](#why)
 - [How it works](#how-it-works-flow-diagram)
+- [Enforcement](#enforcement-run-your-agent-inside-the-boundary)
 - [The problem](#the-problem)
 - [Architecture](#architecture)
 - [Quickstart](#quickstart)
@@ -74,6 +76,51 @@ Agent -> JanusFS -> decision:
 - MASKED  -> redaction layer (RAM cache) -> agent sees redacted bytes (same length)
 - HIDDEN  -> deny (EACCES) -> agent cannot read
 ```
+
+
+## Enforcement: run your agent inside the boundary
+
+Pointing an agent *at* the mountpoint is only as good as the agent's discipline — nothing stops a process from reaching the real source at its own path. To get a boundary the agent cannot step around, put the agent's whole process tree inside the filtered view. That is what `janusfs exec` does **on Linux**, and it is the strongest way to run JanusFS:
+
+```bash
+# Linux: run the command (and everything it spawns) inside the kernel-enforced view
+janusfs exec -- aider           # or a shell, a test run, any CLI
+```
+
+**Own the process tree, not one channel.** An agent has many ways to touch the filesystem — its `read_file` tool, its Bash tool, `git`, a build, a subprocess. Filtering any single one of those leaves the others open. On Linux `janusfs exec` confines the *entire* subprocess tree at once, so `git`, `npm`, `grep`, and every child inherit the filtered view transitively — allowed files pass through, masked files read as `****`, hidden files fail closed — with no per-tool wiring and no way for a child to opt out.
+
+### The two tiers, honestly
+
+- **Linux — kernel-enforced.** `janusfs exec` runs the command in a private mount namespace (`CLONE_NEWNS`) where the filtered view *replaces* the source at its own path, for both read and write. From inside, the unfiltered tree does not exist; a subprocess cannot reach it by any path. No daemon required, no path rewriting. This is the real boundary. (One consequence of the user namespace: the command sees itself as uid 0 — see `janusfs exec --help`.)
+- **macOS — advisory today.** macOS has no per-process mount namespace available to a third-party tool, so `janusfs exec` can only set the child's working directory to a disjoint mount, scrub `JANUSFS_*` env, and rewrite source-path argv entries — and it needs the daemon running. The real source stays reachable at its own path by any process that looks for it. Treat this as dev-time hygiene, not containment. For real enforcement on a Mac today, run the agent in a Linux container/VM (where `janusfs exec` works natively), or track the Seatbelt spike below.
+
+> **Wrapping an interactive editor or IDE is not the same as wrapping a headless agent.** `janusfs exec -- <your-editor>` puts *your own* tools inside the filtered view too, so a masked file you edit and `git add` stages `****` into real git (see the caveat below). `janusfs exec` is designed for headless agent/CLI runs; whether a specific agent harness even functions inside the Linux namespace (config/auth/network under a user namespace) is per-harness and not yet validated here — test yours before relying on it.
+
+### Real enforcement on a Mac today: run it in Linux
+
+Since the boundary is kernel-enforced only on Linux, the way to get it on a Mac is to put the agent in a Linux VM/container and run `janusfs exec` *inside* — the mount namespace is then a real one. Docker Desktop, Colima, and OrbStack all give you the Linux kernel needed:
+
+```bash
+# on the host: your project is bind-mounted into the container as /src
+docker run --rm -it \
+  --device /dev/fuse --cap-add SYS_ADMIN \
+  -v "$PWD:/src" -w /src \
+  golang:1.26 bash
+
+# inside the container (a real Linux kernel):
+apt-get update && apt-get install -y fuse3      # FUSE runtime
+go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
+janusfs init                     # or rely on the .janusfs.yml already in /src
+janusfs exec -- aider            # kernel-enforced: /src is the filtered view
+```
+
+`--device /dev/fuse` and `--cap-add SYS_ADMIN` are what let FUSE mount inside the container. The agent's whole process tree is confined by the namespace, exactly as on a Linux host: `/src` is the real bind-mount, but inside `janusfs exec` it is replaced by the filtered view, and the container gives the agent no other route to the host filesystem. Devcontainers work the same way; add the two flags via `runArgs`.
+
+### macOS enforcement — Seatbelt (spike, not shipped)
+
+A feasibility spike shows macOS Seatbelt (`sandbox-exec`) can confine a plain-CLI subprocess tree at the kernel level — denying access to the real source path while allowing the mountpoint — which would give macOS a genuine **deny** boundary (kernel-enforced Hidden) without a kernel extension. Masking would still be FUSE-served (Seatbelt can deny bytes, not rewrite them). It is **not wired into `janusfs exec`**, and it is unverified against a real signed/Electron harness. Findings, the validated profile, and open risks live in [`docs/SEATBELT_SPIKE.md`](docs/SEATBELT_SPIKE.md).
+
+> **One caveat that applies to every enforced-view design:** because `.git/` passes through to the real object store, running `git add` on a *masked* file inside the view stages the `****` bytes into real git. Keep secret files out of the agent's commits (they are typically `.gitignore`d), or give the agent a scratch clone. See `docs/SEATBELT_SPIKE.md` for the full note.
 
 
 ## The problem

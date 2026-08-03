@@ -120,6 +120,15 @@ view is available at the same absolute path as the source, every step above
 disappears: no cwd hijack, no argv rewrite, no readiness race. See
 [platform isolation models](platform-isolation.md).
 
+**`--sandbox` does not fix any of this.** PRP 09's Seatbelt confinement
+(platform isolation's Option D) is additive to the darwin path above, not a
+replacement for it: the child still runs against the disjoint mountpoint, with
+the same cwd hijack and argv rewriting and the same fragility described here.
+What `--sandbox` changes is that a path the rewriter *misses* — one reaching
+the child through a channel it cannot rewrite, such as an environment
+variable, a symlink, or a dynamically-computed string — is now denied by the
+kernel instead of silently succeeding against the real source.
+
 # Two defects, now fixed
 
 **Exec used to ignore its own readiness failure mode.** If the daemon is not
