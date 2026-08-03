@@ -21,52 +21,21 @@ sources:
 ---
 
 Every item below was found by reading source, not by running an exploit. The
-two marked **unverified** need a test to confirm before they are treated as
+item marked **unverified** needs a test to confirm before it is treated as
 fact; the rest are readable directly from the code.
 
-Nine items closed so far — the agent hardlink bypass, the case-folding
+Ten items closed so far — the agent hardlink bypass, the case-folding
 bypass, `exec`'s silent cwd default, the duplicated control-protocol types,
 `doctor`'s unrecoverable mountpoint ([PRP 01](/PRPs/01-correctness-fixes.md)),
 the ungracefully-killed-daemon hang ([PRP 02](/PRPs/02-crash-recovery-watchdog.md)),
 the unmemoized decision engine ([PRP 03](/PRPs/03-decision-cache.md)), the
 read-path TOCTOU window ([PRP 05](/PRPs/05-dirfd-backing-layer.md)), the
 open-handle revocation gap
-([PRP 08](/PRPs/08-reload-revocation.md)), and the hardcoded dev-only mock paths — have been removed from this
+([PRP 08](/PRPs/08-reload-revocation.md)), the hardcoded dev-only mock paths,
+and the masked-xattr redaction side channel — have been removed from this
 register. See those PRPs and [`log.md`](log.md) for what changed.
 
-# 1. Confirmed: xattr is a redaction side channel for MASKED files
-
-`Getxattr` and `Listxattr` pass through for `Masked` files
-(`internal/mount/janus_node.go:612`, `:626`) because both gate on
-`denyHidden`, which only blocks `Hidden` — `gate`'s doc at
-`internal/mount/janus_node.go:242` calls this deliberate ("xattr reads"
-grouped with read/traverse operations). The redaction pipeline only ever
-processes the data fork; nothing in `internal/redact` or `internal/provider`
-touches extended attributes.
-
-**Confirmed by test**, not merely theoretical: `TestMaskedXattrSideChannel`
-(`internal/mount/integration_test.go`) writes a secret directly into an xattr
-on a MASKED file's backing path, then reads it back through
-`Listxattr`/`Getxattr` on the mount — full, unredacted content comes back.
-Written but **not run** in this environment (macFUSE is installed but not
-approved for this sandbox, so `make integration`/`make leak-oracle` cannot
-mount here at all — the same failure `TestListxattrGating` hits unmodified).
-Needs a run on a machine where the mount actually comes up before this is
-closed.
-
-This is a real, if narrow, leak path: on macOS in particular, editors,
-Spotlight, and quarantine metadata routinely write xattrs (e.g.
-`com.apple.metadata:*`, `com.apple.quarantine`) whose *values* can themselves
-carry attacker- or agent-supplied bytes. The fix, if this environment's result
-is confirmed elsewhere, is straightforward and narrow: change `Getxattr` and
-`Listxattr`'s gate class from `denyHidden` to `denyNonAllowed` for MASKED
-files specifically (HIDDEN already denies under either class) — there is no
-xattr redaction to fall back to, so failing closed is the only correct
-behaviour once MASKED, not ALLOWED, is what a caller is looking at. `Setxattr`
-and `Removexattr` already use `denyNonAllowed`; only the two read-side
-handlers are inconsistent with them.
-
-# 2. Unverified: whether the `readdir` inode-zeroing has a cost
+# 1. Unverified: whether the `readdir` inode-zeroing has a cost
 
 `Getattr` zeroes `out.Ino` on every call (`internal/mount/janus_node.go:209`) so
 go-fuse assigns synthetic inode numbers, avoiding "overriding ino" warnings when
@@ -77,7 +46,7 @@ explains the motivation clearly.
 stable inode identity across a remount — `find -samefile`, hardlink detection in
 `tar`/`rsync`, or `du` deduplication. Worth one test before treating it as free.
 
-# 3. `TestVirtualDir` fails on at least one real macFUSE setup
+# 2. `TestVirtualDir` fails on at least one real macFUSE setup
 
 Found while validating [PRP 01](/PRPs/01-correctness-fixes.md), and confirmed
 **pre-existing** (reproduces identically against a clean checkout of HEAD, with
