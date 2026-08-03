@@ -68,6 +68,8 @@ type IgnoreLevel struct {
 	File     string // absolute path to the policy file
 	Patterns []*ignorePattern
 	RawLines []RawLine
+	IsGlobal bool
+	RelDir   string
 
 	// Poisoned is true if any line in this file failed to compile, which folds
 	// every path this level covers to Hidden. The reasoning:
@@ -99,9 +101,11 @@ type MaskEntry struct {
 
 // MaskLevel is one directory's compiled mask policy.
 type MaskLevel struct {
-	Dir     string
-	File    string
-	Entries []MaskEntry
+	Dir      string
+	File     string
+	Entries  []MaskEntry
+	IsGlobal bool
+	RelDir   string
 }
 
 // RuleSet is the immutable, compiled result of discovery. Levels are ordered
@@ -168,11 +172,27 @@ func (rs *RuleSet) loadLevel(dir string) {
 		rs.PolicyDirs = append(rs.PolicyDirs, dir)
 	}
 	ignore, hasIgnore, mask, hasMask, errs := loadPolicyLevel(dir, rs.FoldCase)
+
+	isGlobal := rs.GlobalDir != "" && dir == rs.GlobalDir
+	var relDir string
+	if !isGlobal {
+		if rel, err := filepath.Rel(rs.Root, dir); err == nil {
+			relDir = filepath.ToSlash(rel)
+			if relDir == "." {
+				relDir = ""
+			}
+		}
+	}
+
 	if hasIgnore {
+		ignore.IsGlobal = isGlobal
+		ignore.RelDir = relDir
 		rs.IgnoreLevels = append(rs.IgnoreLevels, ignore)
 		rs.DiscoverErrs = append(rs.DiscoverErrs, ignore.LineErrs...)
 	}
 	if hasMask {
+		mask.IsGlobal = isGlobal
+		mask.RelDir = relDir
 		rs.MaskLevels = append(rs.MaskLevels, mask)
 	}
 	rs.DiscoverErrs = append(rs.DiscoverErrs, errs...)
