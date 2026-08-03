@@ -179,6 +179,45 @@ func TestListxattrGating(t *testing.T) {
 	}
 }
 
+// TestMaskedXattrSideChannel answers known-gaps.md item 1: does writing to a
+// MASKED file's extended attributes, directly on the backing source path (not
+// through the mount, since Setxattr on the mount already requires ALLOWED),
+// leak that data back out through Getxattr/Listxattr on the mount? The
+// redaction pipeline only ever processes the data fork, so there is no
+// reduced-but-safe MASKED view of an xattr the way there is of file content —
+// Getxattr/Listxattr must fail closed (EACCES) for MASKED, the same as
+// Setxattr/Removexattr already do, not merely pass through as denyHidden once
+// did. Confirmed as a real leak before this fix landed (not merely
+// theoretical): the same assertions below failed with the xattr content
+// coming back in full, unredacted.
+func TestMaskedXattrSideChannel(t *testing.T) {
+	src := t.TempDir()
+	mountpoint := t.TempDir()
+
+	writeFixture(t, filepath.Join(src, ".janusmask"), "secret.env\n")
+	writeFixture(t, filepath.Join(src, "secret.env"), "SECRET=plaintext-value\n")
+
+	const attrName = "user.janusfs-leak-oracle"
+	secretXattr := []byte("xattr-carried-secret")
+	if err := unix.Setxattr(filepath.Join(src, "secret.env"), attrName, secretXattr, 0); err != nil {
+		t.Skipf("extended attributes unsupported on this filesystem: %v", err)
+	}
+
+	_, cleanup := mountForTest(t, src, mountpoint)
+	defer cleanup()
+
+	mountedPath := filepath.Join(mountpoint, "secret.env")
+
+	if _, err := unix.Listxattr(mountedPath, nil); err != unix.EACCES {
+		t.Errorf("expected EACCES on Listxattr of masked file, got %v", err)
+	}
+
+	readBack := make([]byte, len(secretXattr))
+	if _, err := unix.Getxattr(mountedPath, attrName, readBack); err != unix.EACCES {
+		t.Errorf("expected EACCES on Getxattr of masked file, got %v", err)
+	}
+}
+
 // TestReloadTakesEffectWithoutRemount asserts that a policy tightening (here,
 // a file newly added to .janusfs.yml) is visible on the very next lookup and
 // open of that path, with no remount. This is the behavioural counterpart to

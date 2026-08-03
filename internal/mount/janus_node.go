@@ -237,12 +237,17 @@ type gateClass int
 
 const (
 	// denyNonAllowed: mutating operations (create, delete, rename, chmod,
-	// hardlink, xattr writes) require ALLOWED — both MASKED and HIDDEN deny.
+	// hardlink, xattr reads and writes) require ALLOWED — both MASKED and
+	// HIDDEN deny. Xattr reads (Getxattr/Listxattr) are grouped here, not
+	// under denyHidden, because xattr values are never redacted — there is
+	// no reduced-but-safe MASKED view of an attribute the way there is of
+	// file content, so MASKED must fail closed the same as HIDDEN.
 	denyNonAllowed gateClass = iota
-	// denyHidden: read/traverse operations (opendir, readlink, xattr reads)
-	// and directory create/remove pass ALLOWED and MASKED, denying only
-	// HIDDEN. Directories are never MASKED (FR-10), so for mkdir/rmdir the
-	// MASKED arm is simply unreachable.
+	// denyHidden: read/traverse operations whose content or presence the
+	// redaction pipeline already accounts for (opendir, readlink) and
+	// directory create/remove pass ALLOWED and MASKED, denying only HIDDEN.
+	// Directories are never MASKED (FR-10), so for mkdir/rmdir the MASKED
+	// arm is simply unreachable.
 	denyHidden
 )
 
@@ -609,12 +614,19 @@ func escapesRoot(rootAbs, symlinkAbsPath, target string) bool {
 
 var _ = (fs.NodeGetxattrer)((*JanusNode)(nil))
 
+// Getxattr is denied (EACCES) unless ALLOWED. Extended attribute values are
+// never redacted — internal/redact only ever processes the data fork — so a
+// MASKED file's xattrs must fail closed the same as its Setxattr/Removexattr,
+// not merely its HIDDEN case; passing them through would let a value written
+// out of band on the backing path carry MASKED content around the redaction
+// pipeline entirely (see docs/knowledge/known-gaps.md item 1, confirmed by
+// TestMaskedXattrSideChannel).
 func (n *JanusNode) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, syscall.Errno) {
 	start := time.Now()
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("getxattr", dec, 0, start) }()
-	if e := gate(denyHidden, d); e != 0 {
+	if e := gate(denyNonAllowed, d); e != 0 {
 		return 0, e
 	}
 	return n.LoopbackNode.Getxattr(ctx, attr, dest)
@@ -622,13 +634,16 @@ func (n *JanusNode) Getxattr(ctx context.Context, attr string, dest []byte) (uin
 
 var _ = (fs.NodeListxattrer)((*JanusNode)(nil))
 
-// Listxattr is denied (EACCES) if HIDDEN, and passes through otherwise.
+// Listxattr is denied (EACCES) unless ALLOWED — see Getxattr's doc: xattr
+// values are never redacted, so a MASKED file's attribute names (which can
+// themselves be sensitive, and whose presence would invite a Getxattr call)
+// must fail closed too, not just HIDDEN.
 func (n *JanusNode) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errno) {
 	start := time.Now()
 	d := n.resolve().Decision
 	dec := d.String()
 	defer func() { n.observe("listxattr", dec, 0, start) }()
-	if e := gate(denyHidden, d); e != 0 {
+	if e := gate(denyNonAllowed, d); e != 0 {
 		return 0, e
 	}
 	return n.LoopbackNode.Listxattr(ctx, dest)
