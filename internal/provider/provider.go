@@ -19,7 +19,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -353,16 +354,37 @@ func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
 // Pattern.Name is unique per builtin and per distinct custom regex source, so a
 // sorted join of names is a sufficient signature.
 func patternSignature(pats []*patterns.Pattern) string {
-	names := make([]string, len(pats))
+	n := len(pats)
+	if n == 0 {
+		return ""
+	}
+	if n == 1 {
+		return pats[0].Name + "\x00"
+	}
+
+	var arr [8]string
+	var names []string
+	if n <= 8 {
+		names = arr[:n]
+	} else {
+		names = make([]string, n)
+	}
+
+	totalLen := n
 	for i, p := range pats {
 		names[i] = p.Name
+		totalLen += len(p.Name)
 	}
-	sort.Strings(names)
-	sig := ""
-	for _, n := range names {
-		sig += n + "\x00"
+
+	slices.Sort(names)
+
+	var sb strings.Builder
+	sb.Grow(totalLen)
+	for _, name := range names {
+		sb.WriteString(name)
+		sb.WriteByte(0)
 	}
-	return sig
+	return sb.String()
 }
 
 func copyAt(src, dst []byte, off int64) int {
