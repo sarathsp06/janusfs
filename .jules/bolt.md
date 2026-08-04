@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-04 - In-Place Slice Iteration & Pointer Retrieval for Level Matching
+
+**Learning:**
+Eagerly allocating intermediate slices of large structs (like `IgnoreLevel` and `MaskLevel`) when evaluating applicable rules in path resolution adds substantial heap memory footprint and increases GC pressure. Struct copying across stack frames and slice expansion are major contributors to heap allocations.
+By directly iterating over the rule-set level slices using `range` over indices and grabbing pointers to the elements (e.g. `lvl := &rs.IgnoreLevels[i]`), we avoid intermediate slice allocations and struct field copying entirely.
+
+**Action:**
+Refactored `resolveIgnore` and `Resolve` in `internal/rules/resolve.go` to iterate over slice indices and work with level pointers directly. Deleted the unused `applicableIgnoreLevels`, `applicableMaskLevels`, and `isGlobalOrAncestor` helper functions. This cut `BenchmarkResolveCacheMiss` memory allocation by 86.2% and allocation counts by 38.8%, speeding up cache-miss resolution by 17%.
