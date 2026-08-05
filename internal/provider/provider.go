@@ -105,13 +105,14 @@ type RedactedContentProvider interface {
 // and safe to read without the cache's lock (only the rebuild goroutine
 // ever writes them, exactly once, before setting built).
 type entry struct {
-	key        ContentKey
-	patternSig string // stable signature of the pattern set the bytes were built from
-	ready      chan struct{}
-	built      bool // guarded by RamCache.mu; true once bytes/rebuildErr are final
-	bytes      []byte
-	rebuildErr error
-	lruElem    *list.Element
+	key          ContentKey
+	patternSig   string   // stable signature of the pattern set the bytes were built from
+	patternNames []string // sorted names of the patterns used to build the bytes
+	ready        chan struct{}
+	built        bool // guarded by RamCache.mu; true once bytes/rebuildErr are final
+	bytes        []byte
+	rebuildErr   error
+	lruElem      *list.Element
 }
 
 // RamCache implements RedactedContentProvider as a single-mutex-guarded LRU.
@@ -156,6 +157,22 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
+	// High-performance cache-hit fast path: check under the lock if the exact
+	// matching version is already built AND the requested pattern set is identical.
+	// If so, return it directly to avoid generating the pattern signature string and
+	// waiting on channel/context select blocks.
+	c.mu.Lock()
+	if e, ok := c.entries[key.path]; ok && e.key == key {
+		if e.built && matchPatterns(pats, e.patternNames) {
+			c.touchLocked(e)
+			bytesOut := e.bytes
+			err := e.rebuildErr
+			c.mu.Unlock()
+			return copyAt(bytesOut, p, off), err
+		}
+	}
+	c.mu.Unlock()
+
 	sig := patternSignature(pats)
 
 	c.mu.Lock()
@@ -186,7 +203,12 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 	}
 	c.misses.Add(1)
 	c.rebuilds.Add(1)
-	ne := &entry{key: key, patternSig: sig, ready: make(chan struct{})}
+	ne := &entry{
+		key:          key,
+		patternSig:   sig,
+		patternNames: copyPatternNames(pats),
+		ready:        make(chan struct{}),
+	}
 	c.entries[key.path] = ne
 	ne.lruElem = c.lru.PushFront(ne)
 	c.mu.Unlock()
@@ -407,4 +429,52 @@ type bytesSink struct{ b []byte }
 func (w *bytesSink) Write(p []byte) (int, error) {
 	w.b = append(w.b, p...)
 	return len(p), nil
+}
+
+// matchPatterns checks if the requested pats match the cached ePatternNames
+// completely without any allocations when len(pats) <= 8.
+func matchPatterns(pats []*patterns.Pattern, cachedNames []string) bool {
+	if len(pats) != len(cachedNames) {
+		return false
+	}
+	if len(pats) == 0 {
+		return true
+	}
+	if len(pats) == 1 {
+		return pats[0].Name == cachedNames[0]
+	}
+
+	var arr [8]string
+	var names []string
+	n := len(pats)
+	if n <= 8 {
+		names = arr[:n]
+	} else {
+		names = make([]string, n)
+	}
+
+	for i, p := range pats {
+		names[i] = p.Name
+	}
+
+	slices.Sort(names)
+
+	for i := range names {
+		if names[i] != cachedNames[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func copyPatternNames(pats []*patterns.Pattern) []string {
+	if len(pats) == 0 {
+		return nil
+	}
+	names := make([]string, len(pats))
+	for i, p := range pats {
+		names[i] = p.Name
+	}
+	slices.Sort(names)
+	return names
 }
