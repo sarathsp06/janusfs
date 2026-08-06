@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-06 - Eliminating Level-Filtering Intermediate Slices & Struct Copying in Hot Resolution Path
+
+**Learning:**
+Collecting applicable policy levels (e.g. `IgnoreLevel` and `MaskLevel` structs) during rule resolution by building filtered slices dynamically (via helper functions like `applicableIgnoreLevels` and `applicableMaskLevels`) results in significant heap allocations and GC overhead. Furthermore, because these slices contain whole `IgnoreLevel`/`MaskLevel` structs rather than pointers, iterating over them copies large structs with multiple fields on each loop step.
+Replacing these helper functions with direct index-based iteration over the original levels slice in `RuleSet` and taking pointer references (`&rs.IgnoreLevels[i]` / `&rs.MaskLevels[i]`) completely eliminates intermediate slice allocations and avoids struct copying.
+
+**Action:**
+Removed `applicableIgnoreLevels` and `applicableMaskLevels` from `internal/rules/resolve.go`. Updated both `Resolve` and `resolveIgnore` to directly loop over `rs.IgnoreLevels` and `rs.MaskLevels` by index, checking `isApplicable` on pointers. This optimization reduced `BenchmarkResolveCacheMiss` memory allocations by **86.2%** (from 28,706 B/op to 3,950 B/op) and allocation count by **38.8%** (from 103 to 63 allocs/op), while improving resolution latency by **18%**.
