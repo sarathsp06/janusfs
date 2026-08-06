@@ -75,7 +75,11 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 	var patternNames []string
 	maskRef := ""
 
-	for _, lvl := range rs.applicableMaskLevels(relPath) {
+	for i := range rs.MaskLevels {
+		lvl := &rs.MaskLevels[i]
+		if !lvl.isApplicable(relPath) {
+			continue
+		}
 		relToLevel := lvl.relativeTo(rs, relPath)
 
 		for _, entry := range lvl.Entries {
@@ -146,7 +150,11 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 func (rs *RuleSet) resolveIgnore(relPath string, isDir bool) (hidden bool, ruleRef string, poisoned bool, trace []TraceEntry) {
 	floorHidden := false
 
-	for _, lvl := range rs.applicableIgnoreLevels(relPath) {
+	for i := range rs.IgnoreLevels {
+		lvl := &rs.IgnoreLevels[i]
+		if !lvl.isApplicable(relPath) {
+			continue
+		}
 		isGlobalTier := rs.GlobalDir != "" && lvl.Dir == rs.GlobalDir
 
 		if lvl.Poisoned {
@@ -269,26 +277,6 @@ func (lvl *MaskLevel) relativeTo(rs *RuleSet, relPath string) string {
 		return "."
 	}
 	return relPath[len(lvl.RelDir)+1:]
-}
-
-func (rs *RuleSet) applicableIgnoreLevels(relPath string) []IgnoreLevel {
-	var out []IgnoreLevel
-	for _, lvl := range rs.IgnoreLevels {
-		if lvl.isApplicable(relPath) {
-			out = append(out, lvl)
-		}
-	}
-	return out
-}
-
-func (rs *RuleSet) applicableMaskLevels(relPath string) []MaskLevel {
-	var out []MaskLevel
-	for _, lvl := range rs.MaskLevels {
-		if lvl.isApplicable(relPath) {
-			out = append(out, lvl)
-		}
-	}
-	return out
 }
 
 func isGlobalOrAncestor(rs *RuleSet, levelDir, full string) bool {
