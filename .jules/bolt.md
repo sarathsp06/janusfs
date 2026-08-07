@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-07 - Zero-Allocation Redacted Cache Hit Path Bypass
+
+**Learning:**
+Generating a sorted `patternSignature` string on every `ReadAt` call inside FUSE read paths consumes substantial allocation overhead (such as slice sorting, string building, etc.), even for a clean cache hit where we already have a built and valid `ContentKey` entry.
+By introducing an in-place pattern-to-signature checker `patternsMatchSig` that utilizes a stack-allocated array for up to 8 patterns and scans/validates the stored signature directly against the input pattern slice, we can completely bypass `patternSignature` generation on cache hits.
+
+**Action:**
+Added `patternsMatchSig` helper function in `internal/provider/provider.go`. Refactored `RamCache.ReadAt` to acquire the cache lock first, check if there is an exact matching `ContentKey` entry that is already built with no errors, and verify if the patterns match its signature using the zero-allocation `patternsMatchSig` function. If verified, we touch the entry, copy its bytes, release the lock, and return immediately. This achieves exactly 0 B/op and 0 allocations on cache hits, as verified by `BenchmarkReadAtCacheHit`.
