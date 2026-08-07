@@ -156,6 +156,17 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
+	c.mu.Lock()
+	if e, ok := c.entries[key.path]; ok && e.key == key {
+		if e.built && e.rebuildErr == nil && patternsMatchSig(pats, e.patternSig) {
+			c.touchLocked(e)
+			bytes := e.bytes
+			c.mu.Unlock()
+			return copyAt(bytes, p, off), nil
+		}
+	}
+	c.mu.Unlock()
+
 	sig := patternSignature(pats)
 
 	c.mu.Lock()
@@ -385,6 +396,44 @@ func patternSignature(pats []*patterns.Pattern) string {
 		sb.WriteByte(0)
 	}
 	return sb.String()
+}
+
+func patternsMatchSig(pats []*patterns.Pattern, sig string) bool {
+	n := len(pats)
+	if n == 0 {
+		return sig == ""
+	}
+	if n == 1 {
+		return len(sig) == len(pats[0].Name)+1 && strings.HasPrefix(sig, pats[0].Name) && sig[len(sig)-1] == 0
+	}
+
+	var arr [8]string
+	var names []string
+	if n <= 8 {
+		names = arr[:n]
+	} else {
+		return false
+	}
+
+	for i, p := range pats {
+		names[i] = p.Name
+	}
+	slices.Sort(names)
+
+	idx := 0
+	for _, name := range names {
+		if idx+len(name) >= len(sig) {
+			return false
+		}
+		if sig[idx+len(name)] != 0 {
+			return false
+		}
+		if sig[idx:idx+len(name)] != name {
+			return false
+		}
+		idx += len(name) + 1
+	}
+	return idx == len(sig)
 }
 
 func copyAt(src, dst []byte, off int64) int {

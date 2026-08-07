@@ -285,6 +285,37 @@ func BenchmarkPatternSignature0(b *testing.B) {
 	}
 }
 
+func BenchmarkReadAtCacheHit(b *testing.B) {
+	dir, err := os.MkdirTemp("", "janusfs-provider-bench")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	path := filepath.Join(dir, ".env")
+	key := writeFile(&testing.T{}, path, "API_KEY=value12345678\n")
+	pats, err := patterns.ParsePatternRef("env-value")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	c := NewRamCache(1<<20, 1<<20, 1<<20)
+	p := make([]byte, 64)
+	ctx := context.Background()
+	op := opener(key.Path())
+
+	// Warm the cache
+	if _, err := c.ReadAt(ctx, key, pats, p, 0, op); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = c.ReadAt(ctx, key, pats, p, 0, op)
+	}
+}
+
 func BenchmarkPatternSignature1(b *testing.B) {
 	pats, err := patterns.ParsePatternRef("env-value")
 	if err != nil {
