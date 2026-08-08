@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-08 - Zero-Allocation Rule Level Traversals on Resolution Hot-Path
+
+**Learning:**
+Traversing nested rules or levels inside a FUSE filesystem is a core hot-path. Returning newly allocated, copy-by-value slices (such as `[]IgnoreLevel` or `[]MaskLevel`) from helper lookup methods forces unnecessary heap allocations and large struct copying, creating significant garbage collector and cache pressure.
+By completely inlining these checks and performing in-place iteration directly over rule-set levels using slice indices and pointers (e.g., `&rs.IgnoreLevels[i]`), slice allocation and struct copying are entirely avoided.
+
+**Action:**
+Refactored `resolveIgnore` and `Resolve` in `internal/rules/resolve.go` to traverse `rs.IgnoreLevels` and `rs.MaskLevels` via in-place index and pointer access. Safely deleted the deprecated helper methods `applicableIgnoreLevels`, `applicableMaskLevels`, and `ancestorDirs`, achieving zero-allocation traversal and struct copy overhead.
