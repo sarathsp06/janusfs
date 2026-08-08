@@ -31,6 +31,7 @@ func startChild(t *testing.T, env []string, args ...string) int {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start child: %v", err)
 	}
+	time.Sleep(15 * time.Millisecond)
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_, _ = io.Copy(io.Discard, pipe)
