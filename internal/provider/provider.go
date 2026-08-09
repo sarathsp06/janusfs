@@ -156,6 +156,16 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
+	c.mu.Lock()
+	if e, ok := c.entries[key.path]; ok && e.key == key {
+		if e.built && patternMatchesSig(pats, e.patternSig) {
+			c.touchLocked(e)
+			c.mu.Unlock()
+			return copyAt(e.bytes, p, off), nil
+		}
+	}
+	c.mu.Unlock()
+
 	sig := patternSignature(pats)
 
 	c.mu.Lock()
@@ -353,6 +363,43 @@ func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
 // string, for deciding whether a cached entry's pattern set is unchanged.
 // Pattern.Name is unique per builtin and per distinct custom regex source, so a
 // sorted join of names is a sufficient signature.
+func patternMatchesSig(pats []*patterns.Pattern, sig string) bool {
+	n := len(pats)
+	if n == 0 {
+		return sig == ""
+	}
+	if n == 1 {
+		if len(sig) != len(pats[0].Name)+1 {
+			return false
+		}
+		return sig[len(sig)-1] == 0 && sig[:len(sig)-1] == pats[0].Name
+	}
+	if n > 8 {
+		return patternSignature(pats) == sig
+	}
+
+	var arr [8]string
+	names := arr[:n]
+	for i, p := range pats {
+		names[i] = p.Name
+	}
+
+	slices.Sort(names)
+
+	rem := sig
+	for _, name := range names {
+		if !strings.HasPrefix(rem, name) {
+			return false
+		}
+		rem = rem[len(name):]
+		if len(rem) == 0 || rem[0] != 0 {
+			return false
+		}
+		rem = rem[1:]
+	}
+	return len(rem) == 0
+}
+
 func patternSignature(pats []*patterns.Pattern) string {
 	n := len(pats)
 	if n == 0 {

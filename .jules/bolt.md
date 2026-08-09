@@ -30,3 +30,13 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-09 - Zero-Allocation Cache Hit Fast-Path in FUSE RAM Cache
+
+**Learning:**
+Generating a stable, order-independent signature string (`patternSignature`) for every single cache lookup in `RamCache.ReadAt` introduces significant CPU latency and memory allocation overhead. Under realistic hot-path workloads where files are read sequentially and patterns are unchanging, invoking `strings.Builder` and slice/sorting helpers for clean cache-hit paths generates unnecessary GC pressure.
+
+By checking if the entry is already built and evaluating signature matching directly via a stack-allocated array (for up to 8 patterns) with a zero-allocation parsing approach (`patternMatchesSig`), we can completely bypass signature generation, channel creations, context checks, and lock-handling overhead.
+
+**Action:**
+Implemented `patternMatchesSig` using a local stack-allocated array for up to 8 patterns to perform sorted, zero-allocation comparison with the existing signature string. Optimized the cache-hit path in `RamCache.ReadAt` to evaluate this helper under the first lock. If a hit is verified and built, the cached bytes are copied and returned immediately. Slashed `BenchmarkReadAtCacheHit` from 749.9 ns/op down to 64.44 ns/op (a ~11.6x speedup) and reduced memory usage to exactly 0 B/op and 0 allocs/op (a 100% reduction).

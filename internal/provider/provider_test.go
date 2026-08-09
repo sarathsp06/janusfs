@@ -18,7 +18,7 @@ func opener(path string) Opener {
 	return func() (io.ReadCloser, error) { return os.Open(path) }
 }
 
-func writeFile(t *testing.T, path, content string) ContentKey {
+func writeFile(t testing.TB, path, content string) ContentKey {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func writeFile(t *testing.T, path, content string) ContentKey {
 	return NewContentKey(path, fi.ModTime().UnixNano(), fi.Size(), inode, 1)
 }
 
-func envValuePats(t *testing.T) []*patterns.Pattern {
+func envValuePats(t testing.TB) []*patterns.Pattern {
 	t.Helper()
 	ps, err := patterns.ParsePatternRef("env-value")
 	if err != nil {
@@ -282,6 +282,74 @@ func BenchmarkPatternSignature0(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = patternSignature(pats)
+	}
+}
+
+func TestPatternMatchesSig(t *testing.T) {
+	pats0 := []*patterns.Pattern{}
+	pats1 := []*patterns.Pattern{{Name: "env-value"}}
+	pats2 := []*patterns.Pattern{{Name: "jwt"}, {Name: "env-value"}}
+	patsMany := []*patterns.Pattern{
+		{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"},
+		{Name: "e"}, {Name: "f"}, {Name: "g"}, {Name: "h"}, {Name: "i"},
+	}
+
+	sig0 := patternSignature(pats0)
+	sig1 := patternSignature(pats1)
+	sig2 := patternSignature(pats2)
+	sigMany := patternSignature(patsMany)
+
+	tests := []struct {
+		name string
+		pats []*patterns.Pattern
+		sig  string
+		want bool
+	}{
+		{"empty match", pats0, sig0, true},
+		{"empty mismatch", pats0, "something", false},
+		{"one match", pats1, sig1, true},
+		{"one mismatch name", pats1, "jwt\x00", false},
+		{"one mismatch format", pats1, "env-value", false},
+		{"two match", pats2, sig2, true},
+		{"two mismatch order check", pats2, "jwt\x00env-value\x00", false}, // because the canonical signature must be sorted
+		{"two mismatch name", pats2, "env-value\x00db-uri\x00", false},
+		{"many match", patsMany, sigMany, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := patternMatchesSig(tt.pats, tt.sig); got != tt.want {
+				t.Errorf("patternMatchesSig() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func BenchmarkReadAtCacheHit(b *testing.B) {
+	dir := b.TempDir()
+	key := writeFile(b, filepath.Join(dir, ".env"), "API_KEY=supersecret\n")
+	pats := envValuePats(b)
+
+	c := NewRamCache(1<<20, 1<<20, 1<<20)
+	p := make([]byte, 64)
+
+	// Populate the cache
+	_, err := c.ReadAt(context.Background(), key, pats, p, 0, opener(key.Path()))
+	if err != nil {
+		b.Fatalf("ReadAt: %v", err)
+	}
+
+	// Wait briefly for background rebuild to finish so the cache entry is fully built
+	time.Sleep(10 * time.Millisecond)
+
+	op := opener(key.Path())
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, err = c.ReadAt(context.Background(), key, pats, p, 0, op)
+		if err != nil {
+			b.Fatalf("ReadAt hit: %v", err)
+		}
 	}
 }
 
