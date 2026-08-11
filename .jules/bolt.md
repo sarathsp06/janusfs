@@ -30,3 +30,13 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-11 - Zero-Allocation Path Eligibility Filtering & In-Place Iteration in Decision Engine
+
+**Learning:**
+Rule resolution and applicability checks within `internal/rules/resolve.go` are critical hot-paths. Slicing and copying levels into temporary slice lists (e.g., via `applicableIgnoreLevels` and `applicableMaskLevels`) copy whole structs and allocate slice headers, producing significant memory allocation rates and CPU/GC pressure.
+Additionally, doing string concatenation such as `lvl.RelDir+"/"` during `isApplicable` checks allocates new strings on the heap continuously.
+We can avoid both issues completely. By checking paths using sequential string-length comparisons and prefix matches (`len(relPath) > len(lvl.RelDir) && relPath[len(lvl.RelDir)] == '/' && strings.HasPrefix(relPath, lvl.RelDir)`), we bypass string allocation. By iterating on levels in-place using index-based slice pointers (`&rs.IgnoreLevels[i]` and `&rs.MaskLevels[i]`), we avoid intermediate allocations and copying.
+
+**Action:**
+Optimized `isApplicable` on both `IgnoreLevel` and `MaskLevel` to be zero-allocation. Refactored `Resolve` and `resolveIgnore` to perform in-place level scans with slice index pointers, and completely removed the now-redundant helper functions `applicableIgnoreLevels`, `applicableMaskLevels`, `ancestorDirs`, and `isGlobalOrAncestor`. Slashed `BenchmarkResolveCacheMiss` allocations by over 99% (from 28,713 B/op to 256 B/op) and allocation counts by 97.1% (from 103 to 3 allocs/op), resulting in a 20.2% latency reduction.
