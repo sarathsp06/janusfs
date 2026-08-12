@@ -104,9 +104,9 @@ func runMount(req daemonRequest) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(resp.Message)
+	fmt.Printf("%s %s\n", symGood(), resp.Message)
 	for _, m := range resp.Mounts {
-		fmt.Printf("  Dashboard: %s\n", m.Dashboard)
+		fmt.Printf("  %s %s\n", cDim("Dashboard:"), m.Dashboard)
 	}
 	return nil
 }

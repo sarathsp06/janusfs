@@ -43,83 +43,73 @@ func newDoctorCmd() *cobra.Command {
 }
 
 func printDoctorReport(r *health.Report) {
-	fmt.Printf("JanusFS Doctor — %s\n", r.Version)
-	fmt.Println()
+	fmt.Printf("%s %s\n\n", cBold("JanusFS Doctor —"), r.Version)
 
 	// FUSE/macFUSE status.
+	fuseLabel := "FUSE"
 	if r.Runtime.OS == "darwin" {
-		fmt.Print("macFUSE: ")
-		if r.MacFUSE.Installed {
-			fmt.Print("installed")
-			if r.MacFUSE.Loaded {
-				fmt.Print(", loaded")
-			} else {
-				fmt.Print(", NOT loaded (run `sudo kextload` or approve in System Settings)")
-			}
-			if r.MacFUSE.Version != "" {
-				fmt.Printf(" (version %s)", r.MacFUSE.Version)
-			}
-			fmt.Println()
-		} else {
-			fmt.Println("NOT installed (install with `brew install --cask macfuse`)")
+		fuseLabel = "macFUSE"
+	}
+	switch {
+	case r.MacFUSE.Installed && r.MacFUSE.Loaded:
+		msg := "installed, loaded"
+		if r.MacFUSE.Version != "" {
+			msg += fmt.Sprintf(" (version %s)", r.MacFUSE.Version)
 		}
-	} else {
-		fmt.Print("FUSE: ")
-		if r.MacFUSE.Installed {
-			fmt.Print("installed")
-			if r.MacFUSE.Loaded {
-				fmt.Print(", loaded")
-			} else {
-				fmt.Print(", NOT loaded")
-			}
-			if r.MacFUSE.Version != "" {
-				fmt.Printf(" (version %s)", r.MacFUSE.Version)
-			}
-			fmt.Println()
-		} else {
-			fmt.Println("NOT installed / /dev/fuse missing (install with `apt-get install fuse3` or your package manager)")
+		fmt.Printf("%s %s: %s\n", symGood(), fuseLabel, msg)
+	case r.MacFUSE.Installed:
+		hint := ""
+		if r.Runtime.OS == "darwin" {
+			hint = " (run `sudo kextload` or approve in System Settings)"
 		}
+		fmt.Printf("%s %s: installed, %s%s\n", symWarn(), fuseLabel, cWarn("NOT loaded"), hint)
+	default:
+		hint := "install with `apt-get install fuse3` or your package manager"
+		if r.Runtime.OS == "darwin" {
+			hint = "install with `brew install --cask macfuse`"
+		}
+		fmt.Printf("%s %s: %s (%s)\n", symBad(), fuseLabel, cBad("NOT installed"), hint)
 	}
 
 	// Runtime.
-	fmt.Printf("Runtime: %s %s/%s, %d CPU(s), %d goroutine(s)\n",
+	fmt.Printf("%s Runtime: %s %s/%s, %d CPU(s), %d goroutine(s)\n", symGood(),
 		r.Runtime.GoVersion, r.Runtime.OS, r.Runtime.Arch,
 		r.Runtime.NumCPU, r.Runtime.NumGoroutine)
 
 	// Mounts.
-	fmt.Printf("Active mounts: %d\n", len(r.Mounts))
+	fmt.Printf("  Active mounts: %d\n", len(r.Mounts))
 	for _, m := range r.Mounts {
-		status := "alive"
+		sym, status := symGood(), cGood("alive")
 		if !m.Alive {
-			status = "STALE"
+			sym, status = symBad(), cBad("STALE")
 		}
-		if m.MountpointKnown {
-			fmt.Printf("  %s (pid %d) — %s\n", m.Mountpoint, m.PID, status)
-		} else {
+		name := m.Mountpoint
+		if !m.MountpointKnown {
 			// m.Mountpoint here is a SHA-256 hash of the real path (from an
 			// older pidfile predating mountpoint recording), never a path —
 			// say so rather than printing a hash as if it were actionable.
-			fmt.Printf("  <mountpoint unknown, pidfile hash %s> (pid %d) — %s\n", m.Mountpoint, m.PID, status)
+			name = fmt.Sprintf("<mountpoint unknown, pidfile hash %s>", m.Mountpoint)
 		}
+		fmt.Printf("  %s %s %s — %s\n", sym, name, cDim(fmt.Sprintf("(pid %d)", m.PID)), status)
 	}
 
 	// Watchdog.
-	fmt.Print("Watchdog: ")
 	switch {
 	case !r.Watchdog.Present:
-		fmt.Println("not running (crash recovery is manual — see `janusfs umount` if a mount hangs)")
+		fmt.Printf("%s Watchdog: not running %s\n", symWarn(),
+			cDim("(crash recovery is manual — see `janusfs umount` if a mount hangs)"))
 	case r.Watchdog.Alive:
-		fmt.Printf("running (pid %d)\n", r.Watchdog.PID)
+		fmt.Printf("%s Watchdog: running %s\n", symGood(), cDim(fmt.Sprintf("(pid %d)", r.Watchdog.PID)))
 	default:
-		fmt.Printf("STALE (pid %d recorded but not alive)\n", r.Watchdog.PID)
+		fmt.Printf("%s Watchdog: %s %s\n", symBad(), cBad("STALE"),
+			cDim(fmt.Sprintf("(pid %d recorded but not alive)", r.Watchdog.PID)))
 	}
 
 	// Warnings.
 	if len(r.Warnings) > 0 {
-		fmt.Println()
-		fmt.Println("Warnings:")
+		fmt.Printf("\n%s\n", cWarn(cBold("Warnings:")))
 		for _, w := range r.Warnings {
-			fmt.Printf("  * %s\n", w)
+			fmt.Printf("  %s %s\n", symWarn(), w)
 		}
 	}
 }
