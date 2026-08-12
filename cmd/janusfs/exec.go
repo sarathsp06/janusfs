@@ -72,8 +72,10 @@ func newExecCmd() *cobra.Command {
 			sandbox := false
 			for _, a := range ownArgs {
 				switch a {
-				case "--sandbox":
+				case "--sandbox", "--sandbox=true":
 					sandbox = true
+				case "--sandbox=false":
+					sandbox = false
 				default:
 					return fmt.Errorf("exec: unrecognized flag %q before \"--\"", a)
 				}

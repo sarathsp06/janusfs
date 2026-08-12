@@ -191,6 +191,10 @@ func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
 			return 125, fmt.Errorf("exec: %w", err)
 		}
 
+		if err := assertMountNotUnderSrc(src, mountpoint); err != nil {
+			return 125, fmt.Errorf("exec: --sandbox: %w", err)
+		}
+
 		denyRW, err := canonicalDenyTargets(src)
 		if err != nil {
 			return 125, fmt.Errorf("exec: --sandbox: %w", err)

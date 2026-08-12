@@ -15,6 +15,42 @@ func TestSandboxAvailable(t *testing.T) {
 	}
 }
 
+func TestSandboxAvailableAt(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("missing path is an error", func(t *testing.T) {
+		if err := sandboxAvailableAt(filepath.Join(dir, "nope")); err == nil {
+			t.Fatal("expected error for missing path")
+		}
+	})
+
+	t.Run("directory is not an executable", func(t *testing.T) {
+		if err := sandboxAvailableAt(dir); err == nil {
+			t.Fatal("expected error when path is a directory")
+		}
+	})
+
+	t.Run("non-executable file is rejected", func(t *testing.T) {
+		f := filepath.Join(dir, "not-exec")
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := sandboxAvailableAt(f); err == nil {
+			t.Fatal("expected error for non-executable file")
+		}
+	})
+
+	t.Run("executable file passes", func(t *testing.T) {
+		f := filepath.Join(dir, "ok")
+		if err := os.WriteFile(f, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := sandboxAvailableAt(f); err != nil {
+			t.Fatalf("expected success for executable file, got %v", err)
+		}
+	})
+}
+
 func TestCanonicalizeWithFirmlinkTwin(t *testing.T) {
 	dir := t.TempDir()
 	realDir := filepath.Join(dir, "real")
@@ -207,4 +243,140 @@ func TestSandboxProfile(t *testing.T) {
 			t.Fatal("expected error for a deny path containing a newline")
 		}
 	})
+
+	t.Run("a quote in the mustAllow path is rejected", func(t *testing.T) {
+		if _, err := sandboxProfile([]string{"/tmp/src"}, nil, []string{`/tmp/"; (deny default) ;"`}); err == nil {
+			t.Fatal("expected error for a mustAllow path containing a quote")
+		}
+	})
+
+	t.Run("a quote in the read-only deny path is rejected", func(t *testing.T) {
+		if _, err := sandboxProfile([]string{"/tmp/src"}, []string{`/tmp/"; (allow default) ;"`}, mnt); err == nil {
+			t.Fatal("expected error for a read-only deny path containing a quote")
+		}
+	})
+
+	t.Run("multiple deny paths all appear in the profile", func(t *testing.T) {
+		profile, err := sandboxProfile([]string{"/tmp/a", "/tmp/b"}, nil, mnt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(profile, `(subpath "/tmp/a")`) || !strings.Contains(profile, `(subpath "/tmp/b")`) {
+			t.Fatalf("expected both deny paths in profile:\n%s", profile)
+		}
+	})
+}
+
+func TestCanonicalDenyTargets(t *testing.T) {
+	// Thin wrapper, but the deny set is load-bearing — if it ever gains
+	// logic (e.g. a per-caller allowlist), this test catches an accidental
+	// divergence from canonicalizeWithFirmlinkTwin.
+	targets, err := canonicalDenyTargets("/Users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin, err := canonicalizeWithFirmlinkTwin("/Users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != len(twin) || targets[0] != twin[0] {
+		t.Fatalf("canonicalDenyTargets diverged from canonicalizeWithFirmlinkTwin: %v vs %v", targets, twin)
+	}
+}
+
+func TestAssertMountNotUnderSrc(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(dir, "mount")
+	if err := os.Mkdir(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(src, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("disjoint sibling is allowed", func(t *testing.T) {
+		if err := assertMountNotUnderSrc(src, sibling); err != nil {
+			t.Fatalf("expected sibling mount to be allowed, got %v", err)
+		}
+	})
+
+	t.Run("mount identical to src is rejected", func(t *testing.T) {
+		if err := assertMountNotUnderSrc(src, src); err == nil {
+			t.Fatal("expected error when mountpoint equals source")
+		}
+	})
+
+	t.Run("mount nested under src is rejected", func(t *testing.T) {
+		if err := assertMountNotUnderSrc(src, nested); err == nil {
+			t.Fatal("expected error when mountpoint is under source")
+		}
+	})
+
+	t.Run("mount reached via symlink to a nested path is rejected", func(t *testing.T) {
+		// EvalSymlinks must run on both sides — a caller passing a symlink
+		// that resolves under src still means the mount is under src.
+		linkToNested := filepath.Join(dir, "link-to-nested")
+		if err := os.Symlink(nested, linkToNested); err != nil {
+			t.Fatal(err)
+		}
+		if err := assertMountNotUnderSrc(src, linkToNested); err == nil {
+			t.Fatal("expected error when a symlinked mountpoint resolves under source")
+		}
+	})
+
+	t.Run("prefix-only similar name (not a parent dir) is allowed", func(t *testing.T) {
+		// Guards against a naive strings.HasPrefix without the separator.
+		lookalike := filepath.Join(dir, "srcbutnot")
+		if err := os.Mkdir(lookalike, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := assertMountNotUnderSrc(src, lookalike); err != nil {
+			t.Fatalf("expected sibling with shared prefix to be allowed, got %v", err)
+		}
+	})
+
+	t.Run("nonexistent src is an error, not a false pass", func(t *testing.T) {
+		if err := assertMountNotUnderSrc(filepath.Join(dir, "nope"), sibling); err == nil {
+			t.Fatal("expected error resolving nonexistent src")
+		}
+	})
+
+	t.Run("nonexistent mountpoint is an error", func(t *testing.T) {
+		if err := assertMountNotUnderSrc(src, filepath.Join(dir, "nope-mount")); err == nil {
+			t.Fatal("expected error resolving nonexistent mountpoint")
+		}
+	})
+}
+
+func TestCanonicalizeWithFirmlinkTwinErrors(t *testing.T) {
+	if _, err := canonicalizeWithFirmlinkTwin(filepath.Join(t.TempDir(), "does-not-exist")); err == nil {
+		t.Fatal("expected error resolving a nonexistent path")
+	}
+}
+
+func TestCanonicalizeWithFirmlinkTwinDataVolumePath(t *testing.T) {
+	// A path already expressed under /System/Volumes/Data must produce the
+	// stripped twin (so a deny rule applied to the "short" form still
+	// blocks callers who reach it via the data-volume form).
+	if _, err := os.Stat("/System/Volumes/Data/Users"); err != nil {
+		t.Skip("/System/Volumes/Data not present; not a firmlinked system")
+	}
+	targets, err := canonicalizeWithFirmlinkTwin("/System/Volumes/Data/Users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tgt := range targets {
+		if tgt == "/Users" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected /Users twin for /System/Volumes/Data/Users, got %v", targets)
+	}
 }

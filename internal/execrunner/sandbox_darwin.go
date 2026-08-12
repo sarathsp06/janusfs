@@ -21,12 +21,16 @@ const sandboxExecPath = "/usr/bin/sandbox-exec"
 // must fail closed when it can't confirm this, never silently run the child
 // unsandboxed.
 func sandboxAvailable() error {
-	info, err := os.Stat(sandboxExecPath)
+	return sandboxAvailableAt(sandboxExecPath)
+}
+
+func sandboxAvailableAt(path string) error {
+	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("--sandbox requires %s, which was not found: %w", sandboxExecPath, err)
+		return fmt.Errorf("--sandbox requires %s, which was not found: %w", path, err)
 	}
 	if info.IsDir() || info.Mode()&0o111 == 0 {
-		return fmt.Errorf("--sandbox requires %s to be an executable file", sandboxExecPath)
+		return fmt.Errorf("--sandbox requires %s to be an executable file", path)
 	}
 	return nil
 }
@@ -67,6 +71,27 @@ func canonicalizeWithFirmlinkTwin(p string) ([]string, error) {
 // tree (src, plus its firmlink twin).
 func canonicalDenyTargets(src string) ([]string, error) {
 	return canonicalizeWithFirmlinkTwin(src)
+}
+
+// assertMountNotUnderSrc rejects a mount that lives under the source tree
+// after both are resolved canonically. The profile denies the source subpath;
+// if the mountpoint sits under src, the deny would also kill the mountpoint
+// and defeat the one thing --sandbox promises to leave usable. Compared at
+// canonical form because src and mountpoint reach us as callers passed them,
+// while the deny is applied to the resolved path.
+func assertMountNotUnderSrc(src, mountpoint string) error {
+	srcCanon, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return fmt.Errorf("resolving canonical path for src %q: %w", src, err)
+	}
+	mpCanon, err := filepath.EvalSymlinks(mountpoint)
+	if err != nil {
+		return fmt.Errorf("resolving canonical path for mountpoint %q: %w", mountpoint, err)
+	}
+	if mpCanon == srcCanon || strings.HasPrefix(mpCanon, srcCanon+string(filepath.Separator)) {
+		return fmt.Errorf("mountpoint %q is under source %q: --sandbox would deny its own mount", mpCanon, srcCanon)
+	}
+	return nil
 }
 
 // canonicalReadOnlyDenyTargets computes the read-only deny set: ~/.janusfs,
