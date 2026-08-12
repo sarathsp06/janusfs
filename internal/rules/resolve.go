@@ -192,22 +192,6 @@ func (rs *RuleSet) resolveIgnore(relPath string, isDir bool) (hidden bool, ruleR
 	return hidden, ruleRef, poisoned, trace
 }
 
-// ancestorDirs returns the relative-path ancestors of relPath, shallowest
-// first, excluding relPath itself and the root ("" is never included).
-// For "a/b/c.txt" this is ["a", "a/b"]; for "a" (whether file or dir) it is
-// empty (no ancestor besides the root, which carries no path of its own).
-func ancestorDirs(relPath string) []string {
-	if relPath == "" {
-		return nil
-	}
-	segs := strings.Split(relPath, "/")
-	var out []string
-	for i := 1; i < len(segs); i++ {
-		out = append(out, strings.Join(segs[:i], "/"))
-	}
-	return out
-}
-
 // relativeToLevel computes relPath (relative to root) expressed relative
 // to a level directory lvlDir (absolute), in slash form.
 func relativeToLevel(root, lvlDir, relPath string) string {
@@ -289,15 +273,4 @@ func (rs *RuleSet) applicableMaskLevels(relPath string) []MaskLevel {
 		}
 	}
 	return out
-}
-
-func isGlobalOrAncestor(rs *RuleSet, levelDir, full string) bool {
-	if rs.GlobalDir != "" && levelDir == rs.GlobalDir {
-		return true
-	}
-	if levelDir == full {
-		return true
-	}
-	sep := string(filepath.Separator)
-	return strings.HasPrefix(full, levelDir+sep)
 }

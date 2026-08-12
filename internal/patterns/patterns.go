@@ -243,12 +243,6 @@ func LookupBuiltin(name string) ([]*Pattern, bool) {
 	return ps, ok
 }
 
-// IsReserved reports whether name is a builtin or the whole-file sentinel, and
-// therefore may not be shadowed by a user regex.
-func IsReserved(name string) bool {
-	return ReservedNames[name]
-}
-
 // ParsePatternRef parses one comma-separated pattern reference from a
 // .janusfs.yml mask pattern reference — `<builtin-name>` or `/<RE2-regex>/` — into
 // either a builtin lookup or a compiled custom Pattern.

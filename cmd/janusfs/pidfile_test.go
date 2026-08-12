@@ -141,46 +141,6 @@ func TestReadPidfile_LegacySingleLineStillParses(t *testing.T) {
 	}
 }
 
-func TestReadPidfileMountpoint_ReadsSecondLine(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	mount := t.TempDir()
-
-	if err := writePidfile(mount); err != nil {
-		t.Fatalf("writePidfile() error = %v", err)
-	}
-	path, err := pidfilePath(mount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	absMount, _ := filepath.Abs(mount)
-	if got := readPidfileMountpoint(path); got != absMount {
-		t.Errorf("readPidfileMountpoint() = %q, want %q", got, absMount)
-	}
-}
-
-func TestReadPidfileMountpoint_LegacyFileReturnsEmpty(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	mount := t.TempDir()
-
-	path, err := pidfilePath(mount)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := readPidfileMountpoint(path); got != "" {
-		t.Errorf("readPidfileMountpoint() on legacy file = %q, want empty", got)
-	}
-}
-
 func TestReadPidfile_MissingIsNotAnError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -242,5 +202,57 @@ func TestPruneMirrorDirs_OutsideRootUntouched(t *testing.T) {
 	pruneMirrorDirs(outside, root)
 	if info, err := os.Stat(outside); err != nil || !info.IsDir() {
 		t.Errorf("path outside root should be untouched, err=%v", err)
+	}
+}
+
+func TestPidAlive(t *testing.T) {
+	if !pidAlive(os.Getpid()) {
+		t.Errorf("pidAlive(self) = false, want true")
+	}
+	if pidAlive(0) || pidAlive(-1) {
+		t.Errorf("pidAlive(non-positive) should be false")
+	}
+	// A PID that (almost certainly) doesn't exist. syscall.Kill returns
+	// ESRCH; pidAlive should say false.
+	if pidAlive(1 << 30) {
+		t.Errorf("pidAlive(huge unused pid) = true, want false")
+	}
+}
+
+func TestRemovePidfile_RemovesExisting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mount := t.TempDir()
+	if err := writePidfile(mount); err != nil {
+		t.Fatalf("writePidfile: %v", err)
+	}
+	path, err := pidfilePath(mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removePidfile(mount); err != nil {
+		t.Fatalf("removePidfile: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("pidfile should be gone, stat err=%v", err)
+	}
+}
+
+func TestReadPidfile_MalformedFirstLineErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mount := t.TempDir()
+	path, err := pidfilePath(mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not-a-pid\n"+mount+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPidfile(mount); err == nil {
+		t.Errorf("expected parse error on malformed pid, got nil")
 	}
 }
