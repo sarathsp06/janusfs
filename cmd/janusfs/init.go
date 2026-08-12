@@ -75,7 +75,7 @@ func runInit(dir string, force bool) error {
 	}
 
 	// Keep this short: what was written, why, and where to look next.
-	fmt.Printf("Wrote %s — hides key material and masks .env files plus Spring-style application config\n", policyPath)
+	fmt.Printf("%s Wrote %s — hides key material and masks .env files plus Spring-style application config\n", symGood(), policyPath)
 	fmt.Printf("  (application*.yml/.yaml/.properties) where secrets commonly live.\n")
 	fmt.Println("Targeted by design: add lines like `**/* : aws-key` only if you want a")
 	fmt.Println("repo-wide secret scan (it masks every file — slower, noisier).")
@@ -101,7 +101,7 @@ func runInitGlobal(force bool) error {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	fmt.Printf("Wrote %s — applied to every mount, lowest precedence (any repo's own\n", policyPath)
+	fmt.Printf("%s Wrote %s — applied to every mount, lowest precedence (any repo's own\n", symGood(), policyPath)
 	fmt.Println("  .janusfs.yml can override these).")
 	fmt.Println("Run `janusfs check <dir>` on any repo to preview the combined effect.")
 	return nil

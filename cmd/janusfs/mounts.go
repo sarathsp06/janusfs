@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"text/tabwriter"
 
@@ -34,25 +35,69 @@ type isMountedFunc func(string) bool
 
 func newMountsCmd() *cobra.Command {
 	var jsonOut bool
+	var pick bool
 	cmd := &cobra.Command{
 		Use:   "mounts",
 		Short: "List active and recorded JanusFS mounts",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if pick {
+				return runMountsPick()
+			}
 			return runMounts(jsonOut)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	cmd.Flags().BoolVarP(&pick, "interactive", "i", false, "fuzzy-pick a live mount and open its dashboard")
 	return cmd
 }
 
-func runMounts(jsonOut bool) error {
+// runMountsPick fuzzy-picks among live mounts and opens the chosen dashboard.
+func runMountsPick() error {
+	if !interactive {
+		return errors.New("mounts -i needs a terminal")
+	}
+	var live []mountListing
+	for _, m := range collectMountListings() {
+		if m.Status == "mounted" && m.Dashboard != "" {
+			live = append(live, m)
+		}
+	}
+	if len(live) == 0 {
+		fmt.Println("No live mounts to open.")
+		return nil
+	}
+	items := make([]string, len(live))
+	for i, m := range live {
+		items[i] = fmt.Sprintf("%s  %s", m.Mountpoint, cDim(m.Src))
+	}
+	idx, err := pickOne("open dashboard", items)
+	if err != nil || idx < 0 {
+		return err
+	}
+	url := live[idx].Dashboard
+	name, args, ok := browserOpenCommand(url)
+	if !ok {
+		fmt.Printf("%s Dashboard: %s\n", symGood(), url)
+		return nil
+	}
+	fmt.Printf("%s Opening %s\n", symGood(), url)
+	return exec.Command(name, args...).Start()
+}
+
+// collectMountListings gathers the current mount picture (live daemon mounts
+// merged with recorded mounts), shared by `mounts` and the interactive pickers.
+func collectMountListings() []mountListing {
 	records, _ := config.LoadMounts()
 	var live []mountStatus
 	if resp, err := callDaemon("mounts", daemonRequest{Cmd: "list"}); err == nil && resp.OK {
 		live = resp.Mounts
 	}
-	listings := classifyMountRecords(live, records, defaultStatDir, mountpointMounted)
+	return classifyMountRecords(live, records, defaultStatDir, mountpointMounted)
+}
+
+func runMounts(jsonOut bool) error {
+	listings := collectMountListings()
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

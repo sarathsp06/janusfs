@@ -18,13 +18,47 @@ import (
 
 func newUmountCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "umount <mountpoint|src>",
+		Use:   "umount [mountpoint|src]",
 		Short: "Unmount a JanusFS mount by mountpoint or source path (via the daemon, or directly if none is running)",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUmount(args[0])
+			if len(args) == 1 {
+				return runUmount(args[0])
+			}
+			mp, err := pickUmountTarget()
+			if err != nil || mp == "" {
+				return err
+			}
+			return runUmount(mp)
 		},
 	}
+}
+
+// pickUmountTarget fuzzy-picks a mounted/stale mount to unmount when no
+// argument was given. Returns "" if the user cancelled.
+func pickUmountTarget() (string, error) {
+	if !interactive {
+		return "", errors.New("umount needs a <mountpoint|src>, or run in a terminal to pick one")
+	}
+	var targets []mountListing
+	for _, m := range collectMountListings() {
+		if m.Status == "mounted" || m.Status == "stale" {
+			targets = append(targets, m)
+		}
+	}
+	if len(targets) == 0 {
+		fmt.Println("No mounts to unmount.")
+		return "", nil
+	}
+	items := make([]string, len(targets))
+	for i, m := range targets {
+		items[i] = fmt.Sprintf("%-8s %s  %s", m.Status, m.Mountpoint, cDim(m.Src))
+	}
+	idx, err := pickOne("unmount", items)
+	if err != nil || idx < 0 {
+		return "", err
+	}
+	return targets[idx].Mountpoint, nil
 }
 
 // runUmount asks the daemon to unmount (it owns the FUSE mount); if no daemon
@@ -45,7 +79,7 @@ func runUmount(mountpoint string) error {
 	case err != nil:
 		return fmt.Errorf("umount: %w", err)
 	case resp.OK:
-		fmt.Println(resp.Message)
+		fmt.Printf("%s %s\n", symGood(), resp.Message)
 		// The daemon may have only pruned a stale registry entry; if a real
 		// mount is still lingering at the requested path or at a returned
 		// registry mountpoint (e.g. caller passed the source path), clear it too
@@ -64,7 +98,7 @@ func runUmount(mountpoint string) error {
 			seen[target] = true
 			if isMountpoint(target) {
 				if uerr := unmountKernel(target, true); uerr == nil {
-					fmt.Printf("Also cleared a lingering mount at %s\n", target)
+					fmt.Printf("%s Also cleared a lingering mount at %s\n", symGood(), target)
 				}
 			}
 		}
@@ -110,7 +144,7 @@ func directUnmount(mountpoint string) error {
 	if err != nil {
 		return fmt.Errorf("umount %s:\n  %w", mountpoint, err)
 	}
-	fmt.Printf("Unmounted %s\n", mountpoint)
+	fmt.Printf("%s Unmounted %s\n", symGood(), mountpoint)
 	return nil
 }
 
