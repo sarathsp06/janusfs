@@ -61,8 +61,7 @@ func writePidfile(mountpoint string) error {
 // only if it is discoverable, and otherwise the unmount proceeds anyway.
 //
 // Only the first line is parsed, so this reads correctly whether or not the
-// file carries the mountpoint as a second line (see writePidfile and
-// readPidfileMountpoint).
+// file carries the mountpoint as a second line (see writePidfile).
 func readPidfile(mountpoint string) (int, error) {
 	path, err := pidfilePath(mountpoint)
 	if err != nil {
@@ -81,23 +80,6 @@ func readPidfile(mountpoint string) (int, error) {
 		return 0, fmt.Errorf("pidfile: parsing %q: %w", path, err)
 	}
 	return pid, nil
-}
-
-// readPidfileMountpoint reads the real mountpoint recorded on a pidfile's
-// second line, given the pidfile's own path (as found by, e.g., scanning
-// ~/.janusfs/run). Returns "" (not an error) if the file predates this field —
-// an older single-line pidfile — so callers can fall back to reporting the
-// filename hash as unknown rather than presenting it as a path.
-func readPidfileMountpoint(pidfilePath string) string {
-	data, err := os.ReadFile(pidfilePath)
-	if err != nil {
-		return ""
-	}
-	_, rest, found := strings.Cut(string(data), "\n")
-	if !found {
-		return ""
-	}
-	return strings.TrimSpace(rest)
 }
 
 // pruneMirrorDirs removes the now-empty mountpoint and its empty parent

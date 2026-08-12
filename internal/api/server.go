@@ -8,7 +8,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -41,7 +40,6 @@ type VFSStats struct {
 // Server is the localhost HTTP/SSE server.
 type Server struct {
 	mux           *http.ServeMux
-	server        *http.Server
 	promReg       *prometheus.Registry
 	history       *history.Store
 	token         string
@@ -120,32 +118,6 @@ func (s *Server) register() {
 // easily inside other servers.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	withSecurity(withHeaders(s.mux)).ServeHTTP(w, r)
-}
-
-// Listen binds to addr, 127.0.0.1 only, and returns the listener,
-// so a port collision fails fast at mount time instead of asynchronously
-// after the dashboard URL has already been printed. Serve the result with
-// Serve.
-func (s *Server) Listen(addr string) (net.Listener, error) {
-	s.server = &http.Server{
-		Addr:    addr,
-		Handler: s,
-	}
-	return net.Listen("tcp", addr)
-}
-
-// Serve serves on a listener obtained from Listen. Blocks until the server
-// stops.
-func (s *Server) Serve(ln net.Listener) error {
-	return s.server.Serve(ln)
-}
-
-// Shutdown drains and stops the server.
-func (s *Server) Shutdown(ctx context.Context) error {
-	if s.server == nil {
-		return nil
-	}
-	return s.server.Shutdown(ctx)
 }
 
 // withSecurity is a no-op middleware retained for symmetry. The server binds

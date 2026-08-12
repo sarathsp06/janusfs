@@ -149,11 +149,3 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	server.Wait()
 	return nil
 }
-
-// Unmount requests a clean unmount.
-func (a *Adapter) Unmount(mountpoint string) error {
-	if a.server == nil {
-		return errors.New("mount: no active mount to unmount")
-	}
-	return a.server.Unmount()
-}

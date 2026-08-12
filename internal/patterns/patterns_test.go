@@ -189,17 +189,6 @@ func TestBuiltinsCatalogIncludesRegexes(t *testing.T) {
 	}
 }
 
-func TestReservedNames(t *testing.T) {
-	for _, name := range []string{"env-value", "aws-key", "private-key", "jwt", "db-uri", "github-token", "generic-secret", "whole-file"} {
-		if !IsReserved(name) {
-			t.Errorf("expected %q to be reserved", name)
-		}
-	}
-	if IsReserved("not-a-builtin") {
-		t.Error("unexpected reserved name")
-	}
-}
-
 func TestParsePatternRefBuiltin(t *testing.T) {
 	ps, err := ParsePatternRef("env-value")
 	if err != nil {

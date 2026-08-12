@@ -15,6 +15,7 @@
 package provider
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"fmt"
@@ -87,17 +88,6 @@ type ProviderStats struct {
 	Hits     uint64
 	Misses   uint64
 	Rebuilds uint64
-}
-
-// RedactedContentProvider serves redacted bytes for a Masked file. ReadAt takes
-// the caller-resolved pattern set directly rather than looking it up itself,
-// since this package has no engine dependency. open is called at most once,
-// only on a genuine cache miss or oversize bypass — never on a cache hit.
-type RedactedContentProvider interface {
-	ReadAt(ctx context.Context, key ContentKey, pats []*patterns.Pattern, p []byte, off int64, open Opener) (int, error)
-	Invalidate(path string)
-	InvalidateAll()
-	Stats() ProviderStats
 }
 
 // entry is one cached file's redacted bytes plus the key/pattern-set they
@@ -271,11 +261,11 @@ func (c *RamCache) readOversize(pats []*patterns.Pattern, p []byte, off int64, o
 	defer func() { _ = f.Close() }()
 
 	need := off + int64(len(p))
-	var out bytesSink
+	var out bytes.Buffer
 	if err := redact.Stream(&out, io.LimitReader(f, need), pats, c.redactBufferMax); err != nil {
 		return 0, fmt.Errorf("provider: streaming redact: %w", apperrors.ErrRedactUnsupported)
 	}
-	return copyAt(out.b, p, off), nil
+	return copyAt(out.Bytes(), p, off), nil
 }
 
 // Invalidate drops path's cache entry (if any), zeroing its bytes first. The
@@ -450,13 +440,4 @@ func zero(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
-}
-
-// bytesSink is a minimal io.Writer accumulating into a byte slice, used by
-// readOversize to capture redact.Stream's output.
-type bytesSink struct{ b []byte }
-
-func (w *bytesSink) Write(p []byte) (int, error) {
-	w.b = append(w.b, p...)
-	return len(p), nil
 }
