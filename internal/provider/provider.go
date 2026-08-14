@@ -156,18 +156,31 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
-	sig := patternSignature(pats)
-
 	c.mu.Lock()
 	if e, ok := c.entries[key.path]; ok && e.key == key {
+		if e.built {
+			if e.rebuildErr != nil {
+				c.mu.Unlock()
+				return 0, e.rebuildErr
+			}
+			if matchesPatternSig(pats, e.patternSig) {
+				c.touchLocked(e)
+				bytes := e.bytes
+				c.mu.Unlock()
+				return copyAt(bytes, p, off), nil
+			}
+		}
 		// Exact key match: either already ready, or a rebuild for this
 		// exact version is in flight (another reader triggered it) —
 		// either way, wait on it below rather than starting a duplicate
 		// rebuild (singleflight per path).
+		sig := patternSignature(pats)
 		c.touchLocked(e)
 		c.mu.Unlock()
 		return c.waitAndServe(ctx, e, sig, p, off)
 	}
+
+	sig := patternSignature(pats)
 
 	// Stale or absent. Detach any existing (stale) entry from bookkeeping
 	// now — its bytes are superseded by the incoming rebuild either way —
@@ -347,6 +360,41 @@ func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
 		return nil, err
 	}
 	return redact.Redact(buf, pats), nil
+}
+
+// matchesPatternSig checks if pats functionally matches sig without allocating heap memory for up to 8 patterns.
+func matchesPatternSig(pats []*patterns.Pattern, sig string) bool {
+	n := len(pats)
+	if n == 0 {
+		return sig == ""
+	}
+	if n == 1 {
+		return len(sig) == len(pats[0].Name)+1 && sig[len(pats[0].Name)] == 0 && strings.HasPrefix(sig, pats[0].Name)
+	}
+
+	if n <= 8 {
+		var arr [8]string
+		names := arr[:n]
+		totalLen := n
+		for i, p := range pats {
+			names[i] = p.Name
+			totalLen += len(p.Name)
+		}
+		if len(sig) != totalLen {
+			return false
+		}
+		slices.Sort(names)
+		pos := 0
+		for _, name := range names {
+			if !strings.HasPrefix(sig[pos:], name) || sig[pos+len(name)] != 0 {
+				return false
+			}
+			pos += len(name) + 1
+		}
+		return true
+	}
+
+	return patternSignature(pats) == sig
 }
 
 // patternSignature gives a pattern set a stable, order-independent identity

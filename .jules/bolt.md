@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-14 - Zero-Allocation Fast-Path for RamCache.ReadAt Cache Hits
+
+**Learning:**
+Computing pattern set signature strings (`patternSignature`) on every FUSE `ReadAt` invocation creates unnecessary string allocations and `strings.Builder` overhead even when the file cache entry is already built and up-to-date. In addition, entering `waitAndServe` channel select blocks for completed entries adds goroutine synchronization overhead on the read hot path.
+By using a stack-allocated array for up to 8 pattern names and comparing pattern strings directly against `e.patternSig`, cache hit verification becomes completely allocation-free (0 B/op, 0 allocs/op) and bypasses channel select operations.
+
+**Action:**
+Added `matchesPatternSig` zero-allocation pattern verification helper and fast-path return in `RamCache.ReadAt`. Reduced cache hit latency from ~695 ns/op to ~62 ns/op (11x speedup) and reduced memory allocations on cache hits from 264 B/op (4 allocs/op) to 0 B/op (0 allocs/op).
