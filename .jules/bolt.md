@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-15 - Zero-Allocation Rule Level Traversal & Prefix Matching
+
+**Learning:**
+Returning temporary slices of structs (`[]IgnoreLevel` and `[]MaskLevel`) in rule resolution helper methods (`applicableIgnoreLevels` and `applicableMaskLevels`) causes value copies of large structs and heap allocations on every rule resolution call. Additionally, string concatenation during prefix checks (`lvl.RelDir + "/"`) allocates temporary strings in hot loops.
+Iterating directly over underlying rule levels using slice indices/pointers (`&rs.IgnoreLevels[i]` and `&rs.MaskLevels[i]`) combined with sequential length and byte-matching checks (`len(relPath) > len(lvl.RelDir) && relPath[len(lvl.RelDir)] == '/' && strings.HasPrefix(relPath, lvl.RelDir)`) completely eliminates allocations on these paths.
+
+**Action:**
+Inlined level matching loops directly into `Resolve` and `resolveIgnore` using pointers, updated `isApplicable` to perform zero-allocation string prefix matching, and removed `applicableIgnoreLevels`, `applicableMaskLevels`, and `ancestorDirs`. Slashed `BenchmarkResolveCacheMiss` memory allocations from ~28,747 B/op (103 allocs/op) to 256 B/op (3 allocs/op) — a ~99% reduction in allocations.
