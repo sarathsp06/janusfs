@@ -156,18 +156,17 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
-	sig := patternSignature(pats)
-
 	c.mu.Lock()
-	if e, ok := c.entries[key.path]; ok && e.key == key {
-		// Exact key match: either already ready, or a rebuild for this
-		// exact version is in flight (another reader triggered it) —
-		// either way, wait on it below rather than starting a duplicate
-		// rebuild (singleflight per path).
+	if e, ok := c.entries[key.path]; ok && e.key == key && matchesPatternSig(e.patternSig, pats) {
+		// Exact key match and pattern signature match: either already ready,
+		// or a rebuild for this exact version is in flight — either way,
+		// touch LRU and serve/wait without allocating pattern signature.
 		c.touchLocked(e)
 		c.mu.Unlock()
-		return c.waitAndServe(ctx, e, sig, p, off)
+		return c.waitAndServe(ctx, e, e.patternSig, p, off)
 	}
+
+	sig := patternSignature(pats)
 
 	// Stale or absent. Detach any existing (stale) entry from bookkeeping
 	// now — its bytes are superseded by the incoming rebuild either way —
@@ -221,6 +220,18 @@ func (c *RamCache) rebuild(e *entry, pats []*patterns.Pattern, open Opener) {
 // waitAndServe blocks until e's rebuild completes, bounded by rebuildTimeout,
 // and copies the requested range into p.
 func (c *RamCache) waitAndServe(ctx context.Context, e *entry, sig string, p []byte, off int64) (int, error) {
+	select {
+	case <-e.ready:
+		if e.rebuildErr != nil {
+			return 0, e.rebuildErr
+		}
+		if e.patternSig != sig {
+			return 0, fmt.Errorf("provider: pattern set changed mid-rebuild for %q: %w", e.key.path, apperrors.ErrRebuildTimeout)
+		}
+		return copyAt(e.bytes, p, off), nil
+	default:
+	}
+
 	select {
 	case <-e.ready:
 		if e.rebuildErr != nil {
@@ -334,6 +345,46 @@ func (c *RamCache) evictLocked() {
 		}
 		elem = prev
 	}
+}
+
+func matchesPatternSig(sig string, pats []*patterns.Pattern) bool {
+	n := len(pats)
+	if n == 0 {
+		return sig == ""
+	}
+	if n == 1 {
+		pName := pats[0].Name
+		return len(sig) == len(pName)+1 && sig[len(pName)] == 0 && strings.HasPrefix(sig, pName)
+	}
+
+	var arr [8]string
+	var names []string
+	if n <= 8 {
+		names = arr[:n]
+	} else {
+		return sig == patternSignature(pats)
+	}
+
+	totalLen := n
+	for i, p := range pats {
+		names[i] = p.Name
+		totalLen += len(p.Name)
+	}
+
+	if len(sig) != totalLen {
+		return false
+	}
+
+	slices.Sort(names)
+
+	off := 0
+	for _, name := range names {
+		if !strings.HasPrefix(sig[off:], name) || sig[off+len(name)] != 0 {
+			return false
+		}
+		off += len(name) + 1
+	}
+	return true
 }
 
 func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
