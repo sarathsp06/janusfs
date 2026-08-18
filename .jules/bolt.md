@@ -30,3 +30,12 @@ By caching boolean global status (`IsGlobal`) and relative slash-separated paths
 
 **Action:**
 Added `IsGlobal` and `RelDir` to `IgnoreLevel` and `MaskLevel`. Refactored `Resolve` to walk ancestors in-place using slash-index scanning, and converted applicable level matching to allocation-free string prefix/equality checks. Slashed `BenchmarkResolveCacheMiss` memory allocations by 24% and allocation counts by over 55%, speeding up directory-miss resolutions by approximately 40%.
+
+## 2026-08-16 - Zero-Allocation Slice Iteration & Formatting Deferral in Decision Engine
+
+**Learning:**
+When resolving rules across directory levels, returning freshly allocated slices from helper functions (such as `applicableIgnoreLevels` and `applicableMaskLevels`) causes heap allocations for every path evaluation on cache miss. Copying large structs by value during `for _, lvl := range ...` iterations adds GC and stack/heap copying overhead.
+In addition, eagerly constructing rule reference strings (e.g., `lvl.File + ":" + strconv.Itoa(...)`) before verifying if a rule actually matches creates throwaway string allocations on non-matching lines.
+
+**Action:**
+Eliminated `applicableIgnoreLevels` and `applicableMaskLevels` helper slice allocations by iterating directly over `rs.IgnoreLevels` and `rs.MaskLevels` using slice indices and pointers (`lvl := &rs.IgnoreLevels[i]`). Deferred string formatting of rule refs until a match or error actually occurs. Updated `isApplicable` checks to perform sequential length and byte-matching without string concatenation. Reduced `BenchmarkResolveCacheMiss` allocations from 103 allocs/op (28,747 B/op) to 3 allocs/op (258 B/op) — over a 97% reduction in allocations and 99% reduction in memory volume — while speeding up cache-miss resolution latency from ~140 µs/op to ~111 µs/op.
