@@ -39,3 +39,11 @@ In addition, eagerly constructing rule reference strings (e.g., `lvl.File + ":" 
 
 **Action:**
 Eliminated `applicableIgnoreLevels` and `applicableMaskLevels` helper slice allocations by iterating directly over `rs.IgnoreLevels` and `rs.MaskLevels` using slice indices and pointers (`lvl := &rs.IgnoreLevels[i]`). Deferred string formatting of rule refs until a match or error actually occurs. Updated `isApplicable` checks to perform sequential length and byte-matching without string concatenation. Reduced `BenchmarkResolveCacheMiss` allocations from 103 allocs/op (28,747 B/op) to 3 allocs/op (258 B/op) — over a 97% reduction in allocations and 99% reduction in memory volume — while speeding up cache-miss resolution latency from ~140 µs/op to ~111 µs/op.
+
+## 2026-08-19 - Zero-Allocation Fast-Path for RamCache.ReadAt Cache Hits
+
+**Learning:**
+In `RamCache.ReadAt`, pattern signature generation (`patternSignature(pats)`) was being invoked eagerly on every read call prior to acquiring the cache lock and checking for an exact cache hit. Because pattern signature generation performs string sorting and slice allocations, invoking it on 100% of cached FUSE reads introduced unnecessary memory allocations (264 B/op, 4 allocs/op) and latency (~624 ns/op).
+
+**Action:**
+Deferred `patternSignature(pats)` evaluation until after checking if an entry for `key.path` exists with `e.key == key` and `e.built == true`. On cache hits, the entry is touched, the lock is released, and cached redacted bytes are returned immediately via `copyAt`. This dropped `BenchmarkReadAtCacheHit` latency from 623.9 ns/op to 56.49 ns/op (over 11x faster) and reduced allocations to 0 B/op (0 allocs/op).
