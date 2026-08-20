@@ -156,18 +156,23 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
-	sig := patternSignature(pats)
-
 	c.mu.Lock()
 	if e, ok := c.entries[key.path]; ok && e.key == key {
-		// Exact key match: either already ready, or a rebuild for this
-		// exact version is in flight (another reader triggered it) —
-		// either way, wait on it below rather than starting a duplicate
-		// rebuild (singleflight per path).
 		c.touchLocked(e)
+		if e.built {
+			bytes, err := e.bytes, e.rebuildErr
+			c.mu.Unlock()
+			if err != nil {
+				return 0, err
+			}
+			return copyAt(bytes, p, off), nil
+		}
 		c.mu.Unlock()
+		sig := patternSignature(pats)
 		return c.waitAndServe(ctx, e, sig, p, off)
 	}
+
+	sig := patternSignature(pats)
 
 	// Stale or absent. Detach any existing (stale) entry from bookkeeping
 	// now — its bytes are superseded by the incoming rebuild either way —
