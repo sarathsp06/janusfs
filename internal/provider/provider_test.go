@@ -18,17 +18,17 @@ func opener(path string) Opener {
 	return func() (io.ReadCloser, error) { return os.Open(path) }
 }
 
-func writeFile(t *testing.T, path, content string) ContentKey {
-	t.Helper()
+func writeFile(tb testing.TB, path, content string) ContentKey {
+	tb.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	var inode uint64
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
@@ -37,11 +37,11 @@ func writeFile(t *testing.T, path, content string) ContentKey {
 	return NewContentKey(path, fi.ModTime().UnixNano(), fi.Size(), inode, 1)
 }
 
-func envValuePats(t *testing.T) []*patterns.Pattern {
-	t.Helper()
+func envValuePats(tb testing.TB) []*patterns.Pattern {
+	tb.Helper()
 	ps, err := patterns.ParsePatternRef("env-value")
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return ps
 }
@@ -282,6 +282,27 @@ func BenchmarkPatternSignature0(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = patternSignature(pats)
+	}
+}
+
+func BenchmarkReadAtCacheHit(b *testing.B) {
+	dir := b.TempDir()
+	key := writeFile(b, filepath.Join(dir, ".env"), "API_KEY=supersecret\n")
+	pats := envValuePats(b)
+
+	c := NewRamCache(1<<20, 1<<20, 1<<20)
+	p := make([]byte, 64)
+	ctx := context.Background()
+	op := opener(key.Path())
+
+	if _, err := c.ReadAt(ctx, key, pats, p, 0, op); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = c.ReadAt(ctx, key, pats, p, 0, op)
 	}
 }
 

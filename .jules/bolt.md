@@ -39,3 +39,12 @@ In addition, eagerly constructing rule reference strings (e.g., `lvl.File + ":" 
 
 **Action:**
 Eliminated `applicableIgnoreLevels` and `applicableMaskLevels` helper slice allocations by iterating directly over `rs.IgnoreLevels` and `rs.MaskLevels` using slice indices and pointers (`lvl := &rs.IgnoreLevels[i]`). Deferred string formatting of rule refs until a match or error actually occurs. Updated `isApplicable` checks to perform sequential length and byte-matching without string concatenation. Reduced `BenchmarkResolveCacheMiss` allocations from 103 allocs/op (28,747 B/op) to 3 allocs/op (258 B/op) — over a 97% reduction in allocations and 99% reduction in memory volume — while speeding up cache-miss resolution latency from ~140 µs/op to ~111 µs/op.
+
+## 2026-08-20 - Zero-Allocation Cache-Hit Fast Path in FUSE RAM Provider
+
+**Learning:**
+In FUSE read paths, computing pattern signature strings (`patternSignature`) eagerly before checking cache entry readiness causes redundant heap allocations and string formatting overhead on every cached read. Furthermore, routing already-built cache hits through channel `select` and `time.After` creates timer allocations and synchronization overhead.
+Deferring signature calculations until after a cache miss or in-flight rebuild check allows exact `ContentKey` hits to serve cached redacted bytes directly, achieving zero allocations and minimal latency.
+
+**Action:**
+Updated `RamCache.ReadAt` in `internal/provider/provider.go` to check for exact built entries (`e.key == key && e.built`) first. On cache hit, it touches LRU bookkeeping, unlocks the mutex, and returns `copyAt(bytes, p, off)` directly, completely bypassing `patternSignature` generation and `waitAndServe` channel/timer overhead. Slashed cache hit allocations to 0 B/op and 0 allocs/op with a per-hit latency of ~56 ns/op.
