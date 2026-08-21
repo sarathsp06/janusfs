@@ -39,3 +39,11 @@ In addition, eagerly constructing rule reference strings (e.g., `lvl.File + ":" 
 
 **Action:**
 Eliminated `applicableIgnoreLevels` and `applicableMaskLevels` helper slice allocations by iterating directly over `rs.IgnoreLevels` and `rs.MaskLevels` using slice indices and pointers (`lvl := &rs.IgnoreLevels[i]`). Deferred string formatting of rule refs until a match or error actually occurs. Updated `isApplicable` checks to perform sequential length and byte-matching without string concatenation. Reduced `BenchmarkResolveCacheMiss` allocations from 103 allocs/op (28,747 B/op) to 3 allocs/op (258 B/op) — over a 97% reduction in allocations and 99% reduction in memory volume — while speeding up cache-miss resolution latency from ~140 µs/op to ~111 µs/op.
+
+## 2026-08-21 - Zero-Allocation Fast-Path & Pattern Signature Checking for FUSE Cache Hits
+**Learning:**
+In FUSE file read paths, cache hits are extremely frequent. Previously, `RamCache.ReadAt` computed pattern signatures via string concatenation (`patternSignature`) and executed channel `select` operations (`waitAndServe`) on every single read, even when the entry was already fully built in RAM.
+Computing pattern signatures forced string heap allocations on every cache hit, while waiting on channel selects added unnecessary goroutine context switching/timer overhead.
+
+**Action:**
+Implemented a zero-allocation fast-path in `RamCache.ReadAt`. On cache hit for a built entry, `matchesPatternSig` verifies pattern set equality with zero heap allocations (using stack-allocated array buffers and in-place sorting), unlocks the cache mutex, and returns cached redacted bytes immediately via `copyAt`. Reduced `BenchmarkReadAtCacheHit` latency from ~641 ns/op to ~65 ns/op (a 10x speedup) and slashed memory allocations from 4 allocs/op (264 B/op) to 0 allocs/op (0 B/op).
