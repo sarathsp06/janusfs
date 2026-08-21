@@ -156,18 +156,26 @@ func (c *RamCache) ReadAt(ctx context.Context, key ContentKey, pats []*patterns.
 		return c.readOversize(pats, p, off, open)
 	}
 
-	sig := patternSignature(pats)
-
 	c.mu.Lock()
 	if e, ok := c.entries[key.path]; ok && e.key == key {
-		// Exact key match: either already ready, or a rebuild for this
-		// exact version is in flight (another reader triggered it) —
-		// either way, wait on it below rather than starting a duplicate
-		// rebuild (singleflight per path).
+		// Fast-path cache hit for an entry that is already built and matching pattern signature:
+		// touch LRU, release lock, and return cached redacted bytes immediately.
+		// Bypasses patternSignature string allocation and waitAndServe channel/timer overhead.
+		if e.built && matchesPatternSig(e.patternSig, pats) {
+			c.touchLocked(e)
+			c.mu.Unlock()
+			if e.rebuildErr != nil {
+				return 0, e.rebuildErr
+			}
+			return copyAt(e.bytes, p, off), nil
+		}
 		c.touchLocked(e)
 		c.mu.Unlock()
+		sig := patternSignature(pats)
 		return c.waitAndServe(ctx, e, sig, p, off)
 	}
+
+	sig := patternSignature(pats)
 
 	// Stale or absent. Detach any existing (stale) entry from bookkeeping
 	// now — its bytes are superseded by the incoming rebuild either way —
@@ -347,6 +355,41 @@ func redactFile(open Opener, pats []*patterns.Pattern) ([]byte, error) {
 		return nil, err
 	}
 	return redact.Redact(buf, pats), nil
+}
+
+// matchesPatternSig checks zero-allocation whether eSig matches pats's signature.
+func matchesPatternSig(eSig string, pats []*patterns.Pattern) bool {
+	n := len(pats)
+	if n == 0 {
+		return eSig == ""
+	}
+	if n == 1 {
+		name := pats[0].Name
+		return len(eSig) == len(name)+1 && strings.HasPrefix(eSig, name) && eSig[len(name)] == 0
+	}
+
+	var arr [8]string
+	var names []string
+	if n <= 8 {
+		names = arr[:n]
+	} else {
+		names = make([]string, n)
+	}
+
+	for i, p := range pats {
+		names[i] = p.Name
+	}
+
+	slices.Sort(names)
+
+	rem := eSig
+	for _, name := range names {
+		if len(rem) < len(name)+1 || !strings.HasPrefix(rem, name) || rem[len(name)] != 0 {
+			return false
+		}
+		rem = rem[len(name)+1:]
+	}
+	return rem == ""
 }
 
 // patternSignature gives a pattern set a stable, order-independent identity
