@@ -39,3 +39,11 @@ In addition, eagerly constructing rule reference strings (e.g., `lvl.File + ":" 
 
 **Action:**
 Eliminated `applicableIgnoreLevels` and `applicableMaskLevels` helper slice allocations by iterating directly over `rs.IgnoreLevels` and `rs.MaskLevels` using slice indices and pointers (`lvl := &rs.IgnoreLevels[i]`). Deferred string formatting of rule refs until a match or error actually occurs. Updated `isApplicable` checks to perform sequential length and byte-matching without string concatenation. Reduced `BenchmarkResolveCacheMiss` allocations from 103 allocs/op (28,747 B/op) to 3 allocs/op (258 B/op) — over a 97% reduction in allocations and 99% reduction in memory volume — while speeding up cache-miss resolution latency from ~140 µs/op to ~111 µs/op.
+
+## 2026-08-23 - Zero-Allocation Cache-Hit Fast-Path in FUSE RAM Cache
+
+**Learning:**
+In FUSE file read paths, cache hit operations occur continuously for every chunk/block read. Eagerly generating string signatures for pattern sets (`patternSignature`) on every `ReadAt` call forces heap allocations (`strings.Builder`, sorted slice headers) even on exact cache hits. Furthermore, delegating cached entry reads to `waitAndServe` unnecessarily spawns timer channels and channel `select` operations.
+
+**Action:**
+Optimized `RamCache.ReadAt` in `internal/provider/provider.go` to check if a cached entry is already built and matches the requested pattern set using a zero-allocation validation helper (`matchesPatternSig`). If verified, `ReadAt` touches the entry and returns the cached redacted bytes immediately without signature string allocations, timer creation, or channel selection. Reduced `BenchmarkReadAtCacheHit` latency from 722.5 ns/op to 64.9 ns/op (over 11x faster) and eliminated all heap allocations (from 264 B/op and 4 allocs/op to 0 B/op and 0 allocs/op).
