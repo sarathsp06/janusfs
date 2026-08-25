@@ -285,6 +285,49 @@ func BenchmarkPatternSignature0(b *testing.B) {
 	}
 }
 
+func BenchmarkReadAtCacheHit(b *testing.B) {
+	dir := b.TempDir()
+	key := writeFileHelper(b, filepath.Join(dir, ".env"), "API_KEY=supersecret\n")
+	pats, err := patterns.ParsePatternRef("env-value")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	c := NewRamCache(1<<20, 1<<20, 1<<20)
+	p := make([]byte, 64)
+	op := opener(key.Path())
+
+	// Warm up cache entry.
+	if _, err := c.ReadAt(context.Background(), key, pats, p, 0, op); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = c.ReadAt(context.Background(), key, pats, p, 0, op)
+	}
+}
+
+func writeFileHelper(tb testing.TB, path, content string) ContentKey {
+	tb.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		tb.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		tb.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var inode uint64
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		inode = st.Ino
+	}
+	return NewContentKey(path, fi.ModTime().UnixNano(), fi.Size(), inode, 1)
+}
+
 func BenchmarkPatternSignature1(b *testing.B) {
 	pats, err := patterns.ParsePatternRef("env-value")
 	if err != nil {
