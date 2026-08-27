@@ -54,8 +54,8 @@ func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 			continue
 		}
 		matches := p.Regex.FindAllSubmatchIndex(buf, -1)
-		if len(matches) > 0 && spans == nil {
-			spans = make([]Span, 0, len(matches))
+		if len(matches) > 0 {
+			spans = slices.Grow(spans, len(matches))
 		}
 		for _, m := range matches {
 			start, end := m[0], m[1]
