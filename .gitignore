@@ -5,3 +5,5 @@
 *.db-journal
 .DS_Store
 .env
+graphify-out/cache/
+graphify-out/cache/

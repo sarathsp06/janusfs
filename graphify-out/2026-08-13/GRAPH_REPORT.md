@@ -5,12 +5,12 @@
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1825 nodes · 4299 edges · 127 communities (94 shown, 33 thin omitted)
-- Extraction: 85% EXTRACTED · 15% INFERRED · 0% AMBIGUOUS · INFERRED: 656 edges (avg confidence: 0.77)
+- 1844 nodes · 4309 edges · 139 communities (92 shown, 47 thin omitted)
+- Extraction: 84% EXTRACTED · 15% INFERRED · 0% AMBIGUOUS · INFERRED: 666 edges (avg confidence: 0.77)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9025ba11`
+- Built from commit: `1fa3541f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -36,18 +36,18 @@
 - F
 - Recorder
 - daemon
-- runPaths
-- ui.go
+- newRootCmd
+- ResponseWriter
 - Server
 - Architecture
-- umount.go
+- ui.go
 - Default
 - mountForTest
-- runWatchdog
+- RecordMount
 - Report
 - Order and gating sequence
 - provider.RamCache (redacted bytes, LRU)
-- symGood
+- callDaemon
 - ti
 - GoReleaser release pipeline
 - mode-clike.js
@@ -62,13 +62,14 @@
 - procid_linux.go
 - mode-markdown.js
 - PRP 09 — macOS Seatbelt confinement for `janusfs exec`
-- New
+- Command
 - SetOutput
 - Registry
 - mode-css.js
 - config.go
 - revocableHandle
 - Prometheus-only Observability Design
+- daemonRequest
 - runNSMount
 - addon-search.js
 - cr
@@ -80,6 +81,8 @@
 - index.md
 - JanusFS Filesystem Boundary Illustration
 - Observability event path
+- daemonResponse
+- Level
 - addon-matchbrackets.js
 - Knowledge Bundle Update Log
 - control_test.go
@@ -87,7 +90,7 @@
 - bench_test.go
 - mode-shell.js
 - Mask rules with patterns
-- .handleHTTP
+- Call
 - Mounts Cleanup and Check Matches Implementation Plan
 - Go Toolchain Hang Investigation
 - Run
@@ -106,7 +109,7 @@
 - FR-20 Watcher killed
 - RTK Commands by Workflow
 - Token Savings Overview
-- mounts.go
+- mountStatus
 - janusfs daemon
 - Package dependency rule
 - Config struct
@@ -114,6 +117,15 @@
 - Symlink escape check
 - readdir inode-zeroing cost
 - Rejected isolation ideas
+- Writer
+- Time
+- Regexp
+- Mutex
+- Uint64
+- Decision
+- Context
+- daemonRequest
+- daemonResponse
 - github.com/sarathsp06/janusfs
 - Case-folding glob evasion
 - FUSE adapter thin layer
@@ -142,16 +154,16 @@
 10. `Pattern` - 25 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `pickCheckDir()` --calls--> `New()`  [INFERRED]
+  cmd/janusfs/check.go → internal/api/server.go
 - `runCheck()` --calls--> `RunWithOptions()`  [INFERRED]
   cmd/janusfs/check.go → internal/check/check.go
-- `runDaemon()` --calls--> `ApplyEnv()`  [INFERRED]
-  cmd/janusfs/daemon.go → internal/config/config.go
-- `runDaemon()` --calls--> `ApplyFile()`  [INFERRED]
-  cmd/janusfs/daemon.go → internal/config/config.go
-- `runDaemon()` --calls--> `Default()`  [INFERRED]
-  cmd/janusfs/daemon.go → internal/config/config.go
-- `runDaemon()` --calls--> `SocketPath()`  [INFERRED]
-  cmd/janusfs/daemon.go → internal/control/control.go
+- `runInitGlobal()` --calls--> `GlobalDir()`  [INFERRED]
+  cmd/janusfs/init.go → internal/rules/rules.go
+- `callDaemon()` --calls--> `Call()`  [INFERRED]
+  cmd/janusfs/mount.go → internal/control/control.go
+- `runMountsPick()` --calls--> `New()`  [INFERRED]
+  cmd/janusfs/mounts.go → internal/api/server.go
 
 ## Import Cycles
 - None detected.
@@ -165,7 +177,7 @@
 - **Mounts cleanup and check matches workstream** — docs_superpowers_plans_2026-07-29_mounts_cleanup_and_check_matches, docs_superpowers_specs_2026-07-29_mounts_cleanup_and_check_matches_design, concept_mount_registry_cleanup, concept_check_matches, concept_janusfs_daemon [INFERRED 0.85]
 - **Performance optimization learnings and baselines** — jules_bolt, jules_prune, bench_baseline, concept_regexp_optimization, concept_slices_sortfunc, concept_nfr_3_performance_budget [INFERRED 0.85]
 
-## Communities (127 total, 33 thin omitted)
+## Communities (139 total, 47 thin omitted)
 
 ### Community 0 - "5. Process and package layout"
 Cohesion: 0.05
@@ -181,7 +193,7 @@ Nodes (58): caseInsensitiveVolume(), flipCase(), compilePatternFold(), Regexp, g
 
 ### Community 3 - "Pattern"
 Cohesion: 0.05
-Nodes (89): Buffer, Element, T, TestVirtualDirUnit(), Builtins(), containsIgnoreCase(), getBuiltinPreFilter(), Regexp (+81 more)
+Nodes (89): Buffer, Element, T, TestVirtualDirUnit(), Builtins(), containsIgnoreCase(), getBuiltinPreFilter(), init() (+81 more)
 
 ### Community 4 - "check/check.go"
 Cohesion: 0.11
@@ -200,12 +212,12 @@ Cohesion: 0.06
 Nodes (52): PRP 01 Correctness fixes, PRP 02 Crash recovery watchdog, PRP 03 Decision cache, PRP 04 Linux namespace exec, PRP 05 Dirfd backing layer, PRP 06 Process identity, PRP 07 macOS path-preserving, PRP 08 Reload revocation (+44 more)
 
 ### Community 8 - "daemon_test.go"
-Cohesion: 0.06
-Nodes (55): fakeRuntime(), T, TestBrowserOpenCommandByPlatform(), TestChildMountsUnder(), TestDaemonCall_NoDaemon(), TestDaemonIndex_FallsBackToSrcWithoutLabel(), TestDaemonIndex_NotFoundForOtherPaths(), TestDaemonIndex_RendersLabelAndEscapes() (+47 more)
+Cohesion: 0.16
+Nodes (26): fakeRuntime(), T, TestBrowserOpenCommandByPlatform(), TestChildMountsUnder(), TestDaemonCall_NoDaemon(), TestDaemonIndex_FallsBackToSrcWithoutLabel(), TestDaemonIndex_NotFoundForOtherPaths(), TestDaemonIndex_RendersLabelAndEscapes() (+18 more)
 
 ### Community 9 - "captureStdout"
 Cohesion: 0.11
-Nodes (39): Command, newCheckCmd(), pickCheckDir(), printCheckMatches(), runCheck(), appendPolicyFixture(), captureStdout(), T (+31 more)
+Nodes (40): Command, newCheckCmd(), pickCheckDir(), printCheckMatches(), runCheck(), appendPolicyFixture(), captureStdout(), T (+32 more)
 
 ### Community 10 - "cm.js"
 Cohesion: 0.09
@@ -216,8 +228,8 @@ Cohesion: 0.33
 Nodes (19): T, TestAuthMissing(), TestAuthQueryParam(), TestConfigSaveTriggersReload(), TestHeaders(), TestHistoryEndpointNoStore(), TestHostSecurity(), TestLatencyEndpointRemoved() (+11 more)
 
 ### Community 12 - "Run"
-Cohesion: 0.09
-Nodes (37): isNameChar(), isPathChar(), ReplacePaths(), T, TestReplacePaths(), callDaemon(), findSourceAndMount(), Context (+29 more)
+Cohesion: 0.08
+Nodes (41): newExecCmd(), T, runExecArgs(), TestExecFlagParsing(), Command, Context, daemonResponse, isNameChar() (+33 more)
 
 ### Community 13 - "pidfile_test.go"
 Cohesion: 0.25
@@ -248,28 +260,24 @@ Cohesion: 0.10
 Nodes (18): Counter, CounterVec, Gauge, HistogramVec, formatBytes(), Time, Decision, knownDecisions() (+10 more)
 
 ### Community 20 - "daemon"
+Cohesion: 0.16
+Nodes (13): browserOpenCommand(), Command, Conn, Context, daemonRequest, daemonResponse, daemon, Logger (+5 more)
+
+### Community 21 - "newRootCmd"
 Cohesion: 0.15
-Nodes (14): browserOpenCommand(), Command, Conn, Context, daemonRequest, daemonResponse, daemon, Logger (+6 more)
-
-### Community 21 - "runPaths"
-Cohesion: 0.21
-Nodes (13): expandHome(), Command, newInstallCmd(), promptWithDefault(), runInstall(), existsMark(), newPathsCmd(), runPaths() (+5 more)
-
-### Community 22 - "ui.go"
-Cohesion: 0.23
-Nodes (17): Report, printCheckReport(), Command, Report, newDoctorCmd(), printDoctorReport(), cBad(), cBold() (+9 more)
+Nodes (18): expandHome(), Command, newInstallCmd(), promptWithDefault(), runInstall(), Command, main(), newRootCmd() (+10 more)
 
 ### Community 23 - "Server"
-Cohesion: 0.24
-Nodes (7): Server, VFSStats, Request, ResponseWriter, Time, writeJSON(), ServeMux
+Cohesion: 0.15
+Nodes (16): Server, VFSStats, FS, Handler, HandlerFunc, New(), relativeRuleRef(), withHeaders() (+8 more)
 
 ### Community 24 - "Architecture"
 Cohesion: 0.12
 Nodes (24): Architecture, Code Conventions, Packages, Working with SPEC.md, Quick Reference Commands, Formatting and Linting, Assets, Leak Channels (+16 more)
 
-### Community 25 - "umount.go"
-Cohesion: 0.19
-Nodes (18): directUnmount(), Command, isMountpoint(), newUmountCmd(), pickUmountTarget(), runUmount(), T, TestMountRuntimeStop_ForceUnmountsWhenServeLoopDoesNotExit() (+10 more)
+### Community 25 - "ui.go"
+Cohesion: 0.06
+Nodes (67): Report, printCheckReport(), Command, Report, newDoctorCmd(), printDoctorReport(), Command, newInitCmd() (+59 more)
 
 ### Community 26 - "Default"
 Cohesion: 0.24
@@ -279,9 +287,9 @@ Nodes (22): Default(), T, newCfg(), TestApplyEnv_DoesNotTouchPositionals(), Test
 Cohesion: 0.21
 Nodes (19): T, TestCreateGating(), TestLinkDeniesLaunderingMaskedFile(), TestListxattrGating(), TestMaskedXattrSideChannel(), TestReloadTakesEffectWithoutRemount(), TestVirtualDir(), appendPolicyFixture() (+11 more)
 
-### Community 28 - "runWatchdog"
+### Community 28 - "RecordMount"
 Cohesion: 0.19
-Nodes (18): Command, Context, Duration, Logger, newWatchdogCmd(), runWatchdog(), spawnWatchdog(), stopWatchdog() (+10 more)
+Nodes (19): Command, Context, Duration, Logger, newWatchdogCmd(), runWatchdog(), spawnWatchdog(), stopWatchdog() (+11 more)
 
 ### Community 29 - "Report"
 Cohesion: 0.16
@@ -295,9 +303,9 @@ Nodes (21): Daemon watchdog subcommand, Hardlink escape prevention, Process iden
 Cohesion: 0.13
 Nodes (20): api.Server (per-mount dashboard handler), internal/apperrors (errno mapping), janusfs CLI clients (mount|umount|update|path), ContentKey (path,mtime,size,inode,gen), ~/.janusfs/daemon.sock control socket, Dashboard HTTP (127.0.0.1:7381), Decision (HIDDEN > MASKED > ALLOWED), engine.Engine (atomic rule snapshot) (+12 more)
 
-### Community 32 - "symGood"
-Cohesion: 0.29
-Nodes (12): Command, newInitCmd(), runInit(), runInitGlobal(), T, TestRunInit_ForceOverwrites(), TestRunInit_RefusesToOverwriteWithoutForce(), TestRunInit_WritesPolicyTemplate() (+4 more)
+### Community 32 - "callDaemon"
+Cohesion: 0.23
+Nodes (11): callDaemon(), Command, Logger, historyDBPath(), logLevel(), newMountCmd(), newUpdateCmd(), runMount() (+3 more)
 
 ### Community 33 - "ti"
 Cohesion: 0.15
@@ -313,7 +321,7 @@ Nodes (10): C(), E(), F(), h(), L(), m(), N(), s() (+2 more)
 
 ### Community 36 - "RuleSet"
 Cohesion: 0.23
-Nodes (7): Decision, IgnoreLevel, MaskLevel, RuleSet, relativeToLevel(), Resolution, TraceEntry
+Nodes (7): Decision, relativeToLevel(), IgnoreLevel, MaskLevel, Resolution, RuleSet, TraceEntry
 
 ### Community 37 - "P"
 Cohesion: 0.13
@@ -340,8 +348,8 @@ Cohesion: 0.23
 Nodes (11): leadingDigits(), nullTerminatedString(), parseKernelVersion(), T, TestNullTerminatedString(), TestParseKernelVersion(), checkDevFuse(), checkKernelVersion() (+3 more)
 
 ### Community 43 - "mountRuntime"
-Cohesion: 0.22
-Nodes (9): CancelFunc, Context, Logger, makeObserver(), startMount(), Logger, mountRuntime, Adapter (+1 more)
+Cohesion: 0.17
+Nodes (11): CancelFunc, Context, Logger, makeObserver(), startMount(), Engine, Context, Logger (+3 more)
 
 ### Community 44 - "procid_linux.go"
 Cohesion: 0.26
@@ -354,10 +362,6 @@ Nodes (11): a(), B(), C(), e(), L(), M(), o(), q() (+3 more)
 ### Community 46 - "PRP 09 — macOS Seatbelt confinement for `janusfs exec`"
 Cohesion: 0.15
 Nodes (12): Anti-patterns, Context, Design, Done when, Goal, If this is wrong, PRP 09 — macOS Seatbelt confinement for `janusfs exec`, Related / follow-on PRPs (scoped, not part of this branch) (+4 more)
-
-### Community 47 - "New"
-Cohesion: 0.27
-Nodes (7): FS, Handler, HandlerFunc, New(), relativeRuleRef(), withHeaders(), withSecurity()
 
 ### Community 48 - "SetOutput"
 Cohesion: 0.27
@@ -372,8 +376,8 @@ Cohesion: 0.20
 Nodes (4): C(), q(), x(), z()
 
 ### Community 51 - "config.go"
-Cohesion: 0.18
-Nodes (19): TestDoUnmount_PrunesStaleRegistryEntry(), TestResumePrunesMissingSourceRecord(), TestResumePrunesUnrecoverableRecord(), Config, fileSettings, MountRecord, absClean(), ApplyEnv() (+11 more)
+Cohesion: 0.20
+Nodes (16): pruneStaleRegistry(), Config, fileSettings, MountRecord, absClean(), ApplyEnv(), envBool(), envInt() (+8 more)
 
 ### Community 52 - "revocableHandle"
 Cohesion: 0.27
@@ -384,8 +388,8 @@ Cohesion: 0.24
 Nodes (10): Phase 0 Baseline — NFR-3 performance budgets, internal/obs Recorder with Prometheus native collectors, NFR-3 performance budget thresholds, Prometheus /metrics as single metrics surface, Regexp pre-filtering and allocation bypass, slices.SortFunc zero-allocation sorting, Prometheus-only Observability Implementation Plan, Prometheus-only Observability Design (+2 more)
 
 ### Community 55 - "runNSMount"
-Cohesion: 0.23
-Nodes (9): Command, Context, Level, Logger, newNSMountCmd(), registerPlatformCommands(), runNSMount(), Context (+1 more)
+Cohesion: 0.29
+Nodes (8): Command, Context, Level, Logger, newNSMountCmd(), registerPlatformCommands(), runNSMount(), nsmountLogWriter
 
 ### Community 56 - "addon-search.js"
 Cohesion: 0.49
@@ -451,6 +455,10 @@ Nodes (4): e(), f(), i(), l()
 Cohesion: 0.50
 Nodes (5): env-value redaction pattern, Hide rules, Mask rules with patterns, JanusFS policy version 1, Secret pattern library
 
+### Community 77 - "Call"
+Cohesion: 0.20
+Nodes (13): daemonLogPath(), Command, newLogsCmd(), startDaemonBackground(), daemon, ResponseWriter, MountStatus, Request (+5 more)
+
 ### Community 78 - "Mounts Cleanup and Check Matches Implementation Plan"
 Cohesion: 0.50
 Nodes (4): janusfs check --matches policy preview, Mount registry self-healing on daemon resume, Mounts Cleanup and Check Matches Implementation Plan, Mount Registry Cleanup and Check Matches Design
@@ -483,10 +491,6 @@ Nodes (3): gate() decision-to-errno, Operation matrix, xattr redaction side chan
 Cohesion: 0.67
 Nodes (3): Dead code audit methodology, Scaffolding traps vs genuine dead code, API standalone-serve dead code cluster
 
-### Community 102 - "mounts.go"
-Cohesion: 0.18
-Nodes (19): classifyMountRecords(), collectMountListings(), defaultStatDir(), Command, mountStatus, Writer, newMountsCmd(), printMountListings() (+11 more)
-
 ## Ambiguous Edges - Review These
 - `JanusFS Filesystem Boundary Illustration` → `Policy Enforcement at the Filesystem Boundary`  [AMBIGUOUS]
   docs/janus_art.png · relation: references
@@ -494,9 +498,9 @@ Nodes (19): classifyMountRecords(), collectMountListings(), defaultStatDir(), Co
   docs/janus_art.png · relation: references
 
 ## Knowledge Gaps
-- **114 isolated node(s):** `run_spike.sh script`, `unmountAttempt`, `github.com/sarathsp06/janusfs`, `fileSettings`, `decisionKey` (+109 more)
+- **114 isolated node(s):** `unmountAttempt`, `github.com/sarathsp06/janusfs`, `builtinSpec`, `run_spike.sh script`, `fileSettings` (+109 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **33 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **47 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
@@ -506,11 +510,11 @@ _Questions this graph is uniquely positioned to answer:_
 - **What is the exact relationship between `JanusFS Filesystem Boundary Illustration` and `Three Faces of Access (Allowed, Masked, Hidden)`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
 - **Why does `mountRuntime` connect `mountRuntime` to `Pattern`, `daemon_test.go`, `Engine`, `Store`, `Recorder`, `daemon`, `Server`?**
-  _High betweenness centrality (0.055) - this node is a cross-community bridge._
-- **Why does `Engine` connect `Engine` to `JanusNode`, `mountRuntime`, `check/check.go`?**
-  _High betweenness centrality (0.046) - this node is a cross-community bridge._
-- **Why does `Server` connect `Server` to `NewRecorder`, `mountRuntime`, `New`, `Store`, `Registry`, `daemon`?**
+  _High betweenness centrality (0.078) - this node is a cross-community bridge._
+- **Why does `JanusRoot` connect `JanusNode` to `Pattern`, `mountRuntime`, `Context`, `Engine`?**
   _High betweenness centrality (0.045) - this node is a cross-community bridge._
+- **Why does `Engine` connect `Engine` to `JanusNode`, `mountRuntime`, `check/check.go`?**
+  _High betweenness centrality (0.041) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `P()` (e.g. with `al()` and `il()`) actually correct?**
   _`P()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `s()` (e.g. with `E()` and `T()`) actually correct?**
