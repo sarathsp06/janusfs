@@ -53,20 +53,30 @@ func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 		if p.PreFilter != nil && !p.PreFilter(buf) {
 			continue
 		}
-		matches := p.Regex.FindAllSubmatchIndex(buf, -1)
-		if len(matches) > 0 && spans == nil {
-			spans = make([]Span, 0, len(matches))
+		if p.GroupIndex == 0 {
+			matches := p.Regex.FindAllIndex(buf, -1)
+			if len(matches) > 0 {
+				spans = slices.Grow(spans, len(matches))
+				for _, m := range matches {
+					if m[1] > m[0] {
+						spans = append(spans, Span{Off: base + int64(m[0]), Len: int64(m[1] - m[0])})
+					}
+				}
+			}
+			continue
 		}
-		for _, m := range matches {
-			start, end := m[0], m[1]
-			if p.GroupIndex > 0 {
-				gi := 2 * p.GroupIndex
+		matches := p.Regex.FindAllSubmatchIndex(buf, -1)
+		if len(matches) > 0 {
+			spans = slices.Grow(spans, len(matches))
+			gi := 2 * p.GroupIndex
+			for _, m := range matches {
+				start, end := m[0], m[1]
 				if gi+1 < len(m) && m[gi] >= 0 {
 					start, end = m[gi], m[gi+1]
 				}
-			}
-			if end > start {
-				spans = append(spans, Span{Off: base + int64(start), Len: int64(end - start)})
+				if end > start {
+					spans = append(spans, Span{Off: base + int64(start), Len: int64(end - start)})
+				}
 			}
 		}
 	}

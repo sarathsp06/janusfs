@@ -48,3 +48,12 @@ By deferring `patternSignature` generation until a rebuild or cache-miss path is
 
 **Action:**
 Deferred `patternSignature` string generation in `RamCache.ReadAt` and added `matchesPatternSig`. Served ready cache hits directly under `RamCache.mu` lock release. Reduced `BenchmarkReadAtCacheHit` execution latency from ~636 ns/op to ~62.5 ns/op (~90% latency reduction) and completely eliminated heap allocations (from 4 allocs/op / 264 B/op down to 0 allocs/op / 0 B/op).
+
+## 2026-08-29 - Pre-allocated Span Growth & Submatch Avoidance for GroupIndex 0 Patterns
+
+**Learning:**
+In `FindSpans`, calling `Regexp.FindAllSubmatchIndex` for patterns where `GroupIndex == 0` (whole match masking) allocates unnecessary capture group submatch index slices (`[][]int` with multiple elements per match).
+Switching to `Regexp.FindAllIndex` when `GroupIndex == 0` avoids capture group index allocations. Furthermore, pre-allocating target slice capacity via `slices.Grow(spans, len(matches))` avoids repeated slice re-allocations during span collection across multiple patterns.
+
+**Action:**
+Branch on `p.GroupIndex == 0` to use `FindAllIndex` instead of `FindAllSubmatchIndex`, and pre-allocate `spans` capacity with `slices.Grow`.
