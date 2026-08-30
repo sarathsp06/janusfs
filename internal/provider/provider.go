@@ -361,9 +361,9 @@ func matchesPatternSig(sig string, pats []*patterns.Pattern) bool {
 		return len(sig) == len(pats[0].Name)+1 && sig[len(pats[0].Name)] == 0 && strings.HasPrefix(sig, pats[0].Name)
 	}
 
-	var arr [8]string
+	var arr [32]string
 	var names []string
-	if n <= 8 {
+	if n <= 32 {
 		names = arr[:n]
 	} else {
 		names = make([]string, n)
@@ -378,7 +378,7 @@ func matchesPatternSig(sig string, pats []*patterns.Pattern) bool {
 		return false
 	}
 
-	slices.Sort(names)
+	sortStrings(names)
 
 	pos := 0
 	for _, name := range names {
@@ -404,9 +404,9 @@ func patternSignature(pats []*patterns.Pattern) string {
 		return pats[0].Name + "\x00"
 	}
 
-	var arr [8]string
+	var arr [32]string
 	var names []string
-	if n <= 8 {
+	if n <= 32 {
 		names = arr[:n]
 	} else {
 		names = make([]string, n)
@@ -418,7 +418,7 @@ func patternSignature(pats []*patterns.Pattern) string {
 		totalLen += len(p.Name)
 	}
 
-	slices.Sort(names)
+	sortStrings(names)
 
 	var sb strings.Builder
 	sb.Grow(totalLen)
@@ -439,5 +439,44 @@ func copyAt(src, dst []byte, off int64) int {
 func zero(b []byte) {
 	for i := range b {
 		b[i] = 0
+	}
+}
+
+func sortStrings(names []string) {
+	switch len(names) {
+	case 0, 1:
+		return
+	case 2:
+		if names[0] > names[1] {
+			names[0], names[1] = names[1], names[0]
+		}
+	case 3:
+		if names[0] > names[1] {
+			names[0], names[1] = names[1], names[0]
+		}
+		if names[1] > names[2] {
+			names[1], names[2] = names[2], names[1]
+			if names[0] > names[1] {
+				names[0], names[1] = names[1], names[0]
+			}
+		}
+	case 4:
+		if names[0] > names[1] {
+			names[0], names[1] = names[1], names[0]
+		}
+		if names[2] > names[3] {
+			names[2], names[3] = names[3], names[2]
+		}
+		if names[0] > names[2] {
+			names[0], names[2] = names[2], names[0]
+		}
+		if names[1] > names[3] {
+			names[1], names[3] = names[3], names[1]
+		}
+		if names[1] > names[2] {
+			names[1], names[2] = names[2], names[1]
+		}
+	default:
+		slices.Sort(names)
 	}
 }
