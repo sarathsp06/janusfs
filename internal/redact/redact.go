@@ -53,9 +53,18 @@ func FindSpans(buf []byte, base int64, pats []*patterns.Pattern) []Span {
 		if p.PreFilter != nil && !p.PreFilter(buf) {
 			continue
 		}
-		matches := p.Regex.FindAllSubmatchIndex(buf, -1)
-		if len(matches) > 0 && spans == nil {
-			spans = make([]Span, 0, len(matches))
+		var matches [][]int
+		if p.GroupIndex == 0 {
+			matches = p.Regex.FindAllIndex(buf, -1)
+		} else {
+			matches = p.Regex.FindAllSubmatchIndex(buf, -1)
+		}
+		if len(matches) > 0 {
+			if spans == nil {
+				spans = make([]Span, 0, len(matches))
+			} else {
+				spans = slices.Grow(spans, len(matches))
+			}
 		}
 		for _, m := range matches {
 			start, end := m[0], m[1]
@@ -109,8 +118,9 @@ func Redact(buf []byte, pats []*patterns.Pattern) []byte {
 	}
 	out := bytes.Clone(buf)
 	for _, s := range spans {
-		for i := s.Off; i < s.Off+s.Len; i++ {
-			out[i] = '*'
+		sub := out[s.Off : s.Off+s.Len]
+		for i := range sub {
+			sub[i] = '*'
 		}
 	}
 	return out
