@@ -48,3 +48,12 @@ By deferring `patternSignature` generation until a rebuild or cache-miss path is
 
 **Action:**
 Deferred `patternSignature` string generation in `RamCache.ReadAt` and added `matchesPatternSig`. Served ready cache hits directly under `RamCache.mu` lock release. Reduced `BenchmarkReadAtCacheHit` execution latency from ~636 ns/op to ~62.5 ns/op (~90% latency reduction) and completely eliminated heap allocations (from 4 allocs/op / 264 B/op down to 0 allocs/op / 0 B/op).
+
+## 2026-08-31 - Reduced Submatch Allocations and Vectorized Byte Masking in Redact Hot Path
+
+**Learning:**
+In `FindSpans`, calling `p.Regex.FindAllSubmatchIndex` for patterns targeting the whole match (`GroupIndex == 0`) allocates slice headers for all submatch indices even though only the full match indices (`m[0]` and `m[1]`) are used. Switching to `FindAllIndex` when `GroupIndex == 0` allocates smaller `[2]int` slices instead of full submatch arrays.
+Additionally, pre-allocating slice capacity with `slices.Grow(spans, len(matches))` prevents repeated reallocation when merging match spans from multiple patterns. In `Redact`, iterating over a sub-slice `out[s.Off : s.Off+s.Len]` allows the Go compiler to vectorize/optimize byte assignment loops.
+
+**Action:**
+Updated `FindSpans` to select `FindAllIndex` when `GroupIndex == 0` and used `slices.Grow` for span slice allocations. Rewrote byte masking in `Redact` to operate on sub-slices.

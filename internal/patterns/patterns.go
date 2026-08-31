@@ -152,12 +152,23 @@ func containsIgnoreCase(buf []byte, lowerStr string) bool {
 	if len(lowerStr) == 0 {
 		return true
 	}
-	if len(buf) < len(lowerStr) {
+	n := len(lowerStr)
+	if len(buf) < n {
 		return false
 	}
-	for i := 0; i <= len(buf)-len(lowerStr); i++ {
+	firstLower := lowerStr[0]
+	firstUpper := firstLower
+	if firstLower >= 'a' && firstLower <= 'z' {
+		firstUpper = firstLower - 32
+	}
+	max := len(buf) - n
+	for i := 0; i <= max; i++ {
+		b0 := buf[i]
+		if b0 != firstLower && b0 != firstUpper {
+			continue
+		}
 		match := true
-		for j := 0; j < len(lowerStr); j++ {
+		for j := 1; j < n; j++ {
 			b := buf[i+j]
 			if b >= 'A' && b <= 'Z' {
 				b = b + 32
