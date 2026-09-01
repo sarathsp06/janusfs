@@ -48,3 +48,12 @@ By deferring `patternSignature` generation until a rebuild or cache-miss path is
 
 **Action:**
 Deferred `patternSignature` string generation in `RamCache.ReadAt` and added `matchesPatternSig`. Served ready cache hits directly under `RamCache.mu` lock release. Reduced `BenchmarkReadAtCacheHit` execution latency from ~636 ns/op to ~62.5 ns/op (~90% latency reduction) and completely eliminated heap allocations (from 4 allocs/op / 264 B/op down to 0 allocs/op / 0 B/op).
+
+## 2026-09-01 - Zero-Allocation Pattern Deduplication & In-Place Sorting in Decision Engine
+
+**Learning:**
+Allocating temporary map structures (`seenNames` and `patByName`) during rule evaluation in `RuleSet.Resolve` introduces avoidable heap allocations on decision cache misses. Because the number of matching pattern references per rule level in practice is very small (typically 1–4 patterns), performing linear scanning on a slice avoids `runtime.makemap` and map lookup overhead entirely.
+Furthermore, using Go 1.21+ `slices.SortFunc` with `cmp.Compare` on `*patterns.Pattern` slices sorts patterns in-place without `sort.Strings` interface allocations.
+
+**Action:**
+Replaced `seenNames` (`map[string]bool`) and `patByName` (`map[string]*patterns.Pattern`) in `RuleSet.Resolve` with linear scanning over a slice of `*patterns.Pattern`. Used `slices.SortFunc` with `cmp.Compare` to sort patterns in-place, and pre-allocated `patternNames` slice with exact capacity `make([]string, len(pats))`.
