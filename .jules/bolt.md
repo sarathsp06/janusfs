@@ -48,3 +48,11 @@ By deferring `patternSignature` generation until a rebuild or cache-miss path is
 
 **Action:**
 Deferred `patternSignature` string generation in `RamCache.ReadAt` and added `matchesPatternSig`. Served ready cache hits directly under `RamCache.mu` lock release. Reduced `BenchmarkReadAtCacheHit` execution latency from ~636 ns/op to ~62.5 ns/op (~90% latency reduction) and completely eliminated heap allocations (from 4 allocs/op / 264 B/op down to 0 allocs/op / 0 B/op).
+
+## 2026-09-02 - Map Allocation Removal in RuleSet.Resolve
+
+**Learning:**
+Allocating map headers (`map[string]bool` and `map[string]*Pattern`) on every decision engine resolution call introduces unnecessary heap allocations and GC pressure. For small pattern sets (typically 1-5 patterns per mask rule), linear scan deduplication in a slice and in-place sorting via `slices.SortFunc` and `cmp.Compare` is faster, simpler, and eliminates map allocations.
+
+**Action:**
+Replaced `seenNames` and `patByName` maps in `internal/rules/resolve.go` with linear `slices.ContainsFunc` checks and in-place `slices.SortFunc` sorting.
