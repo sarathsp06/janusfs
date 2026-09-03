@@ -48,3 +48,11 @@ By deferring `patternSignature` generation until a rebuild or cache-miss path is
 
 **Action:**
 Deferred `patternSignature` string generation in `RamCache.ReadAt` and added `matchesPatternSig`. Served ready cache hits directly under `RamCache.mu` lock release. Reduced `BenchmarkReadAtCacheHit` execution latency from ~636 ns/op to ~62.5 ns/op (~90% latency reduction) and completely eliminated heap allocations (from 4 allocs/op / 264 B/op down to 0 allocs/op / 0 B/op).
+
+## 2026-08-26 - Dynamic Pre-allocation of Span Slice Capacity Across Multiple Regex Patterns
+
+**Learning:**
+In redaction paths with multiple pattern matches (`FindSpans`), dynamically appending `Span` elements into a slice without pre-allocating capacity causes incremental slice grow allocations as new matches are discovered across patterns. Using `slices.Grow(spans, len(matches))` dynamically adjusts slice capacity to fit all incoming matches from regex results in a single step, preventing redundant intermediate slice allocations during span collection.
+
+**Action:**
+Replaced conditional slice initialization with `spans = slices.Grow(spans, len(matches))` in `FindSpans`.
