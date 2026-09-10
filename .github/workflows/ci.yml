@@ -32,6 +32,11 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: go vet (fuseintegration tag)
+        # The mounted-integration tests only compile under this tag; without
+        # this step a refactor can silently break them for weeks (it did).
+        run: go vet -tags fuseintegration ./...
+
       - name: build
         run: make build
 

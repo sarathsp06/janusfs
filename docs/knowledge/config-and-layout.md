@@ -99,9 +99,11 @@ path when `EvalSymlinks` fails, since existence is the caller's check.
 `pathsOverlap` (`config.go:475`) compares with trailing separators appended, so
 `/a/bc` is not treated as being under `/a/b`.
 
-**Note for future work**: rule 4 makes a path-preserving overmount
-(`Mountpoint == Src`) impossible today. Any design that mounts over the source
-must relax this rule under an explicit mode rather than deleting it.
+**Note**: rule 4 makes a path-preserving overmount (`Mountpoint == Src`)
+impossible, deliberately. The macOS path-preserving mode that would have needed
+to relax it was rejected (SPEC §20, [PRP 12](/PRPs/12-delete-macos-enforcement-track.md));
+Linux's namespace exec overmounts the source only inside a private namespace,
+backed by a shadow bind mount, without going through this validation.
 
 # The mounts registry
 

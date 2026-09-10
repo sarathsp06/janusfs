@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package health
 
@@ -20,3 +20,5 @@ func checkMacFUSE() MacFUSEStatus {
 func pidAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
+
+func platformWarnings() []string { return nil }

@@ -1188,6 +1188,24 @@ Recorded so they are not re-proposed.
   binary reuses both.
 - **Improving the path rewriter.** The failure is structural, not a matter of
   quality (FR-29).
+- **The macOS enforcement track: process identity, path-preserving overmount,
+  and the `--sandbox` Seatbelt wrapper** (2026-09 decision; PRPs 12–14).
+  Every major harness now ships vendor-signed kernel confinement on macOS
+  (Codex CLI and Gemini CLI use Seatbelt directly, Anthropic's srt wraps
+  Seatbelt/bubblewrap). A daemon-side identity heuristic is evadable by
+  `setsid` and competes with a signed kernel mechanism — no audience remains.
+  `internal/procid` was deleted; macOS `janusfs exec` is advisory only
+  (disjoint sanitized mount, cwd set, env scrubbed) and is documented as
+  such. Enforcement is Linux (natively or in a container); the deny layer on
+  macOS is the harness's own sandbox. PRP 09's spike findings (a Seatbelt
+  profile denying the source path while keeping the mountpoint usable works
+  for plain CLI children, but was never validated against signed/Electron
+  app bundles and TCC) are preserved in `PRPs/09-macos-seatbelt-exec.md`.
+- **A raw-bytes operator endpoint (`/api/v1/reveal`) in the dashboard.**
+  A secrets-redaction product must not serve unredacted source bytes and
+  remote file edits over loopback HTTP; one leaked bearer token converted
+  into arbitrary read/write under the mount root. The operator has an
+  editor. Removed 2026-09 (PRP 15).
 
 ---
 

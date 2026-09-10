@@ -113,7 +113,6 @@ per-mount bearer token generated at `startMount` (`runtime.go:88`).
 |---|---|
 | `/api/v1/summary` | live snapshot: counts, states, generation, uptime |
 | `/api/v1/coverage` | current masked and hidden paths with the matching rule |
-| `/api/v1/reveal` | resolve one path and return its derivation |
 | `/api/v1/config` | read and write the config files through the dashboard editor |
 | `/api/v1/reload` | trigger `mountRuntime.reload` |
 | `/api/v1/history` | rollup series |

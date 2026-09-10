@@ -2,11 +2,16 @@
 
 // On Linux, janusfs exec uses a private mount namespace instead (see
 // runner_linux.go): the child sees a filtered view at the source's own path,
-// with no path rewriting needed, because the kernel — not a string
-// substitution — is what makes the two paths the same path. Everything in
-// this file (CWD hijacking and argv rewriting) exists only to simulate that
-// path parity on a platform (macOS) with no per-process mount
-// namespaces, and is therefore darwin-only.
+// with no path tricks needed, because the kernel — not a string
+// substitution — is what makes the two paths the same path. macOS has no
+// per-process mount namespaces, so this file can only be advisory: it sets
+// the child's working directory to the disjoint sanitized mount and scrubs
+// JANUSFS_* env vars. It does not (and cannot) stop the child reaching the
+// real source at its own path. Argv path rewriting used to live here as a
+// best-effort parity shim; it was removed because its failure mode is
+// structural (paths reach children through env vars, config files, and
+// caches that no argv rewrite can touch), and a shim that sometimes works is
+// worse than a boundary honestly described as advisory.
 package execrunner
 
 import (
@@ -115,7 +120,7 @@ func findSourceAndMount(cwd string) (string, string, error) {
 	return foundSrc, mountResp.Mounts[0].Mountpoint, nil
 }
 
-func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
+func Run(ctx context.Context, targetArgs []string) (int, error) {
 	if len(targetArgs) == 0 {
 		return 125, fmt.Errorf("exec: no command specified to execute")
 	}
@@ -129,6 +134,8 @@ func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
 	if err != nil {
 		return 125, err
 	}
+
+	warnGitStagingHazards(src)
 
 	// Poll readiness up to 2,000 ms
 	ready := false
@@ -163,12 +170,6 @@ func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
 		}
 	}
 
-	// Forward argument path translation
-	finalArgs := make([]string, len(targetArgs))
-	for i, arg := range targetArgs {
-		finalArgs[i] = string(ReplacePaths([]byte(arg), []byte(src), []byte(mountpoint)))
-	}
-
 	// Scrub environment
 	env := os.Environ()
 	var scrubbedEnv []string
@@ -178,52 +179,8 @@ func Run(ctx context.Context, targetArgs []string, sandbox bool) (int, error) {
 		}
 	}
 
-	// Seatbelt confinement (opt-in): wrap finalArgs so the child process
-	// tree cannot read or write the real source at its own path, while the
-	// disjoint mountpoint above stays fully usable. This is additive to
-	// everything above (mount discovery, CWD hijack, argv rewrite, env
-	// scrub) — none of that changes.
-	if sandbox {
-		if err := sandboxAvailable(); err != nil {
-			// Fail closed: a user who asked for confinement and didn't get
-			// it is the worst outcome, so refuse rather than run the child
-			// unsandboxed.
-			return 125, fmt.Errorf("exec: %w", err)
-		}
-
-		if err := assertMountNotUnderSrc(src, mountpoint); err != nil {
-			return 125, fmt.Errorf("exec: --sandbox: %w", err)
-		}
-
-		denyRW, err := canonicalDenyTargets(src)
-		if err != nil {
-			return 125, fmt.Errorf("exec: --sandbox: %w", err)
-		}
-
-		var denyRO []string
-		if home, herr := os.UserHomeDir(); herr == nil {
-			denyRO, err = canonicalReadOnlyDenyTargets(home)
-			if err != nil {
-				return 125, fmt.Errorf("exec: --sandbox: %w", err)
-			}
-		}
-
-		mustAllow, err := canonicalizeWithFirmlinkTwin(mountpoint)
-		if err != nil {
-			return 125, fmt.Errorf("exec: --sandbox: %w", err)
-		}
-
-		profile, err := sandboxProfile(denyRW, denyRO, mustAllow)
-		if err != nil {
-			return 125, fmt.Errorf("exec: --sandbox: %w", err)
-		}
-
-		sandboxArgs := append([]string{"-p", profile, "--"}, finalArgs...)
-		finalArgs = append([]string{sandboxExecPath}, sandboxArgs...)
-	}
-
 	// Set up command
-	cmd := exec.CommandContext(ctx, finalArgs[0], finalArgs[1:]...)
+	cmd := exec.CommandContext(ctx, targetArgs[0], targetArgs[1:]...)
 	cmd.Dir = hijackedCWD
 	cmd.Env = scrubbedEnv
 	cmd.Stdin = os.Stdin

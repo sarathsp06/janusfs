@@ -63,6 +63,7 @@ Prefix with `rtk` for token-reduced output.
 | `internal/logging/` | `slog` wrapper, one handler, per-component loggers |
 | `internal/apperrors/` | sentinel errors and the single `ToErrno` translation |
 | `internal/rules/` | discovery, parse, compile, resolve; in-house gitignore matcher |
+| `internal/backing/` | dirfd-relative access to the source root (`openat` family behind `validRel`) |
 | `internal/engine/` | atomic rule-set snapshot, generations |
 | `internal/patterns/` | builtin and custom pattern library |
 | `internal/redact/` | length-preserving redaction, streaming modes |
@@ -70,6 +71,7 @@ Prefix with `rtk` for token-reduced output.
 | `internal/mount/` | FUSE adapter — thin, no business logic |
 | `internal/execrunner/` | `janusfs exec` orchestration |
 | `internal/control/` | daemon control-socket protocol types and dial helper, shared by `cmd/janusfs` and `internal/execrunner` |
+| `internal/nsexec/` | Linux namespace-exec capability preflight (`Supported()`, kernel version) |
 | `internal/obs/` | event bus, metrics, ring buffer, top-N |
 | `internal/history/` | SQLite `Store` — rollups, sessions, coverage |
 | `internal/health/` | diagnostics for `doctor` |
@@ -79,8 +81,9 @@ Prefix with `rtk` for token-reduced output.
 | `internal/vfsmeta/` | `.janusfs` virtual file contents |
 
 `internal/watch` and `internal/platform` do not exist and are not planned.
-`internal/backing`, `internal/procid`, and `internal/nsexec` are planned but not
-yet written — see [SPEC.md §18](SPEC.md#18-sequencing).
+`internal/procid` no longer exists: the macOS enforcement track (process
+identity, path-preserving overmount, Seatbelt `--sandbox`) was deleted and is
+recorded as rejected — see [SPEC.md §20](SPEC.md#20-risks-and-rejected-designs).
 
 ## Code conventions
 

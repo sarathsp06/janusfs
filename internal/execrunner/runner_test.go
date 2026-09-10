@@ -189,10 +189,10 @@ func main() {
 	os.Stdout = wOut
 	os.Stderr = wErr
 
-	// Run our helper through execrunner.Run!
-	// We pass an argument containing the absolute src path to verify translation.
+	// Run our helper through execrunner.Run. The argument carries the absolute
+	// src path and must arrive verbatim: exec no longer rewrites argv.
 	argWithSrc := filepath.Join(srcDir, "somefile.txt")
-	exitCode, runErr := Run(context.Background(), []string{binFile, argWithSrc}, false)
+	exitCode, runErr := Run(context.Background(), []string{binFile, argWithSrc})
 
 	// Restore stdout/stderr
 	_ = wOut.Close()
@@ -225,11 +225,9 @@ func main() {
 		t.Errorf("expected CWD output not to be rewritten to srcDir %q, stdout: %q", srcDir, stdoutStr)
 	}
 
-	// Verify argument path translation: the child receives the sanitized mount path,
-	// and stdout preserves that byte-for-byte.
-	argWithMount := filepath.Join(mountDir, "somefile.txt")
-	if !strings.Contains(stdoutStr, "ARG:"+argWithMount) {
-		t.Errorf("expected ARG output to reference mount path %q, got stdout: %q", argWithMount, stdoutStr)
+	// Verify arguments pass through verbatim: no path translation.
+	if !strings.Contains(stdoutStr, "ARG:"+argWithSrc) {
+		t.Errorf("expected ARG output to carry the original path %q verbatim, got stdout: %q", argWithSrc, stdoutStr)
 	}
 
 	// Verify env scrubbing
@@ -250,148 +248,12 @@ func TestRunDaemonNotRunning(t *testing.T) {
 	_ = os.Setenv("HOME", tmpHome)
 	defer func() { _ = os.Setenv("HOME", origHome) }()
 
-	exitCode, err := Run(context.Background(), []string{"echo", "hello"}, false)
+	exitCode, err := Run(context.Background(), []string{"echo", "hello"})
 	if exitCode != 125 {
 		t.Errorf("expected exit code 125, got %d", exitCode)
 	}
 	if err == nil || !strings.Contains(err.Error(), "JanusFS daemon is not running") {
 		t.Errorf("expected daemon not running error, got: %v", err)
-	}
-}
-
-// TestRunSandboxWrapsChild runs Run with sandbox=true against the mock daemon
-// and asserts that the child was actually invoked through /usr/bin/sandbox-exec
-// — i.e. the runner.go sandbox branch built a valid profile, sandbox-exec
-// accepted it, and the wrapped child exited cleanly. This is the shortest
-// unit-level guard against a future edit that silently drops the sandbox wrap
-// (a fail-open regression).
-func TestRunSandboxWrapsChild(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
-		t.Skip("sandbox-exec not present; skipping darwin-only test")
-	}
-
-	tmpHome, err := os.MkdirTemp("", "janusfs-sbx-home")
-	if err != nil {
-		t.Fatalf("mkdirtemp home: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpHome) }()
-
-	origHome := os.Getenv("HOME")
-	_ = os.Setenv("HOME", tmpHome)
-	defer func() { _ = os.Setenv("HOME", origHome) }()
-
-	srcRaw, err := os.MkdirTemp("", "janusfs-sbx-src")
-	if err != nil {
-		t.Fatalf("mkdirtemp src: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(srcRaw) }()
-	srcDir, err := filepath.EvalSymlinks(srcRaw)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mntRaw, err := os.MkdirTemp("", "janusfs-sbx-mnt")
-	if err != nil {
-		t.Fatalf("mkdirtemp mnt: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(mntRaw) }()
-	mountDir, err := filepath.EvalSymlinks(mntRaw)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(srcDir, ".janusfs.yml"), []byte("version: 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(mountDir, ".janusfs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	sockPath := filepath.Join(tmpHome, ".janusfs", "daemon.sock")
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer func() { _ = c.Close() }()
-				var req daemonRequest
-				if err := json.NewDecoder(c).Decode(&req); err != nil {
-					return
-				}
-				resp := daemonResponse{OK: true}
-				if req.Cmd == "mount" {
-					resp.Mounts = []mountStatus{{Src: srcDir, Mountpoint: mountDir}}
-				}
-				_ = json.NewEncoder(c).Encode(resp)
-			}(conn)
-		}
-	}()
-
-	origCWD, _ := os.Getwd()
-	if err := os.Chdir(srcDir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(origCWD) }()
-
-	// A confined child reading the real source at its own path must be
-	// denied — the whole point of --sandbox. Assert on stdout so a
-	// regression that drops the wrap (child would read successfully and
-	// print the secret) fails loudly.
-	secret := filepath.Join(srcDir, "secret.txt")
-	if err := os.WriteFile(secret, []byte("TOPSECRET"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	origStdout := os.Stdout
-	origStderr := os.Stderr
-	rOut, wOut, _ := os.Pipe()
-	rErr, wErr, _ := os.Pipe()
-	os.Stdout = wOut
-	os.Stderr = wErr
-
-	exitCode, runErr := Run(context.Background(), []string{"/bin/cat", secret}, true)
-
-	_ = wOut.Close()
-	_ = wErr.Close()
-	os.Stdout = origStdout
-	os.Stderr = origStderr
-
-	var outBuf, errBuf bytes.Buffer
-	_, _ = outBuf.ReadFrom(rOut)
-	_, _ = errBuf.ReadFrom(rErr)
-
-	if runErr != nil {
-		t.Fatalf("unexpected runErr: %v", runErr)
-	}
-	if exitCode == 0 {
-		t.Fatalf("expected non-zero exit when confined child reads real source, got 0 (stdout=%q, stderr=%q)", outBuf.String(), errBuf.String())
-	}
-	if strings.Contains(outBuf.String(), "TOPSECRET") {
-		t.Fatalf("sandbox let the secret through: %q", outBuf.String())
-	}
-}
-
-// TestRunSandboxFailsClosedWhenSandboxExecMissing asserts that if the runner
-// can't find /usr/bin/sandbox-exec, --sandbox refuses to run the child rather
-// than silently falling back to unsandboxed exec — the worst-outcome case the
-// PRP explicitly calls out.
-func TestRunSandboxFailsClosedWhenSandboxExecMissing(t *testing.T) {
-	// Directly assert the guard the runner uses. Simulating a missing
-	// system binary from a unit test isn't feasible; the guard is
-	// sandboxAvailableAt, and Run calls sandboxAvailable() → same code.
-	if err := sandboxAvailableAt("/definitely/not/here/sandbox-exec"); err == nil {
-		t.Fatal("expected an error for a missing sandbox-exec path (Run relies on this to fail closed)")
 	}
 }
 

@@ -21,8 +21,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sarathsp06/janusfs/internal/patterns"
 	"gopkg.in/yaml.v3"
+
+	"github.com/sarathsp06/janusfs/internal/patterns"
 )
 
 // PolicyFileName is the config file name discovered at every level.

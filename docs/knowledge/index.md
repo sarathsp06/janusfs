@@ -22,9 +22,8 @@ okf_version: "0.2"
 
 # Isolation (the current design frontier)
 
-* [Exec and path parity](exec-and-path-parity.md) - why `janusfs exec` rewrites path strings, and why that is the central limitation.
-* [Platform isolation models](platform-isolation.md) - Linux mount namespaces versus a macOS path-preserving overmount, and what each can enforce.
-* [Process identity](process-identity.md) - identifying the calling process, and what that can and cannot buy.
+* [Exec and path parity](exec-and-path-parity.md) - what `janusfs exec` does on each platform, and why macOS is advisory-only.
+* [Platform isolation models](platform-isolation.md) - Linux mount namespaces (enforced, CI-verified) versus the rejected macOS enforcement track.
 
 # Also in this repo
 

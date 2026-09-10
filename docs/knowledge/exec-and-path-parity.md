@@ -1,7 +1,7 @@
 ---
 type: Architecture
 title: Exec and the path-parity problem
-description: What janusfs exec does on darwin, why it rewrites path strings there, why string rewriting cannot be made correct, and how Linux avoids the problem entirely via PRP 04's private mount namespace.
+description: What janusfs exec does on darwin (advisory-only: cwd hijack and env scrub, argv passed verbatim), why the former argv rewriter was removed, and how Linux avoids the problem entirely via PRP 04's private mount namespace.
 tags: [exec, path-parity, execrunner, limitation]
 status: stable
 generated: { by: claude-code/claude-fable-5, at: 2026-07-26T00:00:00Z }
@@ -9,9 +9,9 @@ sources:
   - id: runner
     resource: /internal/execrunner/runner.go
     title: Run, findSourceAndMount, CWD hijack, env scrub
-  - id: rewriter
-    resource: /internal/execrunner/rewriter.go
-    title: ReplacePaths
+  - id: hazard
+    resource: /internal/execrunner/hazard.go
+    title: warnGitStagingHazards
   - id: execcmd
     resource: /cmd/janusfs/exec.go
     title: exec cobra command
@@ -35,13 +35,14 @@ mountpoint:  /Users/me/.janusfs/mounts/Users/me/projects/app
 
 `janusfs exec` exists to paper over that difference.
 
-**This is now a darwin-only problem.** On Linux, `janusfs exec` no longer
-rewrites anything — [PRP 04](/PRPs/04-linux-namespace-exec.md) gives the child
-process tree a private mount namespace, so the filtered view is mounted at the
-source's own path and the mismatch above never exists in the first place. See
-[platform isolation models](platform-isolation.md) for how, and the rest of
-this document — everything below — for the darwin path, which is what
-`internal/execrunner/runner.go` (build-tagged `darwin`) still implements.
+**This is now a darwin-only problem, and on darwin it is advisory-only.** On
+Linux, `janusfs exec` needs no compensation at all — [PRP 04](/PRPs/04-linux-namespace-exec.md)
+gives the child process tree a private mount namespace, so the filtered view is
+mounted at the source's own path and the mismatch above never exists in the
+first place. See [platform isolation models](platform-isolation.md) for how,
+and the rest of this document — everything below — for the darwin path, which
+is what `internal/execrunner/runner.go` (build-tagged `darwin`) still
+implements.
 
 # What exec does on darwin
 
@@ -50,49 +51,54 @@ this document — everything below — for the darwin path, which is what
 `execrunner.Run`. If no `--` is present, all arguments are treated as the
 command.
 
-`execrunner.Run` (`internal/execrunner/runner.go:131`, `//go:build darwin`)
+`execrunner.Run` (`internal/execrunner/runner.go:123`, `//go:build darwin`)
 then does six things:
 
-1. **Find or provision a mount.** `findSourceAndMount` (`:61`) asks the daemon
+1. **Find or provision a mount.** `findSourceAndMount` (`:52`) asks the daemon
    for its mount list, then walks up from the cwd. If an ancestor is an active
    mount source, that pairing is used. Otherwise the shallowest ancestor
    containing a `.janusfs.yml` becomes the source, defaulting to
    the cwd, and a `mount` request is sent to provision it.
-2. **Wait for readiness.** Poll for `<mountpoint>/.janusfs` every 50 ms up to
-   2000 ms (`:147`). This is why the synthetic `.janusfs` directory is
+2. **Warn about git staging hazards** (`:138`). `warnGitStagingHazards`
+   (`internal/execrunner/hazard.go`) calls `check.GitStagingHazards` and prints
+   a loud stderr warning when Masked files under the source are stageable by
+   git — `git add` through the filtered view stages the masked bytes, not the
+   real content. Best-effort and advisory; a detection failure never blocks the
+   exec.
+3. **Wait for readiness.** Poll for `<mountpoint>/.janusfs` every 50 ms up to
+   2000 ms (`:143`). This is why the synthetic `.janusfs` directory is
    load-bearing.
-3. **Hijack the working directory** (`:162`). The cwd's position relative to the
+4. **Hijack the working directory** (`:155`). The cwd's position relative to the
    source is computed and reapplied under the mountpoint, so
    `src/pkg/sub` becomes `mountpoint/pkg/sub`.
-4. **Rewrite argv** (`:180`): every argument has occurrences of the source path
-   replaced with the mountpoint via `ReplacePaths`.
-5. **Scrub the environment** (`:186`): every `JANUSFS_*` variable is dropped, so
+5. **Scrub the environment** (`:173`): every `JANUSFS_*` variable is dropped, so
    the child cannot read or influence JanusFS configuration.
-6. **Pass stdout and stderr through unchanged** (`:189`): output is not path
-   rewritten. This keeps TTY semantics for interactive CLIs and makes stdout and
-   stderr byte-faithful, at the cost that output may show the internal mountpoint.
+6. **Pass argv, stdout, and stderr through unchanged** (`:183`, `:191`):
+   arguments reach the child verbatim — there is no argv rewriting — and
+   output is not path rewritten. This keeps TTY semantics for interactive CLIs
+   and makes stdout and stderr byte-faithful, at the cost that both arguments
+   and output may name the internal mountpoint or the real source path.
 
 Signals `SIGINT`, `SIGTERM`, `SIGHUP` are forwarded to the child, and the
 child's exit code is propagated. A failure to start returns `125`, matching
 `env`/`timeout` convention.
 
-# The argv rewriter
+# The argv rewriter (removed)
 
-`ReplacePaths` (`internal/execrunner/rewriter.go:18`) is a boundary-aware
-substring replace used for argv only: a match only counts if the preceding byte
-is not a path character and the following byte is `/` or not a name character.
-That stops `/a/app` from matching inside `/a/application`.
+`ReplacePaths` (formerly `internal/execrunner/rewriter.go`) was a
+boundary-aware substring replace that rewrote source-path occurrences in argv
+to the mountpoint. It was deleted together with the rest of the macOS
+enforcement track — see [SPEC.md §20](/SPEC.md),
+[PRP 12](/PRPs/12-delete-macos-enforcement-track.md), and
+[PRP 13](/PRPs/13-delete-macos-argv-rewriter.md). The same reasoning had already
+killed the stream rewriter earlier: a shim that sometimes works is worse than
+a boundary honestly described as advisory. macOS exec now passes argv
+verbatim; what remains (cwd hijack, env scrub, git-hazard warning) is
+explicitly advisory, not a parity mechanism.
 
-JanusFS deliberately does not rewrite stdout or stderr. The former stream
-rewriter broke interactive CLIs by hiding their terminal and made output non
-byte-faithful for only cosmetic path names.
+# Why string rewriting could not be made correct
 
-The remaining argv rewrite is still a best-effort compatibility shim, not path
-parity.
-
-# Why string rewriting cannot be made correct
-
-The argv rewriter can only touch command-line arguments. Every other channel
+An argv rewriter can only touch command-line arguments. Every other channel
 through which a path escapes is unreachable:
 
 - **Terminal output.** JanusFS now leaves stdout and stderr untouched so tools
@@ -114,20 +120,14 @@ through which a path escapes is unreachable:
   can breach shebang and `sun_path` limits, and code that compares a path
   against a configured root will not match.
 
-The conclusion is not "improve the rewriter". It is that **path parity must be
-provided by the filesystem, not simulated in a wrapper**. Once the sanitized
-view is available at the same absolute path as the source, every step above
-disappears: no cwd hijack, no argv rewrite, no readiness race. See
-[platform isolation models](platform-isolation.md).
-
-**`--sandbox` does not fix any of this.** PRP 09's Seatbelt confinement
-(platform isolation's Option D) is additive to the darwin path above, not a
-replacement for it: the child still runs against the disjoint mountpoint, with
-the same cwd hijack and argv rewriting and the same fragility described here.
-What `--sandbox` changes is that a path the rewriter *misses* — one reaching
-the child through a channel it cannot rewrite, such as an environment
-variable, a symlink, or a dynamically-computed string — is now denied by the
-kernel instead of silently succeeding against the real source.
+The conclusion was not "improve the rewriter". It is that **path parity must
+be provided by the filesystem, not simulated in a wrapper**. Linux provides
+exactly that via the private mount namespace, verified per-PR by the
+`fuseintegration` CI job. On macOS there is no equivalent kernel mechanism,
+and the compensating enforcement track — process identity, a path-preserving
+overmount, and Seatbelt `--sandbox` confinement — was ultimately rejected and
+deleted; see [platform isolation models](platform-isolation.md) and
+[SPEC.md §20](/SPEC.md). macOS exec is advisory by design.
 
 # Two defects, now fixed
 

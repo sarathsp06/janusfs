@@ -163,7 +163,7 @@ release:
 #       name: homebrew-tap
 #     directory: Formula
 #     homepage: https://github.com/sarathsp06/janusfs
-#     description: A sanitized filesystem view for AI agents (macOS, FUSE-T).
+#     description: Secret-masking filesystem boundary for AI agents.
 #     license: TBD
 #     dependencies:
 #       - name: fuse-t

@@ -8,8 +8,8 @@ import (
 
 // runExecArgs drives the exec cobra command with the given args and returns
 // (stdout+stderr merged into help/error text, RunE error). It exists so tests
-// can exercise the pre-"--" flag scan (the load-bearing bit for --sandbox)
-// without shelling out to a real binary or invoking os.Exit on the happy path.
+// can exercise the pre-"--" arg scan without shelling out to a real binary or
+// invoking os.Exit on the happy path.
 func runExecArgs(t *testing.T, args []string) (string, error) {
 	t.Helper()
 	cmd := newExecCmd()
@@ -27,8 +27,8 @@ func TestExecFlagParsing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(out, "--sandbox") {
-			t.Fatalf("help text should mention --sandbox, got: %s", out)
+		if !strings.Contains(out, "sanitized view") {
+			t.Fatalf("help text should describe the sanitized view, got: %s", out)
 		}
 	})
 
@@ -37,8 +37,8 @@ func TestExecFlagParsing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(out, "sandbox-exec") {
-			t.Fatalf("help text should describe sandbox-exec, got: %s", out)
+		if !strings.Contains(out, "advisory only") {
+			t.Fatalf("help text should state macOS is advisory only, got: %s", out)
 		}
 	})
 
@@ -72,35 +72,10 @@ func TestExecFlagParsing(t *testing.T) {
 		}
 	})
 
-	// --sandbox variants: proved accepted by passing the flag-scan and
-	// failing later on the "command to run is required" check. Testing the
-	// happy path directly would exec a real child and call os.Exit.
-	for _, flag := range []string{"--sandbox", "--sandbox=true", "--sandbox=false"} {
-		t.Run("accepted flag: "+flag, func(t *testing.T) {
-			_, err := runExecArgs(t, []string{flag, "--"})
-			if err == nil {
-				t.Fatal("expected error for empty command after --")
-			}
-			if strings.Contains(err.Error(), "unrecognized flag") {
-				t.Fatalf("%s should be recognized, got: %v", flag, err)
-			}
-			if !strings.Contains(err.Error(), "command to run is required") {
-				t.Fatalf("expected 'command to run is required', got: %v", err)
-			}
-		})
-	}
-
-	t.Run("--sandbox= (empty value) is rejected", func(t *testing.T) {
-		_, err := runExecArgs(t, []string{"--sandbox=", "--", "echo", "hi"})
+	t.Run("anything before -- is rejected", func(t *testing.T) {
+		_, err := runExecArgs(t, []string{"--sandbox", "--", "echo", "hi"})
 		if err == nil || !strings.Contains(err.Error(), "unrecognized flag") {
-			t.Fatalf("expected 'unrecognized flag' for --sandbox=, got: %v", err)
-		}
-	})
-
-	t.Run("multiple own flags before -- (all recognized)", func(t *testing.T) {
-		_, err := runExecArgs(t, []string{"--sandbox", "--sandbox=false", "--"})
-		if err == nil || !strings.Contains(err.Error(), "command to run is required") {
-			t.Fatalf("expected 'command to run is required', got: %v", err)
+			t.Fatalf("expected 'unrecognized flag' before --, got: %v", err)
 		}
 	})
 }

@@ -149,3 +149,13 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	server.Wait()
 	return nil
 }
+
+// Unmount forces the active FUSE server to unmount. It exists for callers
+// that need a direct unmount outside the context-cancellation path in Mount —
+// notably test cleanup when the serve loop drags past its grace window.
+func (a *Adapter) Unmount(mountpoint string) error {
+	if a.server == nil {
+		return errors.New("mount: no active mount to unmount")
+	}
+	return a.server.Unmount()
+}

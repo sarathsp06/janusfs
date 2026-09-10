@@ -24,7 +24,7 @@ Every item below was found by reading source, not by running an exploit. The
 item marked **unverified** needs a test to confirm before it is treated as
 fact; the rest are readable directly from the code.
 
-Ten items closed so far — the agent hardlink bypass, the case-folding
+Eleven items closed so far — the agent hardlink bypass, the case-folding
 bypass, `exec`'s silent cwd default, the duplicated control-protocol types,
 `doctor`'s unrecoverable mountpoint ([PRP 01](/PRPs/01-correctness-fixes.md)),
 the ungracefully-killed-daemon hang ([PRP 02](/PRPs/02-crash-recovery-watchdog.md)),
@@ -32,7 +32,11 @@ the unmemoized decision engine ([PRP 03](/PRPs/03-decision-cache.md)), the
 read-path TOCTOU window ([PRP 05](/PRPs/05-dirfd-backing-layer.md)), the
 open-handle revocation gap
 ([PRP 08](/PRPs/08-reload-revocation.md)), the hardcoded dev-only mock paths,
-and the masked-xattr redaction side channel — have been removed from this
+the masked-xattr redaction side channel, and the `--sandbox`-confined child's
+reachability of the raw-bytes `/api/v1/reveal` endpoint (mooted structurally:
+both the `--sandbox` flag and the endpoint were deleted —
+[PRP 14](/PRPs/14-delete-sandbox-flag.md),
+[PRP 15](/PRPs/15-delete-reveal-endpoint.md)) — have been removed from this
 register. See those PRPs and [`log.md`](log.md) for what changed.
 
 # 1. Unverified: whether the `readdir` inode-zeroing has a cost
@@ -69,22 +73,3 @@ A related, definitely-real, now-fixed bug found in the same file:
 machine attempting `make integration` or `make leak-oracle`. Fixed by PRP 01 as
 a drive-by, switching to `golang.org/x/sys/unix.Listxattr`, which is defined
 identically on both platforms.
-
-# 3. `--sandbox` (PRP 09) leaves the daemon's loopback API reachable from a confined child
-
-`janusfs exec --sandbox`'s Seatbelt profile (`internal/execrunner/sandbox_darwin.go`)
-denies the real source subtree and `~/.janusfs`, but leaves loopback
-networking under `(allow default)` — denying it would break agents that
-legitimately need localhost (dev servers, package installs against a local
-registry). Consequence: a confined child can still reach
-`GET /api/v1/reveal` (`internal/api/server.go:107`), which serves raw source
-bytes.
-
-**Not currently exploitable**: the bearer token is in-memory only
-(`cmd/janusfs/runtime.go:87-92`), the static dashboard UI injects nothing
-(`server.go:117`), and the control socket's dashboard URL carries no token
-(`daemon.go:510`) — so a confined child has no way to obtain the token to call
-the endpoint. Recorded as a known gap rather than closed because it is a
-structural reachability issue (the endpoint is one token away from a raw-bytes
-read), not a defense the profile currently provides; a future hardened profile
-should scope-deny the daemon's port specifically rather than all loopback.

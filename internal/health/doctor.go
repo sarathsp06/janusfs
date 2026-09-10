@@ -151,5 +151,7 @@ func Run(pidfileDir, watchdogPidfile string) *Report {
 		}
 	}
 
+	r.Warnings = append(r.Warnings, platformWarnings()...)
+
 	return r
 }

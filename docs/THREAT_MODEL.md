@@ -29,6 +29,14 @@ Living document. Updated at every phase exit per SPEC.md §17 ("Security is a pe
 | HTTP/WebSocket API | Mitigated (Phase 4 for full hardening) | Host header validation, Origin check, per-mount bearer token (SPEC §11) |
 | History DB on disk | Accepted trade-off, mitigated | Deliberately persists path names + access patterns; rollups only, strict perms, pruning, opt-out (SPEC §3.8) |
 | `.janusfs` virtual files | Mitigated | Read-only, never user-maskable/hidable (FR-27) |
+| Masked bytes staged into git (`git add` through the filtered view writes `****` into the real object store) | Mitigated (advisory warning) | `janusfs check` and `janusfs exec` warn when Masked files are git-stageable (`internal/check.GitStagingHazards`); commit from outside the view or gitignore the paths |
+
+Note on macOS: enforcement there is advisory-only by design. The former macOS
+enforcement track (process identity, path-preserving overmount, Seatbelt
+`--sandbox`) and the raw-bytes `/api/v1/reveal` endpoint were deleted and are
+recorded as rejected designs in SPEC.md §20 — neither appears above because
+neither exists. Linux `janusfs exec` isolation is kernel-enforced and verified
+per-PR by the `fuseintegration` CI job.
 
 ## Phase-by-phase checklist template
 

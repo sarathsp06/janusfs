@@ -1,16 +1,16 @@
-# Graph Report - janusfs  (2026-08-29)
+# Graph Report - janusfs  (2026-08-13)
 
 ## Corpus Check
-- 172 files · ~214,730 words
+- 174 files · ~214,642 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1825 nodes · 4293 edges · 129 communities (95 shown, 34 thin omitted)
+- 1825 nodes · 4299 edges · 127 communities (94 shown, 33 thin omitted)
 - Extraction: 85% EXTRACTED · 15% INFERRED · 0% AMBIGUOUS · INFERRED: 656 edges (avg confidence: 0.77)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `3f0901d2`
+- Built from commit: `9025ba11`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -36,22 +36,22 @@
 - F
 - Recorder
 - daemon
-- newRootCmd
+- runPaths
 - ui.go
 - Server
 - Architecture
 - umount.go
 - Default
 - mountForTest
-- runDaemon
+- runWatchdog
 - Report
 - Order and gating sequence
 - provider.RamCache (redacted bytes, LRU)
-- runInitGlobal
+- symGood
 - ti
 - GoReleaser release pipeline
 - mode-clike.js
-- .relativeTo
+- RuleSet
 - P
 - M
 - W
@@ -66,11 +66,10 @@
 - SetOutput
 - Registry
 - mode-css.js
-- newExecCmd
+- config.go
 - revocableHandle
 - Prometheus-only Observability Design
-- mounts_test.go
-- startDaemonBackground
+- runNSMount
 - addon-search.js
 - cr
 - macOS Seatbelt enforcement — feasibility spike
@@ -81,7 +80,6 @@
 - index.md
 - JanusFS Filesystem Boundary Illustration
 - Observability event path
-- Decision
 - addon-matchbrackets.js
 - Knowledge Bundle Update Log
 - control_test.go
@@ -141,11 +139,9 @@
 7. `F()` - 28 edges
 8. `W()` - 27 edges
 9. `5. Process and package layout` - 26 edges
-10. `Recorder` - 24 edges
+10. `Pattern` - 25 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `explainResult` --references--> `TraceEntry`  [EXTRACTED]
-  cmd/janusfs/explain.go → internal/rules/resolve.go
 - `runCheck()` --calls--> `RunWithOptions()`  [INFERRED]
   cmd/janusfs/check.go → internal/check/check.go
 - `runDaemon()` --calls--> `ApplyEnv()`  [INFERRED]
@@ -154,6 +150,8 @@
   cmd/janusfs/daemon.go → internal/config/config.go
 - `runDaemon()` --calls--> `Default()`  [INFERRED]
   cmd/janusfs/daemon.go → internal/config/config.go
+- `runDaemon()` --calls--> `SocketPath()`  [INFERRED]
+  cmd/janusfs/daemon.go → internal/control/control.go
 
 ## Import Cycles
 - None detected.
@@ -167,15 +165,15 @@
 - **Mounts cleanup and check matches workstream** — docs_superpowers_plans_2026-07-29_mounts_cleanup_and_check_matches, docs_superpowers_specs_2026-07-29_mounts_cleanup_and_check_matches_design, concept_mount_registry_cleanup, concept_check_matches, concept_janusfs_daemon [INFERRED 0.85]
 - **Performance optimization learnings and baselines** — jules_bolt, jules_prune, bench_baseline, concept_regexp_optimization, concept_slices_sortfunc, concept_nfr_3_performance_budget [INFERRED 0.85]
 
-## Communities (129 total, 34 thin omitted)
+## Communities (127 total, 33 thin omitted)
 
 ### Community 0 - "5. Process and package layout"
 Cohesion: 0.05
 Nodes (81): Agent session, 9. Backing access layer, Cache isolation: direct I/O + zero timeouts for real files (FR-34), cmd/janusfs (entrypoint, DI, cobra), Concurrent re-redaction: serve previous bytes or block (FR-23), 16. Configuration, logging, and process wiring, Crash recovery: detached supervisor polls then force-unmounts (FR-35), Decision (ALLOWED | MASKED | HIDDEN) (+73 more)
 
 ### Community 1 - "JanusNode"
-Cohesion: 0.05
-Nodes (62): Root, InodeEmbedder, Errno, T, TestToErrnoMapsEachSentinel(), TestToErrnoMatchesWrappedSentinels(), ToErrno(), Open() (+54 more)
+Cohesion: 0.06
+Nodes (58): Root, InodeEmbedder, Errno, T, TestToErrnoMapsEachSentinel(), TestToErrnoMatchesWrappedSentinels(), ToErrno(), Open() (+50 more)
 
 ### Community 2 - "rules_test.go"
 Cohesion: 0.08
@@ -202,8 +200,8 @@ Cohesion: 0.06
 Nodes (52): PRP 01 Correctness fixes, PRP 02 Crash recovery watchdog, PRP 03 Decision cache, PRP 04 Linux namespace exec, PRP 05 Dirfd backing layer, PRP 06 Process identity, PRP 07 macOS path-preserving, PRP 08 Reload revocation (+44 more)
 
 ### Community 8 - "daemon_test.go"
-Cohesion: 0.18
-Nodes (23): fakeRuntime(), T, TestBrowserOpenCommandByPlatform(), TestChildMountsUnder(), TestDaemonCall_NoDaemon(), TestDaemonIndex_FallsBackToSrcWithoutLabel(), TestDaemonIndex_NotFoundForOtherPaths(), TestDaemonIndex_RendersLabelAndEscapes() (+15 more)
+Cohesion: 0.06
+Nodes (55): fakeRuntime(), T, TestBrowserOpenCommandByPlatform(), TestChildMountsUnder(), TestDaemonCall_NoDaemon(), TestDaemonIndex_FallsBackToSrcWithoutLabel(), TestDaemonIndex_NotFoundForOtherPaths(), TestDaemonIndex_RendersLabelAndEscapes() (+47 more)
 
 ### Community 9 - "captureStdout"
 Cohesion: 0.11
@@ -250,16 +248,16 @@ Cohesion: 0.10
 Nodes (18): Counter, CounterVec, Gauge, HistogramVec, formatBytes(), Time, Decision, knownDecisions() (+10 more)
 
 ### Community 20 - "daemon"
-Cohesion: 0.19
-Nodes (9): Conn, daemonRequest, daemonResponse, daemon, Logger, mountStatus, Mutex, defaultStatDir() (+1 more)
+Cohesion: 0.15
+Nodes (14): browserOpenCommand(), Command, Conn, Context, daemonRequest, daemonResponse, daemon, Logger (+6 more)
 
-### Community 21 - "newRootCmd"
-Cohesion: 0.16
-Nodes (16): Command, main(), newRootCmd(), callDaemon(), Command, daemonRequest, daemonResponse, Level (+8 more)
+### Community 21 - "runPaths"
+Cohesion: 0.21
+Nodes (13): expandHome(), Command, newInstallCmd(), promptWithDefault(), runInstall(), existsMark(), newPathsCmd(), runPaths() (+5 more)
 
 ### Community 22 - "ui.go"
-Cohesion: 0.22
-Nodes (19): Report, printCheckReport(), Command, Report, newDoctorCmd(), printDoctorReport(), cBad(), cBold() (+11 more)
+Cohesion: 0.23
+Nodes (17): Report, printCheckReport(), Command, Report, newDoctorCmd(), printDoctorReport(), cBad(), cBold() (+9 more)
 
 ### Community 23 - "Server"
 Cohesion: 0.24
@@ -270,20 +268,20 @@ Cohesion: 0.12
 Nodes (24): Architecture, Code Conventions, Packages, Working with SPEC.md, Quick Reference Commands, Formatting and Linting, Assets, Leak Channels (+16 more)
 
 ### Community 25 - "umount.go"
-Cohesion: 0.20
-Nodes (17): directUnmount(), Command, isMountpoint(), newUmountCmd(), runUmount(), T, TestMountRuntimeStop_ForceUnmountsWhenServeLoopDoesNotExit(), TestMountRuntimeStop_NoWarnWhenForceUnmountClearsMountpoint() (+9 more)
+Cohesion: 0.19
+Nodes (18): directUnmount(), Command, isMountpoint(), newUmountCmd(), pickUmountTarget(), runUmount(), T, TestMountRuntimeStop_ForceUnmountsWhenServeLoopDoesNotExit() (+10 more)
 
 ### Community 26 - "Default"
-Cohesion: 0.05
-Nodes (81): pruneStaleRegistry(), TestDoUnmount_PrunesStaleRegistryEntry(), TestResumePrunesMissingSourceRecord(), TestResumePrunesUnrecoverableRecord(), expandHome(), Command, newInstallCmd(), promptWithDefault() (+73 more)
+Cohesion: 0.24
+Nodes (22): Default(), T, newCfg(), TestApplyEnv_DoesNotTouchPositionals(), TestApplyEnv_LeavesUnsetFieldsAtDefault(), TestApplyEnv_NoHistoryBoolFromEnv(), TestApplyEnv_OverridesDefaultWhenSet(), TestApplyFile_MissingKeepsDefaultMountRoot() (+14 more)
 
 ### Community 27 - "mountForTest"
 Cohesion: 0.21
 Nodes (19): T, TestCreateGating(), TestLinkDeniesLaunderingMaskedFile(), TestListxattrGating(), TestMaskedXattrSideChannel(), TestReloadTakesEffectWithoutRemount(), TestVirtualDir(), appendPolicyFixture() (+11 more)
 
-### Community 28 - "runDaemon"
-Cohesion: 0.26
-Nodes (11): browserOpenCommand(), Command, Context, newDaemonCmd(), runDaemon(), MountStatus, Response, Call() (+3 more)
+### Community 28 - "runWatchdog"
+Cohesion: 0.19
+Nodes (18): Command, Context, Duration, Logger, newWatchdogCmd(), runWatchdog(), spawnWatchdog(), stopWatchdog() (+10 more)
 
 ### Community 29 - "Report"
 Cohesion: 0.16
@@ -297,9 +295,9 @@ Nodes (21): Daemon watchdog subcommand, Hardlink escape prevention, Process iden
 Cohesion: 0.13
 Nodes (20): api.Server (per-mount dashboard handler), internal/apperrors (errno mapping), janusfs CLI clients (mount|umount|update|path), ContentKey (path,mtime,size,inode,gen), ~/.janusfs/daemon.sock control socket, Dashboard HTTP (127.0.0.1:7381), Decision (HIDDEN > MASKED > ALLOWED), engine.Engine (atomic rule snapshot) (+12 more)
 
-### Community 32 - "runInitGlobal"
-Cohesion: 0.31
-Nodes (11): Command, newInitCmd(), runInit(), runInitGlobal(), T, TestRunInit_ForceOverwrites(), TestRunInit_RefusesToOverwriteWithoutForce(), TestRunInit_WritesPolicyTemplate() (+3 more)
+### Community 32 - "symGood"
+Cohesion: 0.29
+Nodes (12): Command, newInitCmd(), runInit(), runInitGlobal(), T, TestRunInit_ForceOverwrites(), TestRunInit_RefusesToOverwriteWithoutForce(), TestRunInit_WritesPolicyTemplate() (+4 more)
 
 ### Community 33 - "ti"
 Cohesion: 0.15
@@ -313,9 +311,9 @@ Nodes (18): CGO_ENABLED=0 policy, Conventional Commits changelog, SHA256 checksu
 Cohesion: 0.16
 Nodes (10): C(), E(), F(), h(), L(), m(), N(), s() (+2 more)
 
-### Community 36 - ".relativeTo"
-Cohesion: 0.22
-Nodes (8): Decision, relativeToLevel(), Pattern, IgnoreLevel, MaskLevel, Resolution, RuleSet, TraceEntry
+### Community 36 - "RuleSet"
+Cohesion: 0.23
+Nodes (7): Decision, IgnoreLevel, MaskLevel, RuleSet, relativeToLevel(), Resolution, TraceEntry
 
 ### Community 37 - "P"
 Cohesion: 0.13
@@ -342,8 +340,8 @@ Cohesion: 0.23
 Nodes (11): leadingDigits(), nullTerminatedString(), parseKernelVersion(), T, TestNullTerminatedString(), TestParseKernelVersion(), checkDevFuse(), checkKernelVersion() (+3 more)
 
 ### Community 43 - "mountRuntime"
-Cohesion: 0.27
-Nodes (7): CancelFunc, historyDBPath(), Context, Logger, makeObserver(), startMount(), mountRuntime
+Cohesion: 0.22
+Nodes (9): CancelFunc, Context, Logger, makeObserver(), startMount(), Logger, mountRuntime, Adapter (+1 more)
 
 ### Community 44 - "procid_linux.go"
 Cohesion: 0.26
@@ -373,9 +371,9 @@ Nodes (11): assertMetric(), T, labelsMatch(), metricValue(), newBlockingSink(), 
 Cohesion: 0.20
 Nodes (4): C(), q(), x(), z()
 
-### Community 51 - "newExecCmd"
-Cohesion: 0.38
-Nodes (5): Command, newExecCmd(), T, runExecArgs(), TestExecFlagParsing()
+### Community 51 - "config.go"
+Cohesion: 0.18
+Nodes (19): TestDoUnmount_PrunesStaleRegistryEntry(), TestResumePrunesMissingSourceRecord(), TestResumePrunesUnrecoverableRecord(), Config, fileSettings, MountRecord, absClean(), ApplyEnv() (+11 more)
 
 ### Community 52 - "revocableHandle"
 Cohesion: 0.27
@@ -385,13 +383,9 @@ Nodes (6): Context, Errno, ReadResult, Time, LoopbackFile, revocableHandle
 Cohesion: 0.24
 Nodes (10): Phase 0 Baseline — NFR-3 performance budgets, internal/obs Recorder with Prometheus native collectors, NFR-3 performance budget thresholds, Prometheus /metrics as single metrics surface, Regexp pre-filtering and allocation bypass, slices.SortFunc zero-allocation sorting, Prometheus-only Observability Implementation Plan, Prometheus-only Observability Design (+2 more)
 
-### Community 54 - "mounts_test.go"
-Cohesion: 0.53
-Nodes (5): T, TestClassifyMountRecordsMergesLiveAndRecorded(), TestClassifyMountRecordsMissingSrcAndStale(), TestMountListingsJSONShape(), TestPrintMountListingsHuman()
-
-### Community 55 - "startDaemonBackground"
-Cohesion: 0.70
-Nodes (4): daemonLogPath(), Command, newLogsCmd(), startDaemonBackground()
+### Community 55 - "runNSMount"
+Cohesion: 0.23
+Nodes (9): Command, Context, Level, Logger, newNSMountCmd(), registerPlatformCommands(), runNSMount(), Context (+1 more)
 
 ### Community 56 - "addon-search.js"
 Cohesion: 0.49
@@ -490,8 +484,8 @@ Cohesion: 0.67
 Nodes (3): Dead code audit methodology, Scaffolding traps vs genuine dead code, API standalone-serve dead code cluster
 
 ### Community 102 - "mounts.go"
-Cohesion: 0.29
-Nodes (13): classifyMountRecords(), collectMountListings(), Command, mountStatus, Writer, newMountsCmd(), printMountListings(), runMounts() (+5 more)
+Cohesion: 0.18
+Nodes (19): classifyMountRecords(), collectMountListings(), defaultStatDir(), Command, mountStatus, Writer, newMountsCmd(), printMountListings() (+11 more)
 
 ## Ambiguous Edges - Review These
 - `JanusFS Filesystem Boundary Illustration` → `Policy Enforcement at the Filesystem Boundary`  [AMBIGUOUS]
@@ -502,7 +496,7 @@ Nodes (13): classifyMountRecords(), collectMountListings(), Command, mountStatus
 ## Knowledge Gaps
 - **114 isolated node(s):** `run_spike.sh script`, `unmountAttempt`, `github.com/sarathsp06/janusfs`, `fileSettings`, `decisionKey` (+109 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **34 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **33 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
@@ -511,12 +505,12 @@ _Questions this graph is uniquely positioned to answer:_
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
 - **What is the exact relationship between `JanusFS Filesystem Boundary Illustration` and `Three Faces of Access (Allowed, Masked, Hidden)`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
-- **Why does `mountRuntime` connect `mountRuntime` to `JanusNode`, `Pattern`, `daemon_test.go`, `Engine`, `Store`, `Recorder`, `daemon`, `Server`?**
-  _High betweenness centrality (0.064) - this node is a cross-community bridge._
+- **Why does `mountRuntime` connect `mountRuntime` to `Pattern`, `daemon_test.go`, `Engine`, `Store`, `Recorder`, `daemon`, `Server`?**
+  _High betweenness centrality (0.055) - this node is a cross-community bridge._
 - **Why does `Engine` connect `Engine` to `JanusNode`, `mountRuntime`, `check/check.go`?**
-  _High betweenness centrality (0.059) - this node is a cross-community bridge._
-- **Why does `Server` connect `Server` to `JanusNode`, `NewRecorder`, `mountRuntime`, `New`, `Store`, `Registry`, `daemon`?**
-  _High betweenness centrality (0.044) - this node is a cross-community bridge._
+  _High betweenness centrality (0.046) - this node is a cross-community bridge._
+- **Why does `Server` connect `Server` to `NewRecorder`, `mountRuntime`, `New`, `Store`, `Registry`, `daemon`?**
+  _High betweenness centrality (0.045) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `P()` (e.g. with `al()` and `il()`) actually correct?**
   _`P()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `s()` (e.g. with `E()` and `T()`) actually correct?**

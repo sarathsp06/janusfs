@@ -49,36 +49,27 @@ later blocks anything earlier.
 | 01 | [Correctness fixes](01-correctness-fixes.md) | — | S | done |
 | 02 | [Crash recovery watchdog](02-crash-recovery-watchdog.md) | — | S | done |
 | 03 | [Decision cache](03-decision-cache.md) | — | S | done |
-| 04 | [Linux namespace exec](04-linux-namespace-exec.md) | — | L | done, **unverified on real Linux** — see below |
-| 05 | [Dirfd backing layer](05-dirfd-backing-layer.md) | — | L | read path done; mutations still via LoopbackNode |
-| 06 | [Process identity](06-process-identity.md) | 05 | M | Tasks 1-2 done; 3-4 deferred pending 07 |
-| 07 | [macOS path-preserving mode](07-macos-path-preserving.md) | 05, 06 | L | design captured; implementation gated on PRP 06 Tasks 3-4 |
+| 04 | [Linux namespace exec](04-linux-namespace-exec.md) | — | L | done; verified per-PR by 10's CI gate |
+| 05 | [Dirfd backing layer](05-dirfd-backing-layer.md) | — | L | read path done; remainder resolved by [16](16-prp05-ceiling.md) |
+| 06 | Process identity | — | — | **deleted** — see [12](12-delete-macos-enforcement-track.md) and SPEC §20 |
+| 07 | macOS path-preserving mode | — | — | **deleted** — see [12](12-delete-macos-enforcement-track.md) and SPEC §20 |
 | 08 | [Reload revocation of open handles](08-reload-revocation.md) | 03 | S | done |
-| 09 | [macOS Seatbelt confinement for exec](09-macos-seatbelt-exec.md) | — | M | done — `--sandbox` flag, validated end-to-end against a real daemon/mount |
+| 09 | [macOS Seatbelt confinement for exec](09-macos-seatbelt-exec.md) | — | M | **reverted** by [14](14-delete-sandbox-flag.md); kept for the spike's findings |
+| 10 | [Linux CI verification](10-linux-ci-verification.md) | — | S | done |
+| 11 | [Harness compat matrix](11-harness-compat-matrix.md) | 10 | S | open — needs a real Linux box |
+| 12 | [Delete macOS enforcement track](12-delete-macos-enforcement-track.md) | — | M | done |
+| 13 | [Delete macOS argv rewriter](13-delete-macos-argv-rewriter.md) | — | S | done |
+| 14 | [Delete --sandbox flag](14-delete-sandbox-flag.md) | — | M | done |
+| 15 | [Delete /api/v1/reveal](15-delete-reveal-endpoint.md) | — | S | done |
+| 16 | [Resolve PRP 05's ceiling](16-prp05-ceiling.md) | 10 | S | open |
+| 17 | [README repositioning](17-reposition-readme.md) | 10, 12–15 | M | done (recipes pending 11) |
+| 18 | [git add masked-bytes hazard warning](18-git-staging-hazard.md) | — | M | done |
+| 19 | [doctor container/FUSE checks](19-doctor-container-checks.md) | — | S | done |
 
-**PRP 04 was implemented on a darwin-only development machine**, where the
-Linux-only mechanisms it depends on (`CLONE_NEWNS`/`CLONE_NEWUSER`,
-`/proc/self/mountinfo`) don't exist even for testing. Every darwin-buildable
-piece was verified (`make verify` green, cross-compiles clean for
-`linux/amd64` and `linux/arm64`, `go vet` clean on both), and the
-Linux-specific integration tests and benchmark
-(`internal/execrunner/isolation_linux_test.go`,
-`isolation_linux_bench_test.go`, both gated `linux && fuseintegration`) were
-written and type-checked via cross-compilation, but **never executed**. The
-single highest-risk assumption the PRP called out — whether mounting the FUSE
-adapter directly over its own backing source deadlocks — could not be spiked
-empirically, so the implementation took the strictly-safer path of a private
-shadow bind mount instead (see
-[platform-isolation.md](../docs/knowledge/platform-isolation.md)'s "As
-implemented" section for the full reasoning). Run the isolation test suite on
-a real Linux machine before treating PRP 04 as validated.
-
-07 and 08 were deliberately unwritten until their prerequisites landed. 08
-implemented after PRP 03's cache made per-read re-checks essentially free
-(~55 ns cache-hit resolve). 07 written after PRP 06 Task 1 confirmed the
-identity-lookup path fits inside NFR-3's budget; its implementation waits on
-PRP 06 Tasks 3 and 4, which sequence more cleanly inside 07 than as a
-separate branch (Task 4 explicitly gates on path-preserving mode existing).
+PRPs 10–19 are the 2026 repositioning: prove the Linux claim, delete the
+obsolete macOS enforcement track (harness-native Seatbelt/Landlock/srt made a
+daemon-side heuristic pointless), and reposition around
+masking-that-composes-with-your-sandbox.
 
 ## Requirement coverage
 
@@ -90,12 +81,12 @@ already done or deliberately not being built.
 | 2.1 Linux VFS namespace engine | planned | [04](04-linux-namespace-exec.md) |
 | 2.1 Stable descriptor handling (`O_PATH` dirfd) | planned | [05](05-dirfd-backing-layer.md) |
 | 2.2 Scoped project mounts (macOS) | **already done** | `ResolveMountpoint`, `internal/config/config.go:345` — mounts are already per project source, never a global overlay |
-| 2.2 Path parity on macOS | gated | 07, blocked on 05 + 06 |
+| 2.2 Path parity on macOS | **not building** | Rejected; see [12](12-delete-macos-enforcement-track.md) and SPEC §20 |
 | 2.2 Tier 1 fast-path (outside scope) | **not building** | Unreachable: the kernel only sends the server operations under the mountpoint. See [SPEC.md §20](../SPEC.md#20-risks-and-rejected-designs) |
-| 2.2 Tier 2 (caller identity) | planned | [06](06-process-identity.md) |
+| 2.2 Tier 2 (caller identity) | **not building** | Deleted by [12](12-delete-macos-enforcement-track.md); SPEC §20 |
 | 2.2 Tier 3 (canonical resolution) | planned | [05](05-dirfd-backing-layer.md) |
 | 2.2 Tier 4 (rule evaluation) | **already done** | `internal/rules/resolve.go:49` |
-| 2.3 Identity: start time, memoized ancestry | planned | [06](06-process-identity.md) |
+| 2.3 Identity: start time, memoized ancestry | **not building** | Deleted by [12](12-delete-macos-enforcement-track.md); SPEC §20 |
 | 2.3 Identity: PPID chain hash | **not building** | Breaks on normal reparenting; answers the wrong question. [SPEC.md §11](../SPEC.md#11-process-identity) |
 | 2.3 Identity: boot UUID | **not building** | Registry is in-memory and cannot outlive a reboot |
 | 2.3 Fail-closed to `EACCES` on lookup error | **inverted, deliberately** | An unidentifiable caller is a host process and gets passthrough. The request contradicts itself here — its diagram says passthrough, its prose says `EACCES`. [SPEC.md NFR-2](../SPEC.md#4-non-functional-requirements) |

@@ -51,3 +51,7 @@ func checkMacFUSE() MacFUSEStatus {
 func pidAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
+
+// platformWarnings has no darwin-specific checks beyond the macFUSE probe
+// already reported through MacFUSEStatus.
+func platformWarnings() []string { return nil }
