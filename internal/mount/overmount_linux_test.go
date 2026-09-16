@@ -31,6 +31,18 @@ import (
 // the mount. A deadlock, if any, would come from a residual path-based access
 // after mount time.
 func TestDirectOvermount(t *testing.T) {
+	// This is a one-shot investigation, not a regression guard: it deliberately
+	// establishes a direct overmount whose read wedges (the documented,
+	// load-bearing reason nsmount interposes a shadow bind mount) and then
+	// relies on a lazy unmount to reap the D-state read during cleanup. Whether
+	// that reap succeeds is kernel-dependent, so on some kernels the wedged read
+	// never releases and hangs the whole package. The question it answers is
+	// already settled (keep the shadow mount), so skip it unless explicitly
+	// opted in.
+	if os.Getenv("JANUSFS_PROBE_DIRECT_OVERMOUNT") != "1" {
+		t.Skip("direct-overmount probe is opt-in; set JANUSFS_PROBE_DIRECT_OVERMOUNT=1 to run it")
+	}
+
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\n"), 0o644); err != nil {
 		t.Fatal(err)
