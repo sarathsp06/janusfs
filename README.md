@@ -113,6 +113,7 @@ All commands support `--help` and script-friendly exit codes; errors print as a 
 - **Read path validates every time.** Every masked read revalidates `(mtime, size, inode)` against the cache key and goes through a descriptor retained at mount time with `O_NOFOLLOW`, so a swapped symlink cannot redirect it.
 - **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount; the dashboard's mutating endpoints require the per-mount bearer token and never serve raw source bytes.
 - **Optional network deny.** `janusfs exec --net=none` runs in a loopback-only network namespace, closing the exfiltration channel for bytes already read.
+- **Least-privilege on-disk state.** `~/.janusfs/` is `0700` and every file inside is `0600`, so the config, run state, and history DB that describe your secrets are not world-readable.
 
 See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / assets / leak-channels table and [`SPEC.md`](SPEC.md) for the binding contract.
 
