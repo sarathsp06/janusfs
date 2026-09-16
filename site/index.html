@@ -447,8 +447,8 @@
         </div>
         <div class="cell third">
           <p class="lead">--net=none</p>
-          <h3>Optional network deny</h3>
-          <p>Run the agent with only loopback and no external route — deny-all, kernel-enforced — so bytes it read can&#39;t be exfiltrated. Default is <code>host</code>; opt in per run or via settings.</p>
+          <h3>A second layer: network isolation</h3>
+          <p>Masking keeps secret bytes <em>out</em>; <code>--net=none</code> makes sure whatever the agent did read has <em>nowhere to go</em>. It runs the process tree with only loopback and no external route — deny-all, kernel-enforced. Default is <code>host</code>; opt in per run or via settings.</p>
         </div>
         <div class="cell wide">
           <p class="lead">one config</p>
