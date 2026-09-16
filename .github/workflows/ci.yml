@@ -42,19 +42,28 @@ jobs:
       - name: unit tests
         run: make test
 
-      # Run the mounted-FUSE tests inside a container with an explicit
-      # /dev/fuse device and SYS_ADMIN, the environment they reliably mount and
-      # cleanly lazy-unmount in. Running them bare on the hosted runner wedges
-      # on FUSE unmount. -timeout bounds any single hang.
+      # The mounted-FUSE tests wedge on the bare hosted runner: the execrunner
+      # namespace/overmount tests and the mount-adapter FUSE tests share one
+      # kernel mount namespace and deadlock when they run together. Give each
+      # package its own container (hence its own mount namespace) with an
+      # explicit /dev/fuse device + SYS_ADMIN, where they mount and lazy-unmount
+      # cleanly. -buildvcs=false avoids a git dubious-ownership stamp failure on
+      # the bind mount; -timeout bounds any single hang; the shared module-cache
+      # volume keeps the second container from re-downloading.
       - name: FUSE integration tests
         run: |
-          docker run --rm \
-            --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
-            -v "$PWD:/src" -w /src -e HOME=/root \
-            golang:1.26 bash -euc '
-              apt-get update -qq >/dev/null && apt-get install -y -qq fuse3 >/dev/null
-              go test -tags fuseintegration -timeout 300s ./...
-            '
+          docker volume create janusfs-ci-gomod >/dev/null
+          for pkg in ./internal/execrunner/ ./internal/mount/; do
+            docker run --rm \
+              --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+              -v "$PWD:/src" -w /src -e HOME=/root \
+              -v janusfs-ci-gomod:/go/pkg/mod \
+              golang:1.26 bash -euc "
+                git config --global --add safe.directory /src
+                apt-get update -qq >/dev/null && apt-get install -y -qq fuse3 iproute2 >/dev/null
+                go test -tags fuseintegration -buildvcs=false -timeout 300s $pkg
+              "
+          done
 
   release-smoke-test:
     name: GoReleaser snapshot
