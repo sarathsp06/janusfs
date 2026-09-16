@@ -623,16 +623,19 @@ version: 1
         </div>
         <div class="step">
           <h3><span class="n">4</span> Or a persistent mount</h3>
-<pre class="code"><span class="k">janusfs daemon</span> --background  <span class="c"># owns every mount</span>
-<span class="k">janusfs mount</span> .              <span class="c"># returns at once</span>
-<span class="c"># dashboard: http://127.0.0.1:7381/</span></pre>
+<pre class="code"><span class="k">janusfs daemon</span> --background   <span class="c"># owns every mount, survives reboots</span>
+<span class="k">janusfs mount</span> ~/proj          <span class="c"># hand it off; returns at once</span>
+cd "$(<span class="k">janusfs path</span> ~/proj)"  <span class="c"># cd into the masked view</span>
+<span class="k">janusfs umount</span> ~/proj         <span class="c"># remove · dashboard :7381</span></pre>
         </div>
       </div>
 
+      <p class="callout">
+        <b>Using a persistent mount.</b> Unlike <code>exec</code> (which wraps one process tree), a mount is a real directory <em>any</em> tool can open. <code>janusfs mount &lt;src&gt;</code> hands it to the daemon and returns; the masked view appears at a path mirroring the source under <code>~/.janusfs/mounts/</code>. Read that path with <code>janusfs path &lt;src&gt;</code>, then point a shell, editor, code indexer, or MCP server at it — <code>cd "$(janusfs path &lt;src&gt;)"</code>. <code>janusfs mounts</code> lists them, <code>janusfs umount &lt;src&gt;</code> removes one, and the daemon remounts everything after a reboot.
+      </p>
+
       <p class="callout danger">
-        <b>On a Mac or Windows?</b> JanusFS enforcement is a Linux kernel feature. Run it inside a Linux
-        container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) started with
-        <code>--device /dev/fuse --cap-add SYS_ADMIN</code>, and use <code>janusfs exec</code> in there.
+        <b>On a Mac or Windows?</b> JanusFS enforcement is a Linux kernel feature, so <code>mount</code> and <code>exec</code> refuse on other OSes. Run it inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) started with <code>--device /dev/fuse --cap-add SYS_ADMIN</code>, then use <code>janusfs exec</code> &#8212; or a persistent <code>janusfs mount</code> that container-side tools point at &#8212; in there.
       </p>
 
       <p class="callout">
