@@ -64,100 +64,60 @@
     </div>
   </header>
 
-  <section id="top" style="max-width:1180px;margin:0 auto;padding:clamp(48px,8vw,104px) 24px 0">
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:clamp(36px,5vw,64px);align-items:start">
+  <section id="top" style="max-width:1180px;margin:0 auto;padding:clamp(44px,7vw,96px) 24px 0">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:clamp(32px,5vw,60px);align-items:center">
       <div>
-        <div style="display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:#E8B341;border:1px solid #3A3220;background:#17140D;padding:6px 11px;border-radius:999px">
-          <span style="width:6px;height:6px;border-radius:50%;background:#E8B341;animation:janusPulse 2.4s ease-in-out infinite"></span>a policy-enforcing filesystem for AI agents
+        <div style="display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#E8B341;border:1px solid #3A3220;background:#17140D;padding:6px 11px;border-radius:999px">
+          <span style="width:6px;height:6px;border-radius:50%;background:#E8B341;animation:janusPulse 2.4s ease-in-out infinite"></span>a filesystem for AI agents
         </div>
-        <h1 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(40px,6.4vw,74px);line-height:1.02;letter-spacing:-.035em;margin:24px 0 0;text-wrap:balance">
+        <h1 style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:clamp(38px,6.4vw,72px);line-height:1.02;letter-spacing:-.035em;margin:22px 0 0;text-wrap:balance">
           <span style="color:#6BCB8B">Allow.</span> <span style="color:#E2564B">Deny.</span><br />
-          And the third answer: <span style="color:#E8B341;position:relative;white-space:nowrap">masked<span style="position:absolute;left:0;right:0;bottom:.1em;height:.09em;background:#E8B341;opacity:.35;display:block"></span></span>
+          And the third answer: <span style="color:#E8B341;position:relative;white-space:nowrap">masked<span style="position:absolute;left:0;right:0;bottom:.08em;height:.09em;background:#E8B341;opacity:.35;display:block"></span></span>
         </h1>
-        <p style="font-size:clamp(16.5px,1.6vw,19px);line-height:1.6;color:#A8A49C;margin:26px 0 0;max-width:56ch;text-wrap:pretty">
-          JanusFS is a <strong style="color:#E7E4DE;font-weight:600">filesystem wrapper for AI agents</strong>. Point it at a real project directory and it serves a <strong style="color:#E7E4DE;font-weight:600">filtered mirror of the same tree</strong> — same paths, same file sizes — deciding <em>per read</em> which face of each file to show. Allowed files pass through untouched, secret spans are redacted <strong style="color:#E7E4DE;font-weight:600">byte-for-byte</strong>, and forbidden files fail closed.
+        <p style="font-size:clamp(16px,1.6vw,19px);line-height:1.6;color:#A8A49C;margin:22px 0 0;max-width:48ch;text-wrap:pretty">
+          Agents get a filtered mirror of your project — real code, real structure. Secrets are redacted <strong style="color:#E7E4DE;font-weight:600">byte-for-byte</strong>, right where they read; forbidden files fail closed.
         </p>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:30px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:28px">
           <a class="btn-primary" href="#install" style="padding:13px 22px;border-radius:9px;background:#E8B341;color:#0A0B0D;font-weight:600;font-size:15px">Install</a>
           <a class="btn-ghost" href="https://github.com/sarathsp06/janusfs" style="padding:13px 22px;border-radius:9px;border:1px solid #2A2E35;color:#E7E4DE;font-weight:500;font-size:15px">Read the source</a>
         </div>
-        <div style="margin-top:26px;display:flex;align-items:center;gap:10px;background:#101216;border:1px solid #1C1F24;border-radius:10px;padding:12px 14px;max-width:640px;overflow:hidden">
+        <div style="margin-top:24px;display:flex;align-items:center;gap:10px;background:#101216;border:1px solid #1C1F24;border-radius:10px;padding:12px 14px;max-width:560px">
           <span style="font-family:'IBM Plex Mono',monospace;color:#6BCB8B;font-size:13px">$</span>
-          <code style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#C9C5BD;white-space:pre-wrap;word-break:break-all;line-height:1.55;flex:1">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
+          <code style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#C9C5BD;white-space:pre-wrap;word-break:break-all;line-height:1.55;flex:1;min-width:0">curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh</code>
           <button class="copy-btn" type="button" style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:6px 10px;border-radius:6px;border:1px solid #2A2E35;background:transparent;color:#9A968E;cursor:pointer">copy</button>
         </div>
-        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#6F6B64;margin:12px 0 0">one static binary · Linux amd64 &amp; arm64 · no cgo · <a href="https://github.com/sarathsp06/janusfs#quickstart">all install methods &#8594;</a></p>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:22px">
-          <div style="flex:1;min-width:230px;border:1px solid #1C1F24;background:#0C0E11;border-radius:10px;padding:14px 16px">
-            <p style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#E8B341;margin:0">masked, not blocked</p>
-            <p style="font-size:13px;line-height:1.55;color:#A8A49C;margin:8px 0 0">Only the matched secret bytes become <code style="font-family:'IBM Plex Mono',monospace;color:#E8B341">*</code> — the rest of the file reads normally, at its real size.</p>
-          </div>
-          <div style="flex:1;min-width:230px;border:1px solid #1C1F24;background:#0C0E11;border-radius:10px;padding:14px 16px">
-            <p style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#6BCB8B;margin:0">--net=none</p>
-            <p style="font-size:13px;line-height:1.55;color:#A8A49C;margin:8px 0 0">Add kernel-enforced network isolation in the same command — the agent's whole process tree gets loopback only, no route out.</p>
-          </div>
-        </div>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#6F6B64;margin:12px 0 0;overflow-wrap:anywhere">Linux · one static binary · <a href="https://github.com/sarathsp06/janusfs#quickstart">all install methods &#8594;</a> · optional <code style="color:#6BCB8B">--net=none</code> kills the network too</p>
       </div>
 
-      <div style="border:1px solid #1C1F24;border-radius:14px;background:#0E1013;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5)">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-bottom:1px solid #1C1F24;background:#101216;flex-wrap:wrap">
-          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6F6B64">agent's view of ./my-project</span>
-          <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#6F6B64">HIDDEN &gt; MASKED &gt; ALLOWED</span>
-        </div>
-        <div id="file-list" style="display:flex;flex-direction:column">
-          <div class="file-row" data-idx="0" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
-            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#6BCB8B"></span>
-            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">src/main.go</code>
-            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">native passthrough — real bytes</span>
-            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#6BCB8B;border:1px solid #6BCB8B">allowed</span>
+      <div>
+        <div style="border:1px solid #1C1F24;border-radius:14px;background:#0E1013;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5)">
+          <div style="display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #1C1F24;background:#101216">
+            <span style="width:10px;height:10px;border-radius:50%;background:#E8B341;flex:none"></span>
+            <code style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#DAD6CE">.env</code>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#E8B341;border:1px solid #E8B341;border-radius:999px;padding:2px 7px">masked view</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6F6B64;white-space:nowrap">same size</span>
           </div>
-          <div class="file-row" data-idx="1" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
-            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E8B341"></span>
-            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">.env</code>
-            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">only the value is starred — rest of the file untouched</span>
-            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E8B341;border:1px solid #E8B341">masked</span>
-          </div>
-          <div class="file-row" data-idx="2" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
-            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E8B341"></span>
-            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">config/app.yaml</code>
-            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">two secret values starred — file otherwise intact</span>
-            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E8B341;border:1px solid #E8B341">masked</span>
-          </div>
-          <div class="file-row" data-idx="3" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
-            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E2564B"></span>
-            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">id_rsa</code>
-            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">fails closed — EACCES</span>
-            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E2564B;border:1px solid #E2564B">hidden</span>
-          </div>
-          <div class="file-row" data-idx="4" style="display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181C;background:transparent">
-            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:#E2564B"></span>
-            <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#DAD6CE;flex:none">.aws/credentials</code>
-            <span style="font-size:11.5px;color:#6F6B64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">fails closed — EACCES</span>
-            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;flex:none;color:#E2564B;border:1px solid #E2564B">hidden</span>
-          </div>
-        </div>
-        <div style="padding:18px 16px 22px;background:#0A0B0D;font-family:'IBM Plex Mono',monospace;font-size:13px;min-height:132px">
-          <div id="cat-path" style="color:#6BCB8B">$ cat .env</div>
-          <pre id="cat-out" style="margin:10px 0 0;color:#C9C5BD;white-space:pre-wrap;word-break:break-all;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.55"># service credentials
-APP_ENV=production
-API_KEY=<span style="color:#E8B341">****************************</span>
+          <pre style="margin:0;padding:18px 16px;overflow-x:auto;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.75;color:#C9C5BD"><span style="color:#6F6B64"># .env — what the agent reads</span>
+APP_URL=<span style="color:#6BCB8B">https://api.acme.com</span>
+API_KEY=sk_live_<span style="color:#E8B341;background:#2A210E;border-radius:3px">************</span>
+DB_URL=postgres://app:<span style="color:#E8B341;background:#2A210E;border-radius:3px">********</span>@db.acme
 LOG_LEVEL=debug</pre>
+          <div style="padding:13px 16px;border-top:1px solid #15181C;background:#0C0E11;font-size:12.5px;line-height:1.55;color:#9A968E">
+            Real URLs and structure pass through. <strong style="color:#E7E4DE;font-weight:600">Only the secret bytes are starred</strong> — same path, same byte length.
+          </div>
         </div>
-      </div>
-    </div>
 
-    <div style="display:flex;gap:26px;flex-wrap:wrap;margin:clamp(40px,6vw,72px) 0 0;padding-top:26px;border-top:1px solid #15181C">
-      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#9A968E">
-        <span style="width:9px;height:9px;border-radius:50%;background:#6BCB8B"></span>
-        <strong style="color:#6BCB8B;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12.5px">allowed</strong>native passthrough to disk
-      </div>
-      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#9A968E">
-        <span style="width:9px;height:9px;border-radius:50%;background:#E8B341"></span>
-        <strong style="color:#E8B341;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12.5px">masked</strong>only the matched secret bytes starred, rest reads on
-      </div>
-      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#9A968E">
-        <span style="width:9px;height:9px;border-radius:50%;background:#E2564B"></span>
-        <strong style="color:#E2564B;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12.5px">hidden</strong>fails closed with EACCES
+        <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;padding-left:2px">
+          <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#9A968E">
+            <span style="width:8px;height:8px;border-radius:50%;background:#6BCB8B"></span><strong style="color:#6BCB8B;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12px;margin-right:5px">allowed</strong>passthrough
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#9A968E">
+            <span style="width:8px;height:8px;border-radius:50%;background:#E8B341"></span><strong style="color:#E8B341;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12px;margin-right:5px">masked</strong>secret spans starred
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#9A968E">
+            <span style="width:8px;height:8px;border-radius:50%;background:#E2564B"></span><strong style="color:#E2564B;font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:12px;margin-right:5px">hidden</strong>EACCES
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -196,6 +156,7 @@ LOG_LEVEL=debug</pre>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:20px;margin-top:40px;align-items:start">
       <div style="border:1px solid #1C1F24;border-radius:13px;overflow:hidden">
+        <div style="overflow-x:auto"><div style="min-width:460px">
         <div style="display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#6F6B64;background:#101216;padding:12px 16px">
           <span>state</span><span>listing / size</span><span>read</span><span>write</span>
         </div>
@@ -208,6 +169,7 @@ LOG_LEVEL=debug</pre>
         <div style="display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:16px;border-top:1px solid #15181C;align-items:center">
           <span style="color:#E2564B;font-weight:500">hidden</span><span style="color:#A8A49C">yes / real</span><span style="color:#A8A49C">EACCES</span><span style="color:#A8A49C">EACCES</span>
         </div>
+        </div></div>
         <div style="padding:18px 16px;border-top:1px solid #15181C;background:#0C0E11">
           <p style="font-size:13.5px;line-height:1.6;color:#9A968E;margin:0"><strong style="color:#E7E4DE">Hierarchical &amp; fail-closed.</strong> Files further down the tree override shallower ones, and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">allow</code> can re-include a hidden file — but never one under a directory that resolves to Hidden. <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">janusfs explain &lt;path&gt;</code> traces every contributing rule.</p>
         </div>
@@ -398,7 +360,7 @@ janusfs umount ~/proj</pre>
       </div>
     </div>
 
-    <p style="font-size:14.5px;line-height:1.65;color:#9A968E;max-width:70ch;margin:22px 0 0">On macOS or Windows, run all of this inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) started with <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">--device /dev/fuse --cap-add SYS_ADMIN</code> — both <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">mount</code> and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">exec</code> refuse to run natively off Linux. Prefer Go? <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">go install github.com/sarathsp06/janusfs/cmd/janusfs@latest</code> builds from source.</p>
+    <p style="font-size:14.5px;line-height:1.65;color:#9A968E;max-width:70ch;margin:22px 0 0;word-break:break-word">On macOS or Windows, run all of this inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) started with <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">--device /dev/fuse --cap-add SYS_ADMIN</code> — both <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">mount</code> and <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">exec</code> refuse to run natively off Linux. Prefer Go? <code style="font-family:'IBM Plex Mono',monospace;color:#DAD6CE">go install github.com/sarathsp06/janusfs/cmd/janusfs@latest</code> builds from source.</p>
   </section>
 
   <section style="max-width:1180px;margin:0 auto;padding:clamp(72px,10vw,128px) 24px clamp(60px,8vw,96px)">
@@ -446,30 +408,6 @@ janusfs umount ~/proj</pre>
 </div>
 
 <script>
-  // Hero demo: clicking a file row swaps the `$ cat` output.
-  var demo = [
-    { path: "src/main.go",      out: "package main\n\nfunc main() { run() }", c: "#C9C5BD" },
-    { path: ".env",             out: "# service credentials\nAPP_ENV=production\nAPI_KEY=****************************\nLOG_LEVEL=debug", c: "#C9C5BD" },
-    { path: "config/app.yaml",  out: "service: web\ndb_uri: ****************************\nlog_level: debug\nreplicas: 3", c: "#C9C5BD" },
-    { path: "id_rsa",           out: "cat: id_rsa: Permission denied", c: "#E2564B" },
-    { path: ".aws/credentials", out: "cat: .aws/credentials: Permission denied", c: "#E2564B" }
-  ];
-  var rows = Array.prototype.slice.call(document.querySelectorAll(".file-row"));
-  var catPath = document.getElementById("cat-path");
-  var catOut = document.getElementById("cat-out");
-  function render(text) {
-    var esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return esc.replace(/\*{2,}/g, function (m) { return '<span style="color:#E8B341">' + m + "</span>"; });
-  }
-  function select(i) {
-    rows.forEach(function (r, j) { r.style.background = j === i ? "#14171B" : "transparent"; });
-    var d = demo[i];
-    catPath.textContent = "$ cat " + d.path;
-    catOut.innerHTML = render(d.out);
-    catOut.style.color = d.c;
-  }
-  rows.forEach(function (r, i) { r.addEventListener("click", function () { select(i); }); });
-  select(1);
 
   // Copy-to-clipboard buttons.
   var CMD = "curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh";
