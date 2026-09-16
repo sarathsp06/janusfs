@@ -175,6 +175,20 @@
     @media (max-width: 900px) { .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cell.hero-cell, .cell.wide, .cell.third { grid-column: span 2; grid-row: auto; } }
     @media (max-width: 560px) { .bento { grid-template-columns: minmax(0, 1fr); } .cell.hero-cell, .cell.wide, .cell.third { grid-column: span 1; } }
 
+    /* ================= why: the two-answer dilemma ================= */
+    .dilemma { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr 1.18fr; gap: 16px; align-items: stretch; }
+    @media (max-width: 900px) { .dilemma { grid-template-columns: minmax(0, 1fr); } }
+    .door { min-width: 0; position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; padding: 26px; background: var(--panel); box-shadow: var(--elev); }
+    .door .lead { font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 8px; margin-bottom: 14px; color: var(--muted-2); }
+    .door h3 { font-size: 19px; margin-bottom: 9px; }
+    .door p { color: var(--muted); font-size: 14px; margin: 0; }
+    .door p code { color: var(--paper-2); font-size: 0.86em; background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 5px; font-family: var(--mono); }
+    .door .verdict { margin-top: auto; padding-top: 20px; font-family: var(--mono); font-size: 13px; display: inline-flex; align-items: center; gap: 9px; }
+    .door.bad { background: linear-gradient(180deg, oklch(0.66 0.20 18 / 0.055), var(--panel)); }
+    .door.bad .lead, .door.bad .verdict { color: var(--hidden); }
+    .door.win { background: linear-gradient(165deg, oklch(0.74 0.15 162 / 0.11), var(--panel-2)); border-color: oklch(0.74 0.15 162 / 0.42); }
+    .door.win .lead, .door.win .verdict { color: var(--allowed); }
+
     /* ================= three faces table + config ================= */
     .split { margin-top: 38px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
     @media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); } }
@@ -250,6 +264,7 @@
         <b>janusfs</b>
       </a>
       <nav>
+        <a class="opt" href="#why">Why</a>
         <a class="opt" href="#model">Model</a>
         <a class="opt" href="#does">Does</a>
         <a class="opt" href="#uses">Uses</a>
@@ -329,6 +344,36 @@
       </div>
     </div>
   </div>
+
+  <!-- ===================== WHY IT EXISTS ===================== -->
+  <section id="why">
+    <div class="wrap">
+      <p class="kicker">why it exists</p>
+      <h2>Every sandbox asks one question:<br />allow, or deny. Both answers are wrong.</h2>
+      <p class="sub">A file with a secret <em>inside</em> it has no good binary answer. Deny it and the agent that needed the file&#39;s shape breaks; allow it and the secret lands in the model&#39;s context. That dilemma is why agents either stall or over-share &#8212; and it&#39;s the gap JanusFS fills, one layer down at the filesystem.</p>
+
+      <div class="dilemma">
+        <div class="door bad">
+          <span class="lead">answer 1 &#183; deny</span>
+          <h3>Block the file</h3>
+          <p>A deny rule, Landlock, an <code>.aiexclude</code>. The secret is safe &#8212; but the agent that needed that config value, that fixture, that file&#39;s shape now fails, loops, or hallucinates around the hole.</p>
+          <span class="verdict">&#10007; the agent breaks</span>
+        </div>
+        <div class="door bad">
+          <span class="lead">answer 2 &#183; allow</span>
+          <h3>Hand it over</h3>
+          <p>Let it read the file so it can work. Now the secret sits in the context window, the transcript, the provider&#39;s logs &#8212; and one prompt injection turns <code>cat .env</code> into <code>curl attacker.com</code>.</p>
+          <span class="verdict">&#10007; the secret leaks</span>
+        </div>
+        <div class="door win">
+          <span class="lead">janusfs &#183; the third answer</span>
+          <h3>Show a masked face</h3>
+          <p>The file lists at its real size and reads back with only the secret spans replaced by <code>*</code>, byte-for-byte. The agent gets the shape and the safe content; the secret never enters. Truly forbidden files still fail closed.</p>
+          <span class="verdict">&#10003; the agent works, the secret stays</span>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- ===================== MENTAL MODEL ===================== -->
   <section id="model">
@@ -626,6 +671,12 @@ version: 1
       <p class="kicker">where it fits</p>
       <h2>A complement to your sandbox, not a competitor.</h2>
       <p class="sub">Sandboxes and containers decide allow/deny and protect the machine; JanusFS masks the bytes. Run <code style="font-family:var(--mono);color:var(--paper-2)">janusfs exec</code> inside them.</p>
+
+      <div class="files" style="margin-top:34px">
+        <div class="file"><b>why not .gitignore?</b><p>Whole-file only. A config with one secret line is all-or-nothing; JanusFS redacts the line and keeps the rest of the file readable.</p></div>
+        <div class="file"><b>why not a sandbox?</b><p>It guards the machine, not the model&#39;s context. Files it lets through still flow verbatim into the agent and its provider.</p></div>
+        <div class="file"><b>why not scrub once?</b><p>A frozen copy drifts the moment the agent edits a file. JanusFS decides per read, against the live tree, so it never goes stale.</p></div>
+      </div>
 
       <div class="compare" style="margin-top:34px">
         <div class="scroll">
