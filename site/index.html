@@ -207,6 +207,7 @@
     .step { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; box-shadow: var(--elev); }
     .step h3 { font-size: 15px; display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
     .step .n { flex-shrink: 0; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); font: 600 13px var(--mono); color: var(--paper); }
+    .step p { color: var(--muted); font-size: 13.5px; margin: 0 0 14px; }
 
     /* ================= layout / packages ================= */
     .files { margin-top: 34px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -251,6 +252,7 @@
       <nav>
         <a class="opt" href="#model">Model</a>
         <a class="opt" href="#does">Does</a>
+        <a class="opt" href="#uses">Uses</a>
         <a class="opt" href="#enforce">Enforce</a>
         <a class="opt" href="#faces">Faces</a>
         <a href="#install">Install</a>
@@ -265,12 +267,12 @@
       <div>
         <h1>Allow. Deny.<br />And the third answer: <span class="machine">masked</span>.</h1>
         <p class="pitch">
-          JanusFS is a <strong>policy-enforcing filesystem for AI agents</strong>. Sandboxes answer one
-          question per path — allow or deny. Deny breaks the agent; allow leaks the secret. JanusFS adds
-          <strong>masked</strong>: allowed files pass through, sensitive spans are redacted
-          <strong>byte-for-byte</strong>, and forbidden files fail closed. Run
-          <code style="font-family:var(--mono);color:var(--paper-2)">janusfs exec -- your-agent</code> and the
-          whole process tree lives inside that boundary — kernel-enforced on Linux.
+          JanusFS is a <strong>filesystem wrapper for AI agents</strong>. Point it at a real project
+          directory and it serves a <strong>filtered mirror of the same tree</strong> — same paths, same
+          file sizes — deciding <em>per read</em> which face of each file to show. Allowed files pass through
+          untouched, secret spans are redacted <strong>byte-for-byte</strong>, and forbidden files fail closed.
+          Run <code style="font-family:var(--mono);color:var(--paper-2)">janusfs exec -- your-agent</code> and the
+          whole process tree lives inside that mirror — kernel-enforced on Linux.
         </p>
         <div class="actions">
           <a class="btn solid" href="#install">Install</a>
@@ -412,6 +414,41 @@
           <p class="lead">daemon + dashboard</p>
           <h3>One process owns every mount</h3>
           <p>A background daemon resumes mounts after a reboot and serves one dashboard at <code>127.0.0.1:7381</code>. CLI commands are short-lived clients that return at once.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== USE CASES ===================== -->
+  <section id="uses">
+    <div class="wrap">
+      <p class="kicker">use cases</p>
+      <h2>Point it at a directory.<br />Run anything against the mirror.</h2>
+      <p class="sub">Because it&#39;s a filesystem, whatever reads files works unchanged — the agent, its shell, <code style="font-family:var(--mono);color:var(--paper-2)">git</code>, the build, an MCP server. You don&#39;t wire JanusFS into your tool; you run your tool inside JanusFS.</p>
+
+      <div class="steps" style="margin-top:34px">
+        <div class="step">
+          <h3>Run a coding agent on a secret-laden repo</h3>
+          <p>aider, Claude Code, Codex, Cursor — they read your source and reason about it, but <code>.env</code> values and API tokens read back as <code>****</code> and private keys fail closed. Every child process inherits the view; nothing to wire per tool.</p>
+<pre class="code"><span class="k">janusfs exec</span> -- aider</pre>
+        </div>
+        <div class="step">
+          <h3>Cut the exfiltration path</h3>
+          <p>Masking keeps secret bytes out of the agent; <code>--net=none</code> keeps whatever it <em>did</em> read from leaving the box — loopback only, no route out, kernel-enforced.</p>
+<pre class="code"><span class="k">janusfs exec</span> --net=none -- claude</pre>
+        </div>
+        <div class="step">
+          <h3>A persistent masked mirror for any tool</h3>
+          <p>Hand a long-lived mountpoint to an MCP server, a code indexer, a REPL, or a teammate&#39;s script — point the tool at the mount instead of the source. The daemon owns it and remounts after a reboot.</p>
+<pre class="code"><span class="k">janusfs daemon</span> --background
+<span class="k">janusfs mount</span> .
+cd "$(<span class="k">janusfs path</span> .)"</pre>
+        </div>
+        <div class="step">
+          <h3>Audit before you trust it</h3>
+          <p>See exactly what an agent would read — every likely-secret still Allowed, and why any single path resolves the way it does — before you run anything against it.</p>
+<pre class="code"><span class="k">janusfs check</span> --secrets
+<span class="k">janusfs explain</span> .env</pre>
         </div>
       </div>
     </div>
