@@ -105,25 +105,7 @@ Sandboxes and JanusFS answer different questions. A sandbox protects the *machin
 janusfs exec -- claude      # inside a devcontainer: add --device /dev/fuse to runArgs
 ```
 
-### On a Mac or Windows: run it inside Linux
-
-JanusFS runs on Linux only, so on a Mac or Windows box you run the agent in a Linux VM/container and call `janusfs exec` *inside* it — the mount namespace there is a real Linux one. Docker Desktop, Colima, and OrbStack all give you the Linux kernel needed:
-
-```bash
-# on the host: your project is bind-mounted into the container as /src
-docker run --rm -it \
-  --device /dev/fuse --cap-add SYS_ADMIN \
-  -v "$PWD:/src" -w /src \
-  golang:1.26 bash
-
-# inside the container (a real Linux kernel):
-apt-get update && apt-get install -y fuse3      # FUSE runtime
-go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
-janusfs init                     # or rely on the .janusfs.yml already in /src
-janusfs exec -- aider            # kernel-enforced: /src is the filtered view
-```
-
-`--device /dev/fuse` and `--cap-add SYS_ADMIN` are what let FUSE mount inside the container. The agent's whole process tree is confined by the namespace, exactly as on a Linux host: `/src` is the real bind-mount, but inside `janusfs exec` it is replaced by the filtered view, and the container gives the agent no other route to the host filesystem. Devcontainers work the same way; add the two flags via `runArgs`.
+> **Not on Linux?** JanusFS runs on Linux only. On a Mac or Windows, run it inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) with `--device /dev/fuse --cap-add SYS_ADMIN`, and use `janusfs exec` there.
 
 
 > **One caveat that applies to every enforced-view design:** because `.git/` passes through to the real object store, running `git add` on a *masked* file inside the view stages the `****` bytes into real git. JanusFS warns loudly: `janusfs check` reports every masked file git would stage, and `janusfs exec` prints the same warning before the child starts. Keep secret files out of the agent's commits (they are typically `.gitignore`d), or give the agent a scratch clone.
@@ -186,7 +168,7 @@ JanusFS runs on Linux only.
 - **Ubuntu/Debian:** `sudo apt-get install -y fuse3 libfuse3-dev`
 - **RedHat/CentOS:** `sudo dnf install -y fuse3 fuse3-devel`
 
-On macOS or Windows, run JanusFS inside a Linux VM/container (see [On a Mac or Windows: run it inside Linux](#on-a-mac-or-windows-run-it-inside-linux)).
+On macOS or Windows, run JanusFS inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) with `--device /dev/fuse --cap-add SYS_ADMIN`.
 
 #### Install JanusFS binary
 - **Via Precompiled Release Binaries:** Download the latest Linux tarball for your architecture from the [GitHub Releases](https://github.com/sarathsp06/janusfs/releases) page, extract the `janusfs` binary, and move it to a directory in your `$PATH` (e.g., `/usr/local/bin`).
