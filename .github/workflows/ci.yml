@@ -8,6 +8,10 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # Safety net: the mounted-FUSE step can wedge a runner if a mount fails to
+    # release; cap the whole job so a wedge fails in minutes, never at the 6h
+    # ceiling.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -38,8 +42,19 @@ jobs:
       - name: unit tests
         run: make test
 
+      # Run the mounted-FUSE tests inside a container with an explicit
+      # /dev/fuse device and SYS_ADMIN, the environment they reliably mount and
+      # cleanly lazy-unmount in. Running them bare on the hosted runner wedges
+      # on FUSE unmount. -timeout bounds any single hang.
       - name: FUSE integration tests
-        run: make integration
+        run: |
+          docker run --rm \
+            --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+            -v "$PWD:/src" -w /src -e HOME=/root \
+            golang:1.26 bash -euc '
+              apt-get update -qq >/dev/null && apt-get install -y -qq fuse3 >/dev/null
+              go test -tags fuseintegration -timeout 300s ./...
+            '
 
   release-smoke-test:
     name: GoReleaser snapshot
