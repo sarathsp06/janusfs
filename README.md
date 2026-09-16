@@ -4,6 +4,7 @@
 [![CI](https://github.com/sarathsp06/janusfs/actions/workflows/ci.yml/badge.svg)](https://github.com/sarathsp06/janusfs/actions/workflows/ci.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://github.com/sarathsp06/janusfs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-website-2fbf87.svg)](https://sarathsp06.github.io/janusfs)
 
 **JanusFS is a policy-enforcing filesystem for AI agents.** Sandboxes (Seatbelt, Landlock, bubblewrap, Docker) answer one question per path: allow or deny. Deny breaks the agent; allow leaks the secret. JanusFS adds the third answer — **masked**: a filtered virtual filesystem backed by your real project, where allowed files pass through, sensitive spans are redacted in place byte-for-byte, and forbidden files fail closed with `EACCES`. Run it as `janusfs exec -- <your-agent>` and the agent lives *inside* that boundary — kernel-enforced on Linux — composing with whatever sandbox you already run.
 
@@ -20,8 +21,9 @@ JanusFS runs on **Linux only**. On a Mac or Windows, run it inside a Linux conta
 sudo apt-get install -y fuse3 libfuse3-dev        # Debian/Ubuntu
 # sudo dnf install -y fuse3 fuse3-devel           # RHEL/Fedora
 
-# 2) install JanusFS (or grab a Linux tarball from GitHub Releases)
-go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
+# 2) install JanusFS — prebuilt Linux binary (verified against checksums.txt)
+curl -fsSL https://raw.githubusercontent.com/sarathsp06/janusfs/main/install.sh | sh
+# or build from source: go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
 
 # 3) seed secure defaults and preview before you mount
 cd my-project
