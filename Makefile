@@ -88,7 +88,7 @@ coverage:
 	@echo ""
 	@echo "Full report: coverage.html"
 
-.PHONY: integration ## Run FUSE-T mounted integration tests (needs FUSE-T)
+.PHONY: integration ## Run mounted integration tests (Linux, needs FUSE)
 integration:
 	$(GO) test -tags fuseintegration ./...
 

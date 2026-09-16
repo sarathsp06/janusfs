@@ -2,10 +2,10 @@
 
 // On Linux, janusfs exec gives the child process tree a filtered view of the
 // project at the project's OWN absolute path, using a private mount
-// namespace, instead of the path-rewriting darwin uses (see runner.go's
-// package doc, built only on darwin). Every process outside the namespace
-// keeps reading the real filesystem directly, at native speed, and never
-// enters FUSE.
+// namespace. Every process outside the namespace keeps reading the real
+// filesystem directly, at native speed, and never enters FUSE. This is the
+// only platform janusfs exec supports; runner_other.go refuses everywhere
+// else.
 //
 // This file is Stage 1: the launcher. It discovers the source tree, then
 // re-execs the janusfs binary with CLONE_NEWNS|CLONE_NEWUSER so the clone(2)
@@ -31,8 +31,8 @@ import (
 	"github.com/sarathsp06/janusfs/internal/nsexec"
 )
 
-// Run is the Linux entry point for `janusfs exec -- <command> [args...]`.
-func Run(ctx context.Context, targetArgs []string) (int, error) {
+// Run is the Linux entry point for `janusfs exec [--net=none] -- <command> [args...]`.
+func Run(ctx context.Context, targetArgs []string, opts Options) (int, error) {
 	if len(targetArgs) == 0 {
 		return 125, errors.New("exec: no command specified to execute")
 	}
@@ -58,8 +58,8 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 		return 125, fmt.Errorf("exec: resolving own executable path: %w", err)
 	}
 
-	// Scrub JANUSFS_* from the child's environment, same as the darwin path:
-	// the child must not be able to read or influence JanusFS configuration.
+	// Scrub JANUSFS_* from the child's environment: the child must not be
+	// able to read or influence JanusFS configuration.
 	env := os.Environ()
 	scrubbedEnv := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -68,15 +68,31 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 		}
 	}
 
-	nsArgs := append([]string{"__nsmount", "--src", src, "--"}, targetArgs...)
+	nsArgs := []string{"__nsmount", "--src", src}
+	if opts.DenyNetwork {
+		nsArgs = append(nsArgs, "--deny-network")
+	}
+	nsArgs = append(nsArgs, "--")
+	nsArgs = append(nsArgs, targetArgs...)
 	cmd := exec.CommandContext(ctx, self, nsArgs...)
 	cmd.Dir = cwd // no CWD hijack needed: the same path is valid on both sides
 	cmd.Env = scrubbedEnv
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout // no stream rewriting needed: paths already match
 	cmd.Stderr = os.Stderr
+	cloneFlags := syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER
+	if opts.DenyNetwork {
+		// A fresh network namespace starts with only a (down) loopback
+		// interface and no route to anything else, so the child cannot reach
+		// any external host. Stage 2 brings loopback up. Creating it here, in
+		// the same clone that already makes the user namespace, means an
+		// unprivileged caller can request it: inside the new user namespace
+		// the process is uid 0 and owns the netns, so no host privilege is
+		// needed.
+		cloneFlags |= syscall.CLONE_NEWNET
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWUSER,
+		Cloneflags: uintptr(cloneFlags),
 		UidMappings: []syscall.SysProcIDMap{
 			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
 		},
@@ -135,7 +151,7 @@ func Run(ctx context.Context, targetArgs []string) (int, error) {
 // it finds neither — defaulting would provision an unpoliced view over
 // whatever directory happens to be current (a user's entire home directory,
 // in the worst case), which is the opposite of what this tool exists to
-// prevent. Unlike the darwin path, this never talks to a daemon: on Linux
+// prevent. This never talks to a daemon: on Linux
 // `janusfs exec` needs no daemon and must work with none running.
 func discoverSourceRoot(cwd string) (string, error) {
 	curr := cwd

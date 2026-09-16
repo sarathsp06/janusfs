@@ -238,7 +238,7 @@ func TestDoMount_StaleMountpointCleanupRetriesValidation(t *testing.T) {
 		unmountCommand = oldCommand
 		runtimeGOOS = oldGOOS
 	})
-	runtimeGOOS = "darwin"
+	runtimeGOOS = "linux"
 
 	var validateCalls int
 	validateMountConfig = func(config.Config) error {
@@ -253,7 +253,7 @@ func TestDoMount_StaleMountpointCleanupRetriesValidation(t *testing.T) {
 	}
 	var forced bool
 	unmountCommand = func(name string, args []string, timeoutSec int) error {
-		if name == "diskutil" && len(args) == 3 && args[0] == "unmount" && args[1] == "force" {
+		if name == "umount" && len(args) == 2 && args[0] == "-l" {
 			forced = true
 			return nil
 		}
@@ -321,8 +321,9 @@ func TestDoMount_NestedChildRejected(t *testing.T) {
 }
 
 func TestDaemonSocket_ListRoundTrip(t *testing.T) {
-	// macOS caps unix-socket paths at ~104 bytes, and t.TempDir() is far too
-	// long once ".janusfs/daemon.sock" is appended; use a short /tmp HOME.
+	// The kernel caps unix-socket paths (sun_path) at ~108 bytes, and
+	// t.TempDir() is far too long once ".janusfs/daemon.sock" is appended; use a
+	// short /tmp HOME.
 	home, err := os.MkdirTemp("/tmp", "janus")
 	if err != nil {
 		t.Fatal(err)

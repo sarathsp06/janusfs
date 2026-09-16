@@ -71,6 +71,9 @@ func (rt *mountRuntime) reload() error {
 // if the mount could not be established. Per-mount HTTP listeners are removed
 // because all routing is now consolidated within the single daemon server.
 func startMount(parent context.Context, cfg config.Config, debug bool) (*mountRuntime, error) {
+	if runtimeGOOS != "linux" {
+		return nil, fmt.Errorf("janusfs mounts require Linux; this OS (%s) is not supported", runtimeGOOS)
+	}
 	logger := logging.New("mount")
 
 	errLog := log.New(logWriter{logger, slog.LevelError}, "", 0)
@@ -181,7 +184,7 @@ func (rt *mountRuntime) stop() {
 		case <-time.After(shutdownGrace):
 			// Force the unmount at the OS level, then give the serve loop
 			// a moment to observe it. Calling server.Unmount again is not enough
-			// when macFUSE leaves a busy/stale mount behind.
+			// when FUSE leaves a busy/stale mount behind.
 			if err := unmountKernel(rt.Mountpoint, true); err != nil && rt.logger != nil {
 				rt.logger.Warn("force unmount failed", "mountpoint", rt.Mountpoint, "error", err)
 			}

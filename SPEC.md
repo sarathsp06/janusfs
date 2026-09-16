@@ -79,9 +79,21 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 - Protecting against a local adversary with the ability to read the source
   directory directly. JanusFS filters a *view*; it is not a sandbox and does not
   claim to contain a hostile process that can bypass it by other means.
-- Network policy, process policy, or syscall filtering of any kind.
+- Network *filtering* or egress allowlisting, process policy, or syscall
+  filtering. The one exception is coarse deny-all: `janusfs exec --net=none` on
+  Linux runs the target with no network at all (its own network namespace, only
+  loopback), the deny-all equivalent of a container's `--network none`. Anything
+  finer than deny-all — an egress allowlist — remains a non-goal and belongs to
+  the container the agent runs in. See §20.
 - Multi-user or multi-tenant operation. One user, one daemon, local only.
 - Encryption at rest.
+- **Non-Linux platforms.** Enforcement relies on Linux kernel features — FUSE
+  plus private mount, user, and network namespaces created by `janusfs exec` —
+  with no equivalent elsewhere. macOS and other operating systems are
+  unsupported: the binary still compiles and its unit tests run on a dev machine
+  (so contributors on macOS can build and test the engine), but `janusfs mount`
+  and `janusfs exec` refuse at runtime off Linux. macOS was previously
+  advisory-only; that path has been removed. See §20.
 
 ## 2. Definitions
 
@@ -138,8 +150,8 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   all failures are reported, not just the last.
 
 - **FR-4** A missing FUSE implementation fails the mount with an install
-  hint. `janusfs doctor` reports FUSE presence and version: macFUSE on darwin,
-  `/dev/fuse` and `fusermount` on Linux.
+  hint. `janusfs doctor` reports FUSE presence via `/dev/fuse` (and
+  `fusermount`) on Linux.
 
 - **FR-5** Mounts recorded in `~/.janusfs/mounts.json` are resumed at daemon
   start, before the control socket accepts connections. One unresumable record
@@ -394,25 +406,21 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   socket — and retaining it alongside a path-preserving mount would produce two
   disagreeing sources of truth.
 
-- **FR-30** **macOS: scoped mounts.** A mount covers exactly one registered
-  project source. Mounting a whole home directory or any other system-wide
-  location is not a supported configuration. This confines FUSE latency and the
-  blast radius of a failure to the project the user is actually working in.
-  In the default disjoint-mount model, `exec` may rewrite source-path argv
-  entries to the sanitized mountpoint, but stdout and stderr are passed through
-  byte-for-byte so interactive tools retain terminal semantics. Output may
-  therefore expose the internal mountpoint path.
+- **FR-30** **Scoped mounts.** A mount covers exactly one registered project
+  source. Mounting a whole home directory or any other system-wide location is
+  not a supported configuration. This confines FUSE latency and the blast radius
+  of a failure to the project the user is actually working in. In the disjoint
+  model, `exec` may rewrite source-path argv entries to the sanitized
+  mountpoint, but stdout and stderr are passed through byte-for-byte so
+  interactive tools retain terminal semantics. Output may therefore expose the
+  internal mountpoint path.
 
-- **FR-31** **macOS: path-preserving mode**, mounting over the source path, is
-  **opt-in and off by default**, and refuses to enable unless both FR-33 (the
-  retained-descriptor backing layer) and FR-32 (process identity) are in place.
-  The reason it cannot be the default is data loss, not performance: the
-  masked-write-back hazard below is general to every enforced view, but macOS has
-  no per-process mount view, so path-preserving mode extends it from the agent's
-  processes to **the user's own tools** — every editor, IDE, and shell on the
-  machine reads the filtered view, so an ordinary `git add` outside any agent
-  session can destroy a secret. The disjoint-mountpoint model of FR-1 remains the
-  macOS default and must stay supported.
+- **FR-31** *(Removed.)* Path-preserving mode — mounting over the source path so
+  the filtered view occupies the source's absolute path for every process on the
+  machine — was a macOS-only design. It is removed along with macOS support: on
+  Linux, `janusfs exec` already gives per-process path parity via a private
+  mount namespace (FR-28), which is strictly better. The disjoint-mountpoint
+  model of FR-1 is the only mount model. See §20.
 
 - **FR-31a** **Masked write-back is a general hazard of any enforced view, on
   every platform.** `.git/` resolves Allowed and passes through to the real
@@ -422,42 +430,26 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   build context, or any content-addressed tool (`go.sum`, lockfiles, cargo
   checksums) hashing the masked bytes. Git's stat cache (real mtime, and size is
   preserved by FR-9) hides the substitution from a plain `git status`. The
-  hazard is not macOS-specific and not path-preserving-specific; FR-31 is only
-  its widest blast radius. Any enforcement mode that ships must state which
+  hazard applies to every enforced view, including the Linux `exec` namespace
+  (FR-28). Any enforcement mode that ships must state which
   mitigation it relies on (route the agent's git to a scratch clone/worktree, or
   skip masked paths on stage/commit); hiding `.git` closes it but removes git
   from the agent.
 
-- **FR-32** **Process identity.** In path-preserving mode the adapter determines,
-  per operation, whether the calling process belongs to a registered agent
-  session. Registered sessions receive the filtered view; every other caller
-  receives unfiltered passthrough. The question is *"is this caller inside a
-  registered session"*, not *"is this the registered PID"* — an agent spawns
-  shells, package managers, test runners, and language servers, and all of them
-  must inherit the filtered view. Mechanisms, in priority order:
-
-  1. An inherited random session token in the child's environment, read for
-     another process without cgo via `KERN_PROCARGS2` on darwin and
-     `/proc/<pid>/environ` on Linux. This is primary because it survives the
-     `fork`, `setsid`, and reparenting that break process-tree walking.
-  2. A parent-PID walk from the caller up to a registered session root or PID 1,
-     as a fallback.
-  3. Process start time — `KERN_PROC_PID` on darwin, field 22 of
-     `/proc/<pid>/stat` on Linux — used **only** as part of the memoization key.
-     A `(pid, startTime)` pair is unique for the lifetime of a boot, which makes
-     the verdict cache correct with no TTL, because a recycled PID cannot collide
-     with a cached entry.
-
-  Verdicts must be memoized keyed by `(pid, startTime)`; an unmemoized ancestry
-  walk per operation is not affordable.
+- **FR-32** *(Removed.)* Per-operation process identity — deciding whether a
+  calling process belonged to a registered agent session so the adapter could
+  serve some callers the filtered view and others passthrough — existed only for
+  the removed macOS path-preserving mode. `internal/procid` was deleted. On Linux
+  the boundary is the `exec` mount namespace (FR-28): a caller either is inside
+  the namespace and sees the filtered view, or is not and never touches FUSE. See
+  §20.
 
 - **FR-33** **Retained-descriptor backing access.** The server holds a directory
   file descriptor for the source root, opened **before** the mount is
   established, and performs every backing access relative to it —
   `openat`, `fstatat`, `readlinkat`, `unlinkat`, `renameat` — with `O_NOFOLLOW`
-  where a symlink must not be traversed. On Linux the handle is
-  `open(src, O_PATH|O_DIRECTORY)`; macOS has no `O_PATH`, so
-  `open(src, O_RDONLY|O_DIRECTORY)` serves as the `openat` base.
+  `open(src, O_PATH|O_DIRECTORY)`. On non-Linux dev builds, which never mount,
+  `open(src, O_RDONLY|O_DIRECTORY)` serves as the `openat` base compile shim.
 
   This is required for two independent reasons. In path-preserving mode a
   path-resolving server would re-enter its own mount on every backing access and
@@ -682,9 +674,10 @@ is RAM only.
   crash leaves no sensitive artefacts, the cache being RAM-only. A crash leaves no
   hung directory either — see FR-35.
 
-- **NFR-7 Compatibility.** macOS 13+ on Apple Silicon and Intel with current
-  macFUSE; Linux with FUSE available. One static binary per platform and
-  architecture, universal on darwin. No cgo.
+- **NFR-7 Compatibility.** Linux with FUSE available (`/dev/fuse`). One static
+  binary per architecture (amd64, arm64). No cgo. macOS and other operating
+  systems are unsupported (§1, §20): the binary compiles there for development
+  and unit testing but refuses to mount or exec.
 
 - **NFR-8 Testability.** The entire engine — rules, masking, cache, identity,
   events — is testable **without a mount**. FUSE is an adapter over internal
@@ -697,12 +690,9 @@ is RAM only.
   unredacted content concurrently with an in-namespace process seeing redacted
   content at the same path.
 
-- **NFR-10 Identity lookup cost is measured before it ships.** FR-32 adds at
-  least one syscall per operation. Benchmark it against NFR-3's 250 µs budget
-  *before* building on it. If it does not fit, the correct outcome is that macOS
-  path-preserving mode does not ship and the disjoint model remains the macOS
-  answer — an acceptable result, since Linux gets kernel-enforced isolation
-  either way.
+- **NFR-10** *(Removed.)* Identity-lookup cost measurement applied to the removed
+  macOS process-identity path (FR-32). Linux isolation adds no per-operation
+  identity syscall.
 
 - **NFR-11 Zero host overhead on Linux.** Under FR-28, host tools must show no
   measurable regression against the no-JanusFS baseline, because they are not
@@ -810,14 +800,12 @@ Config-file immunity (FR-17) is checked **before** the policy lookup in every
 mutating operation, so no rule can make a config file writable.
 
 The `Adapter`, its `Mount`/`Unmount` lifecycle, and `OpEvent` are one shared
-implementation (`internal/mount/mount.go`, build-tagged `darwin || linux`); the
-only platform difference is `applyPlatformOptions`. On macOS that sets the
-load-bearing (not cosmetic) `nobrowse` and `noappledouble` options — without
-them Spotlight and Finder hold the volume busy and a graceful unmount fails with
-`EBUSY` indefinitely — and `NullPermissions`, which avoids spurious `EACCES`
-from ownership mismatches on the loopback; on Linux it is a no-op. `ioctl`
-returns `ENOSYS` because macOS tools issue ioctls on regular files and go-fuse's
-default handler panics on empty input buffers.
+implementation (`internal/mount/mount.go`, build-tagged `darwin || linux` so the
+engine's unit tests still compile and run on a contributor's dev machine); the
+only platform seam is `applyPlatformOptions`, now a no-op on every OS. Mounting
+itself is refused off Linux (`startMount`), so these options never take effect
+elsewhere. `ioctl` returns `ENOSYS` because some tools issue ioctls on regular
+files and go-fuse's default handler panics on empty input buffers.
 
 ## 7. Decision engine
 
@@ -928,68 +916,24 @@ window is closed.
 
 ## 10. Isolation engines
 
-Two engines, one per platform, with genuinely different guarantees. The full
-analysis is in
+One isolation engine, Linux only. The full analysis is in
 [`docs/knowledge/platform-isolation.md`](docs/knowledge/platform-isolation.md).
 
-| | Linux | macOS |
-|---|---|---|
-| Per-process mount views | `CLONE_NEWNS` | none exist |
-| Who sees the mount | the agent's process tree only | every process |
-| Enforcement | the kernel | a policy decision in our daemon |
-| Host tool cost | zero | every access enters FUSE |
-| Crash blast radius | the namespace, reaped by the kernel | the project directory hangs |
-| Evadable by a determined local process | no | yes |
-
-**Linux** (FR-28): `janusfs exec` re-execs itself with
+`janusfs exec` (FR-28) re-execs itself with
 `Cloneflags: CLONE_NEWNS|CLONE_NEWUSER` and single uid/gid mappings; the staged
 process makes the mount tree recursively private, mounts the filtered view over
-the source path, spawns the target command, and unmounts on exit. Inside the user
-namespace the process holds the capability to mount directly, so go-fuse's direct
-mount path can be used without `fusermount`.
-
-**macOS** (FR-30, FR-31): scoped per-project mounts, disjoint by default, with
-path-preserving mode opt-in and gated on FR-32 and FR-33.
+the source path, spawns the target command, and unmounts on exit. Inside the
+user namespace the process holds the capability to mount directly, so go-fuse's
+direct mount path can be used without `fusermount`. This is the only isolation
+engine; there is no macOS engine (§1, §20).
 
 ## 11. Process identity
 
-New, required by FR-32. Design detail in
-[`docs/knowledge/process-identity.md`](docs/knowledge/process-identity.md).
-
-```go
-// Identity is one process, unique for this boot.
-type Identity struct {
-    PID       int
-    StartTime int64
-}
-
-type Registry interface {
-    Register(sessionToken string, root Identity)
-    Unregister(sessionToken string)
-    IsAgent(pid int) bool // memoized on (pid, startTime)
-}
-```
-
-Platform specifics live behind one internal seam —
-`startTime(pid)`, `parent(pid)`, `environ(pid)` — implemented in
-`procid_darwin.go` and `procid_linux.go` with `golang.org/x/sys/unix` only.
-
-The registry is **in memory**. It does not persist, so it cannot outlive a
-reboot, so there is nothing stale to guard against.
-
-Three mechanisms from the conventional identity-tuple design are **rejected**, and
-must not be reintroduced:
-
-- **A hashed parent-PID chain.** It answers "is this the exact chain I recorded",
-  not the question being asked, and it is fragile in the *normal* case: when an
-  intermediate process exits, its children reparent to `launchd` or `init`, the
-  chain changes, the digest stops matching, and a legitimate agent subprocess
-  silently loses its filtered view. Walk the chain; do not hash it.
-- **A boot UUID.** It guards a persisted registry against a reboot. The registry
-  is in memory. Dead weight.
-- **Process group or session ID as the match key.** A subshell or backgrounded
-  helper calling `setsid` detaches from both. They may corroborate; they cannot
-  decide.
+*(Removed.)* Per-operation process identity existed only for the removed macOS
+path-preserving mode (FR-32). `internal/procid` was deleted. On Linux the
+boundary is the `exec` mount namespace (FR-28): a process is either inside the
+namespace, and sees the filtered view, or outside it, and never touches FUSE —
+there is no per-caller identity question to answer.
 
 ## 12. Observability internals
 
@@ -1061,10 +1005,6 @@ What JanusFS enforces:
 
 What it does not enforce, stated plainly:
 
-- On macOS in path-preserving mode, the boundary is a heuristic in our daemon. A
-  local process that deliberately evades identification reaches the unfiltered
-  view. This is inherent to a platform with no per-process mount views, not a
-  consequence of any choice made here, and it is why that mode is opt-in.
 - Content protection by inode. Decisions are per path.
 - Anything about a process that can read the source directory directly. JanusFS
   filters a view.
@@ -1082,8 +1022,7 @@ Every tunable is a field on one `config.Config`. Precedence is
 
 `Validate()` runs before any FUSE call: the source exists and is a directory, and
 in the disjoint model the mountpoint exists, is a directory, is empty, and does
-not overlap the source. Path-preserving mode (FR-31) relaxes the overlap rule
-**under that mode only**; the rule is not deleted.
+not overlap the source.
 
 Logging is one JSON handler configured once by `cmd/janusfs`, with
 per-component loggers derived from it. Never `slog.Default()`.
@@ -1112,10 +1051,9 @@ release schedule, or a phase plan. A requirement's exit condition is simply its
 own test plus the invariants in §19 — the leak oracle green, no NFR-3 budget
 regressed, no new dependency added for convenience.
 
-The only hard dependencies are the ones the requirements themselves state:
-macOS path-preserving mode (FR-31) refuses to enable without the retained
-descriptor layer (FR-33) and process identity (FR-32); everything else stands
-alone.
+The only hard dependencies are the ones the requirements themselves state: the
+retained-descriptor backing layer (FR-33) underpins TOCTOU-safe access;
+everything else stands alone.
 
 ## 19. Test strategy
 
@@ -1136,17 +1074,12 @@ alone.
 
 ### Accepted risks
 
-- **macOS path-preserving mode is evadable.** A deliberately evasive local process
-  reaches the unfiltered view (§15). Accepted because the threat model's agent is
-  untrusted but not purpose-built to escape, because a hostile local process could
-  read the source directly anyway, and because the mode is opt-in. It must never
-  be described as equivalent to the Linux guarantee.
 - **`CLONE_NEWUSER` makes the child believe it is root.** Some tools behave
   differently as uid 0. Accepted as the price of unprivileged mounting; document
   it in `exec`'s help text.
 - **A process inside an enforced view can write masked bytes back into durable
   state** (FR-31a) — `git add` of a Masked file stages `****` into the real
-  object store, on Linux as well as macOS, because `.git/` is Allowed
+  object store, on Linux, because `.git/` is Allowed
   passthrough. Accepted for now because masked files are usually ignored by the
   repo they live in, and because the alternatives each cost something real
   (hiding `.git` removes git; a scratch clone adds a workflow). Not acceptable to
@@ -1159,6 +1092,22 @@ alone.
   upgrade path: the provider's single cache mutex, and oversize re-redaction from
   byte 0.
 
+### Decisions
+
+- **`janusfs exec --net=none`: coarse network deny-all on Linux** (2026-09
+  decision). Network policy was a blanket non-goal (§1). Narrowed to admit
+  deny-all only, because it is nearly free within the existing exec model — a
+  network namespace is one extra clone flag (`CLONE_NEWNET`) on the
+  `CLONE_NEWNS|CLONE_NEWUSER` clone `janusfs exec` already performs, and an
+  unprivileged caller can create it because it is uid 0 in its own user
+  namespace. Stage 2 brings loopback up so local sockets keep working. It is
+  opt-in (`--net=host` is the default), Linux-only, and kernel-enforced. On
+  non-Linux, `janusfs exec` refuses entirely rather than pretending to enforce
+  anything. An egress *allowlist* was rejected as part of
+  this decision: it needs a usermode network stack (slirp4netns/pasta) or host
+  root plus an nftables generator, i.e. a forbidden dependency (§20.4)
+  reimplementing what the agent's container already provides.
+
 ### Rejected designs
 
 Recorded so they are not re-proposed.
@@ -1170,8 +1119,7 @@ Recorded so they are not re-proposed.
   is not a router.
 - **Global `$HOME` overmounting.** Never. Note also that mounts are already
   strictly per project source, so "shift from a global overlay to scoped project
-  roots" describes work that is already done; the remaining macOS work is parity,
-  not scoping.
+  roots" describes work that is already done.
 - **Per-caller kernel cache policy** (FR-34). Not implementable; an
   implementation that appears to work is leaking.
 - **A hashed parent-PID chain, a boot UUID, and process-group matching** (§11).
@@ -1194,13 +1142,24 @@ Recorded so they are not re-proposed.
   (Codex CLI and Gemini CLI use Seatbelt directly, Anthropic's srt wraps
   Seatbelt/bubblewrap). A daemon-side identity heuristic is evadable by
   `setsid` and competes with a signed kernel mechanism — no audience remains.
-  `internal/procid` was deleted; macOS `janusfs exec` is advisory only
-  (disjoint sanitized mount, cwd set, env scrubbed) and is documented as
-  such. Enforcement is Linux (natively or in a container); the deny layer on
-  macOS is the harness's own sandbox. PRP 09's spike findings (a Seatbelt
-  profile denying the source path while keeping the mountpoint usable works
-  for plain CLI children, but was never validated against signed/Electron
-  app bundles and TCC) are preserved in `PRPs/09-macos-seatbelt-exec.md`.
+  `internal/procid` was deleted. macOS support was subsequently removed
+  entirely (see the next entry); enforcement is Linux only (natively or in a
+  container), and the deny layer for a macOS host is the harness's own sandbox.
+  PRP 09's spike findings (a Seatbelt profile denying the source path while
+  keeping the mountpoint usable works for plain CLI children, but was never
+  validated against signed/Electron app bundles and TCC) are preserved in
+  `PRPs/09-macos-seatbelt-exec.md`.
+- **macOS support, in full** (2026-09 decision). After the enforcement track
+  above was rejected, the only macOS code left was advisory `exec` (cwd set,
+  env scrubbed), macFUSE mount options, the macFUSE `doctor` probe, and
+  `diskutil` unmount — none of it a real boundary. Shipping it invited a false
+  sense of enforcement on a platform that cannot provide one (no per-process
+  mount, user, or network namespaces). All of it was removed: `janusfs mount`
+  and `janusfs exec` refuse at runtime off Linux, and no macOS release
+  artifacts are built. The binary still compiles on non-Linux and its unit
+  tests run there, so the engine (rules, masking, cache) stays testable on a
+  contributor's machine; only enforcement is Linux. macFUSE, `fuse-t`, and any
+  macOS isolation design are out of scope — do not re-propose them.
 - **A raw-bytes operator endpoint (`/api/v1/reveal`) in the dashboard.**
   A secrets-redaction product must not serve unredacted source bytes and
   remote file edits over loopback HTTP; one leaked bearer token converted

@@ -30,12 +30,16 @@ Living document. Updated at every phase exit per SPEC.md §17 ("Security is a pe
 | History DB on disk | Accepted trade-off, mitigated | Deliberately persists path names + access patterns; rollups only, strict perms, pruning, opt-out (SPEC §3.8) |
 | `.janusfs` virtual files | Mitigated | Read-only, never user-maskable/hidable (FR-27) |
 | Masked bytes staged into git (`git add` through the filtered view writes `****` into the real object store) | Mitigated (advisory warning) | `janusfs check` and `janusfs exec` warn when Masked files are git-stageable (`internal/check.GitStagingHazards`); commit from outside the view or gitignore the paths |
+| Network exfiltration by an exec'd command (agent sends bytes it read to a remote host) | Mitigated on Linux, opt-in | `janusfs exec --net=none` runs the command in a network namespace with only loopback and no external route — deny-all, kernel-enforced. Not a filter/allowlist (that is the container's job); default is `--net=host` (no isolation). See SPEC §20 decision |
 
-Note on macOS: enforcement there is advisory-only by design. The former macOS
-enforcement track (process identity, path-preserving overmount, Seatbelt
-`--sandbox`) and the raw-bytes `/api/v1/reveal` endpoint were deleted and are
-recorded as rejected designs in SPEC.md §20 — neither appears above because
-neither exists. Linux `janusfs exec` isolation is kernel-enforced and verified
+Platform: JanusFS enforces only on Linux. Its boundaries are Linux kernel
+features — FUSE plus private mount/user/network namespaces created by
+`janusfs exec` — with no equivalent elsewhere, so non-Linux is unsupported:
+`janusfs mount` and `janusfs exec` refuse at runtime rather than offering an
+advisory boundary. The former macOS enforcement track (process identity,
+path-preserving overmount, Seatbelt `--sandbox`) and the raw-bytes
+`/api/v1/reveal` endpoint were deleted and are recorded as rejected designs in
+SPEC.md §20. Linux `janusfs exec` isolation is kernel-enforced and verified
 per-PR by the `fuseintegration` CI job.
 
 ## Phase-by-phase checklist template

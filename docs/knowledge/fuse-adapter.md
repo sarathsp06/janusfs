@@ -12,12 +12,12 @@ sources:
   - id: virtual
     resource: /internal/mount/janus_virtual.go
     title: janusVirtualDir, janusVirtualFile
-  - id: darwin
-    resource: /internal/mount/mount_darwin.go
-    title: Adapter.Mount, mount options (darwin)
-  - id: linux
-    resource: /internal/mount/mount_linux.go
-    title: Adapter.Mount (linux)
+  - id: mount
+    resource: /internal/mount/mount.go
+    title: Adapter.Mount, shared mount options
+  - id: options
+    resource: /internal/mount/mount_options.go
+    title: applyPlatformOptions (no-op)
 ---
 
 # Strategy: embed the loopback, override only what differs
@@ -107,7 +107,7 @@ other two ways to mutate. The absence is correct by construction rather than an
 oversight — but see the reload-window caveat in
 [known gaps](known-gaps.md).
 
-**`Ioctl` returns `ENOSYS` deliberately.** macOS tools such as `make` issue
+**`Ioctl` returns `ENOSYS` deliberately.** Some tools such as `make` issue
 ioctls on regular files, and go-fuse's default `LoopbackFile.Ioctl` panics on
 empty input buffers. `ENOSYS` is the correct answer for a filesystem that does
 not support ioctls (`:241`).
@@ -185,28 +185,21 @@ load-bearing beyond introspection.
 
 # Mount options
 
-Both platforms set `FsName`/`Name` to `janusfs` so `df` shows something
-meaningful, and wire `fs.Options.Logger` to a component logger.
+The adapter sets `FsName`/`Name` to `janusfs` so `df` shows something
+meaningful, and wires `fs.Options.Logger` to a component logger
+(`internal/mount/mount.go`).
 
-Darwin additionally sets (`mount_darwin.go:97`):
-
-- `NullPermissions` — let the kernel check permissions against reported mode
-  bits instead of having go-fuse do it, avoiding spurious `EACCES` on
-  ownership mismatches;
-- `nobrowse` — keep the volume out of Finder and Spotlight;
-- `noappledouble` — stop the `._*` and `.DS_Store` writes Finder would make.
-
-The last two are not cosmetic. macFUSE holds a volume busy by default once
-`mdworker` indexes it and Finder browses it, and a graceful unmount then fails
-with `EBUSY` indefinitely. These options are the standard cure.
-
-Linux sets none of those (`mount_linux.go:77`) and does not currently enable
-`DirectMount`.
+`applyPlatformOptions` (`internal/mount/mount_options.go`, `//go:build darwin ||
+linux`) is the platform seam. It is now a no-op on every OS: the former macFUSE
+options (`nobrowse`, `noappledouble`, `NullPermissions`) went away with macOS
+support, and mounting is refused off Linux anyway. Linux does not currently
+enable `DirectMount` in the daemon path (the `exec` namespace path mounts
+directly inside its user namespace).
 
 # Attribute and entry timeouts
 
-Both platforms explicitly set `fs.Options.AttrTimeout`, `EntryTimeout`, and
-`NegativeTimeout` to zero (`mount_darwin.go`, `mount_linux.go`) — a deliberate
+The adapter explicitly sets `fs.Options.AttrTimeout`, `EntryTimeout`, and
+`NegativeTimeout` to zero (`internal/mount/mount.go`) — a deliberate
 choice, not the accident of omission it once was. Regular `JanusNode` responses
 still do not call `SetAttrTimeout`/`SetEntryTimeout` individually; the
 mount-wide zero default covers them. Only the synthetic `.janusfs` nodes set a

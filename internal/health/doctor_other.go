@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build !linux
 
 package health
 
@@ -7,8 +7,8 @@ import (
 	"syscall"
 )
 
-func checkMacFUSE() MacFUSEStatus {
-	s := MacFUSEStatus{}
+func checkFUSE() FUSEStatus {
+	s := FUSEStatus{}
 	// On Linux and other Unix systems, FUSE is active if /dev/fuse is accessible.
 	if _, err := os.Stat("/dev/fuse"); err == nil {
 		s.Installed = true

@@ -10,8 +10,8 @@ permissions:
 
 jobs:
   goreleaser:
-    # Build on a standard Linux runner. Since CGO_ENABLED=0 is used,
-    # goreleaser can cross-compile to all target platforms.
+    # Build on a standard Linux runner. JanusFS is Linux-only; with
+    # CGO_ENABLED=0 goreleaser cross-compiles the linux amd64/arm64 targets.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

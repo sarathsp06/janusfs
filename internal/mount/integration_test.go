@@ -166,10 +166,9 @@ func TestListxattrGating(t *testing.T) {
 	_, cleanup := mountForTest(t, src, mountpoint)
 	defer cleanup()
 
-	// macOS / Linux direct syscall listxattr test. golang.org/x/sys/unix is used
-	// rather than the stdlib syscall package because syscall.Listxattr isn't
-	// exposed on darwin's syscall package at all (only on linux's), while
-	// unix.Listxattr is defined identically on both.
+	// Direct syscall listxattr test. golang.org/x/sys/unix is used rather than
+	// the stdlib syscall package for unix.Listxattr's stable cross-platform
+	// signature.
 	// Listxattr might not be supported on all environments, or might return
 	// ENOTSUP. However, if the file is HIDDEN, it must return EACCES instead of
 	// whatever it would normally return. Let's do listxattr on the hidden file:
@@ -221,8 +220,8 @@ func TestMaskedXattrSideChannel(t *testing.T) {
 // TestReloadTakesEffectWithoutRemount asserts that a policy tightening (here,
 // a file newly added to .janusfs.yml) is visible on the very next lookup and
 // open of that path, with no remount. This is the behavioural counterpart to
-// the zero attribute/entry/negative-lookup FUSE timeouts set in
-// mount_darwin.go/mount_linux.go: if the kernel were allowed to cache a
+// the zero attribute/entry/negative-lookup FUSE timeouts set in mount.go: if
+// the kernel were allowed to cache a
 // pre-reload lookup or attribute, a file just tightened to HIDDEN could keep
 // answering from that cache instead of re-consulting the (already reloaded)
 // engine.

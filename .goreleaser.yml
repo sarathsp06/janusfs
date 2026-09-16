@@ -1,10 +1,11 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 #
-# JanusFS release configuration. Produces macOS and Linux binaries per release,
-# including one universal (arm64+amd64) darwin archive, tarballs with the binary
-# + docs + license, checksums, a CycloneDX SBOM, a source archive, and
-# Conventional-Commits-grouped release notes. Tag releases are published to the
-# GitHub Releases page by the release workflow.
+# JanusFS release configuration. Produces Linux binaries per release: tarballs
+# with the binary + docs + license, checksums, a CycloneDX SBOM, a source
+# archive, and Conventional-Commits-grouped release notes. Tag releases are
+# published to the GitHub Releases page by the release workflow. JanusFS is
+# Linux-only (kernel-enforced isolation is a Linux feature); no macOS artifacts
+# are built.
 
 version: 2
 
@@ -19,10 +20,10 @@ builds:
   - id: janusfs
     main: ./cmd/janusfs
     binary: janusfs
-    # Build for both macOS and Linux. No CGO in the janusfs binary itself
-    # (SPEC §20.4's dependency policy forbids cgo).
+    # Linux-only: JanusFS enforcement (FUSE + namespaces) is a Linux feature.
+    # No CGO in the janusfs binary itself (SPEC §20's dependency policy forbids
+    # cgo).
     goos:
-      - darwin
       - linux
     goarch:
       - amd64
@@ -37,13 +38,6 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
     mod_timestamp: "{{ .CommitTimestamp }}"
-
-universal_binaries:
-  # NFR-7: "Single static binary per arch (universal binary optional)" —
-  # ship one darwin binary covering both Apple Silicon and Intel.
-  - id: janusfs
-    replace: true
-    name_template: janusfs
 
 archives:
   - id: janusfs
@@ -83,7 +77,7 @@ sboms:
 
 snapshot:
   # `make release-snapshot` produces artifacts named e.g.
-  # janusfs_0.1.0-next+abcdef_darwin_all.tar.gz so it's obvious they aren't a
+  # janusfs_0.1.0-next+abcdef_linux_amd64.tar.gz so it's obvious they aren't a
   # real release.
   version_template: "{{ incpatch .Version }}-next+{{ .ShortCommit }}"
 
@@ -134,13 +128,10 @@ release:
     ## Install
 
     ```bash
-    # macOS:
-    brew install --cask macfuse
-
     # Ubuntu/Debian:
-    sudo apt-get install -y fuse3 libfuse3-dev
+    sudo apt-get install -y fuse3
 
-    # Then download the matching archive from the assets below, or:
+    # Then download the matching Linux archive from the assets below, or:
     go install github.com/sarathsp06/janusfs/cmd/janusfs@{{ .Tag }}
     ```
 
@@ -152,23 +143,5 @@ release:
 
     Full changelog: {{ .PreviousTag }}...{{ .Tag }}
 
-# Homebrew tap publication is opt-in — the `brews:` block is present but
-# commented so the release doesn't attempt to push to a tap that doesn't
-# exist yet. Uncomment and fill in the tap repo when you're ready.
-#
-# brews:
-#   - name: janusfs
-#     repository:
-#       owner: sarathsp06
-#       name: homebrew-tap
-#     directory: Formula
-#     homepage: https://github.com/sarathsp06/janusfs
-#     description: Secret-masking filesystem boundary for AI agents.
-#     license: TBD
-#     dependencies:
-#       - name: fuse-t
-#         type: cask
-#     install: |
-#       bin.install "janusfs"
-#     test: |
-#       system "#{bin}/janusfs", "--version"
+# JanusFS is Linux-only, so there is no Homebrew tap. Distribute via the release
+# tarballs above or `go install`.

@@ -9,8 +9,8 @@ import (
 	"syscall"
 )
 
-func checkMacFUSE() MacFUSEStatus {
-	s := MacFUSEStatus{}
+func checkFUSE() FUSEStatus {
+	s := FUSEStatus{}
 	// On Linux, FUSE is usable if /dev/fuse is accessible.
 	if _, err := os.Stat("/dev/fuse"); err == nil {
 		s.Installed = true

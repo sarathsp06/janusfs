@@ -64,10 +64,10 @@ func TestRunWithPidfileDir(t *testing.T) {
 	}
 }
 
-func TestMacFUSEStatus(t *testing.T) {
-	s := checkMacFUSE()
-	// On a CI machine or dev machine without macFUSE, this will be false.
-	// Just check that it doesn't panic and returns a valid struct.
+func TestFUSEStatus(t *testing.T) {
+	s := checkFUSE()
+	// On a machine without FUSE this will be false. Just check that it does
+	// not panic and returns a valid struct.
 	_ = s.Installed
 	_ = s.Loaded
 }

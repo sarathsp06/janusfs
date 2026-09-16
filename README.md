@@ -2,7 +2,7 @@
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-blue.svg)](https://go.dev/dl/)
 [![CI](https://github.com/sarathsp06/janusfs/actions/workflows/ci.yml/badge.svg)](https://github.com/sarathsp06/janusfs/actions/workflows/ci.yml)
-[![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/sarathsp06/janusfs)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://github.com/sarathsp06/janusfs)
 [![Tests](https://img.shields.io/github/actions/workflow/status/sarathsp06/janusfs/ci.yml?label=tests&logo=github&branch=main)](https://github.com/sarathsp06/janusfs/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -19,7 +19,7 @@
 - Policy is enforced on every open, read, and directory listing; real files are never modified.
 - Allowed reads pass through, Masked reads are byte-length-preserving redacted reads, and Hidden reads fail closed.
 - A single local **daemon** process runs in the background and owns all active FUSE mounts. Your CLI commands (`janusfs mount`/`umount`) are short-lived, returning immediately. The daemon serves a single consolidated dashboard exposing all mounts and their statistics under a single unified port.
-- **Two enforcement tiers, stated up front.** On **Linux**, `janusfs exec -- <your-agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source — a real, kernel-enforced boundary, exercised by CI on every change. On **macOS** the mount is **advisory** (the real source stays readable at its own path); for enforcement on a Mac, run the agent in a Linux container and use `janusfs exec` inside it. JanusFS is a redaction boundary that composes with your sandbox, not a sandbox itself.
+- **Linux-only, kernel-enforced.** `janusfs exec -- <your-agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path — a real boundary, exercised by CI on every change. `janusfs mount`/`exec` refuse at runtime on non-Linux hosts; to use JanusFS on a Mac or Windows box, run it inside a Linux VM/container. JanusFS is a redaction boundary that composes with your sandbox, not a sandbox itself.
 
 ---
 
@@ -89,10 +89,10 @@ janusfs exec -- aider           # or a shell, a test run, any CLI
 
 **Own the process tree, not one channel.** An agent has many ways to touch the filesystem — its `read_file` tool, its Bash tool, `git`, a build, a subprocess. Filtering any single one of those leaves the others open. On Linux `janusfs exec` confines the *entire* subprocess tree at once, so `git`, `npm`, `grep`, and every child inherit the filtered view transitively — allowed files pass through, masked files read as `****`, hidden files fail closed — with no per-tool wiring and no way for a child to opt out.
 
-### The two tiers, honestly
+### One boundary, kernel-enforced
 
-- **Linux — kernel-enforced.** `janusfs exec` runs the command in a private mount namespace (`CLONE_NEWNS`) where the filtered view *replaces* the source at its own path, for both read and write. From inside, the unfiltered tree does not exist; a subprocess cannot reach it by any path. No daemon required, no path rewriting. This is the real boundary. (One consequence of the user namespace: the command sees itself as uid 0 — see `janusfs exec --help`.)
-- **macOS — advisory.** macOS has no per-process mount namespace available to a third-party tool, so `janusfs exec` can only set the child's working directory to the disjoint sanitized mount and scrub `JANUSFS_*` env — and it needs the daemon running. The real source stays reachable at its own path by any process that looks for it. Treat this as dev-time hygiene, not containment. For real enforcement on a Mac, run the agent in a Linux container/VM (below); for a deny boundary on macOS, use your harness's own sandbox (Codex CLI, Gemini CLI, and Claude Code all ship Seatbelt-based confinement) — JanusFS's masking mount composes with it.
+- **Linux — kernel-enforced.** `janusfs exec` runs the command in a private mount namespace (`CLONE_NEWNS`) where the filtered view *replaces* the source at its own path, for both read and write. From inside, the unfiltered tree does not exist; a subprocess cannot reach it by any path. No daemon required, no path rewriting. (One consequence of the user namespace: the command sees itself as uid 0 — see `janusfs exec --help`.)
+- **Non-Linux — refused.** JanusFS enforces only on Linux. `janusfs mount` and `janusfs exec` error out on macOS, Windows, and other OSes rather than pretend an advisory mount is a boundary. To use JanusFS on a Mac, run the agent in a Linux container/VM and use `janusfs exec` inside it (below); for a deny boundary on the Mac host itself, use your harness's own sandbox (Codex CLI, Gemini CLI, and Claude Code all ship Seatbelt-based confinement).
 
 > **Wrapping an interactive editor or IDE is not the same as wrapping a headless agent.** `janusfs exec -- <your-editor>` puts *your own* tools inside the filtered view too, so a masked file you edit and `git add` stages `****` into real git (see the caveat below). `janusfs exec` is designed for headless agent/CLI runs; whether a specific agent harness even functions inside the Linux namespace (config/auth/network under a user namespace) is per-harness and not yet validated here — test yours before relying on it.
 
@@ -105,9 +105,9 @@ Sandboxes and JanusFS answer different questions. A sandbox protects the *machin
 janusfs exec -- claude      # inside a devcontainer: add --device /dev/fuse to runArgs
 ```
 
-### Real enforcement on a Mac today: run it in Linux
+### On a Mac or Windows: run it inside Linux
 
-Since the boundary is kernel-enforced only on Linux, the way to get it on a Mac is to put the agent in a Linux VM/container and run `janusfs exec` *inside* — the mount namespace is then a real one. Docker Desktop, Colima, and OrbStack all give you the Linux kernel needed:
+JanusFS runs on Linux only, so on a Mac or Windows box you run the agent in a Linux VM/container and call `janusfs exec` *inside* it — the mount namespace there is a real Linux one. Docker Desktop, Colima, and OrbStack all give you the Linux kernel needed:
 
 ```bash
 # on the host: your project is bind-mounted into the container as /src
@@ -179,15 +179,17 @@ The rule engine reads `.janusfs.yml` from the mount root down (and from `~/.janu
 
 ### 1) Install FUSE and JanusFS
 
-#### Install FUSE runtime (Required)
-- **macOS:** Install macFUSE: `brew install --cask macfuse`
-- **Linux (Ubuntu/Debian):** `sudo apt-get install -y fuse3 libfuse3-dev`
-- **Linux (RedHat/CentOS):** `sudo dnf install -y fuse3 fuse3-devel`
+#### Install FUSE runtime (Required, Linux)
 
-*Note for Apple Silicon users:* The macFUSE system extension must be approved once in *System Settings → Privacy & Security*, followed by a reboot. (See `SPEC.md` for why JanusFS uses macFUSE rather than FUSE-T).
+JanusFS runs on Linux only.
+
+- **Ubuntu/Debian:** `sudo apt-get install -y fuse3 libfuse3-dev`
+- **RedHat/CentOS:** `sudo dnf install -y fuse3 fuse3-devel`
+
+On macOS or Windows, run JanusFS inside a Linux VM/container (see [On a Mac or Windows: run it inside Linux](#on-a-mac-or-windows-run-it-inside-linux)).
 
 #### Install JanusFS binary
-- **Via Precompiled Release Binaries:** Download the latest tarball for your OS and architecture from the [GitHub Releases](https://github.com/sarathsp06/janusfs/releases) page, extract the `janusfs` binary, and move it to a directory in your `$PATH` (e.g., `/usr/local/bin`).
+- **Via Precompiled Release Binaries:** Download the latest Linux tarball for your architecture from the [GitHub Releases](https://github.com/sarathsp06/janusfs/releases) page, extract the `janusfs` binary, and move it to a directory in your `$PATH` (e.g., `/usr/local/bin`).
 - **Via Go Toolchain:**
   ```bash
   go install github.com/sarathsp06/janusfs/cmd/janusfs@latest
@@ -221,7 +223,7 @@ janusfs mount .
 **Platform-specific confinement, read this before you decide how to launch your agent:**
 
 - **Linux** has a real, kernel-enforced boundary: `janusfs exec -- <agent>` runs the agent in a private mount namespace where the filtered view *replaces* the source at its own path. The agent cannot reach the unfiltered tree by any path, because from inside that namespace the unfiltered tree doesn't exist.
-- **macOS has no enforced boundary.** Both "point your agent at the mountpoint" and `janusfs exec` are **advisory**: the real source directory remains fully readable at its own path by the same agent process, through any other tool, subprocess, or absolute path it happens to resolve (git config, an IDE workspace file, a stray `cd`, …). Nothing on macOS stops that — a path-preserving mode was considered and rejected (an evadable daemon-side heuristic cannot compete with the vendor-signed sandbox your harness already ships; see `SPEC.md` §20). If your threat model requires that an agent genuinely cannot reach a secret by any path, run it in a Linux container — that is the supported answer, not a workaround.
+- **Non-Linux is unsupported.** `janusfs mount` and `janusfs exec` refuse to run off Linux rather than offer an advisory mount that is not a boundary. A path-preserving macOS mode was considered and rejected — an evadable daemon-side heuristic cannot compete with the vendor-signed sandbox your harness already ships (see `SPEC.md` §20). If your threat model requires that an agent genuinely cannot reach a secret by any path, run it in a Linux container — that is the supported answer.
 
 By default, the mountpoint mirrors the source's full path under your mount root
 (e.g. `~/.janusfs/mounts/Users/you/my-project`), so two sources never collide
@@ -268,8 +270,8 @@ client that talks to it over `~/.janusfs/daemon.sock` and exits.
   `janusfs logs [-f]` tails that log.
 - **Clean shutdown.** Ctrl-C (or `SIGTERM`) unmounts everything and drains the
   dashboard. If FUSE does not release a mount cleanly within the grace window,
-  JanusFS falls back to OS-level unmount commands (`diskutil`/`umount` on macOS,
-  `fusermount3`/`fusermount`/`umount` on Linux) to avoid stale mountpoints.
+  JanusFS falls back to OS-level unmount commands
+  (`fusermount3`/`fusermount`/`umount` on Linux) to avoid stale mountpoints.
 
 ```bash
 janusfs daemon --background # start it detached (or `janusfs daemon` in the foreground)
@@ -283,9 +285,9 @@ janusfs mounts             # list active and recorded mounts
 janusfs paths              # show where settings, the registry, and rules live
 ```
 
-There's no file watcher (watching a large tree exhausts macOS file
-descriptors, and the native FSEvents API needs cgo, which this project
-forbids) — but freshness is enforced at two different levels, and they're not
+There's no file watcher (watching a large tree burns inotify watches, and the
+native watch APIs that avoid that need cgo, which this project forbids) — but
+freshness is enforced at two different levels, and they're not
 the same guarantee:
 
 - **Content is always correct.** Every masked read revalidates the real
@@ -325,15 +327,6 @@ OS-level unmount and still removes the registry entry.
 
 ### 2. If the kernel mount remains, use OS tools
 
-macOS:
-
-```bash
-diskutil unmount <mountpoint>
-diskutil unmount force <mountpoint>
-# fallback if diskutil is unavailable:
-umount <mountpoint>
-```
-
 Linux / FUSE:
 
 ```bash
@@ -366,8 +359,7 @@ remains, prefer `janusfs umount <mountpoint>` so JanusFS prunes it; edit
 
 Before mounting for the first time, run this quick checklist to reduce friction:
 
-1. Install and approve macFUSE (System Settings → Privacy & Security), then
-   reboot if required.
+1. Ensure the FUSE runtime is installed (`fuse3`); JanusFS runs on Linux only.
 2. Seed secure defaults in your repo (or in `~/.janusfs/config`):
 
    cd my-project
@@ -526,8 +518,8 @@ whole-file      Masks every byte of the file; no regex...   —
 | `janusfs check [path]` | Static linter for the things that indicate a real mistake: unknown builtins, bad regex (reported with its fail-closed-to-Hidden consequence), directory-mask globs that can never mask, and negations that have no effect (blocked by a hidden ancestor or the global floor). Does **not** flag a rule that merely matches no files today — a defensive pattern for files that don't exist yet is intended. Add `--secrets` for an opt-in heuristic scan that warns about likely secret files/content currently resolving Allowed. Add `--matches` to list files/directories currently resolving Hidden or Masked; `--json` includes matches when requested. |
 | `janusfs patterns` | List every reserved built-in `.janusfs.yml` mask pattern name with its description and exact regex source. `--json` for machine-readable output. |
 | `janusfs explain <path>` | Trace: why does one path resolve the way it does? Prints every rule that contributed. `--json` supported; `--root` selects the mount root (default cwd). |
-| `janusfs doctor` | Runtime health: macFUSE status, active mounts, and stale-mount / watchdog checks. |
-| `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. **Linux:** real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. **macOS:** advisory only — sets the child's working directory to a disjoint sanitized mount, scrubs `JANUSFS_*` env vars, and rewrites source-path argv entries to the mountpoint as a best-effort compatibility shim, but the real source path remains directly reachable by the child through any other means (a subprocess, a config file, a cache). Stdout/stderr are passed through byte-faithfully so interactive tools keep their terminal behavior; output may show the internal JanusFS mountpoint. Refuses to run if no `.janusfs.yml` exists anywhere in the tree, rather than guessing. |
+| `janusfs doctor` | Runtime health: FUSE status, active mounts, and stale-mount / watchdog checks. |
+| `janusfs exec -- <command> [args...]` | Run a command against a sanitized view of the current source tree, without a manual `mount` step first. Real, kernel-enforced confinement — a private mount namespace where the filtered view replaces the source at its own path; no path rewriting, no daemon required. Linux-only: refuses on other OSes. |
 
 All commands support `--help` and exit codes suitable for scripting. Errors are printed as a one-line cause; no Go stack traces reach the user.
 
@@ -561,7 +553,7 @@ $ janusfs check --secrets
 
 ## Security model
 
-- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **This boundary is only kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace). On macOS both the disjoint mount and `janusfs exec` are advisory: the real source directory stays reachable at its own path by any means other than the mountpoint. JanusFS is explicitly not a sandbox against a process that has, or can find, another way to the source (see Non-goals in `SPEC.md`) — on macOS today, "another way to the source" is simply "the source's own path," reachable with no exploit needed.
+- **Trust boundary:** the mountpoint and the local HTTP dashboard. The agent is untrusted; the user operating the CLI is trusted. **This boundary is kernel-enforced on Linux** (via `janusfs exec`'s private mount namespace), which is the only platform JanusFS runs on. JanusFS is explicitly not a sandbox against a process that has, or can find, another way to the source (see Non-goals).
 - **Agents cannot weaken policy.** `.janusfs.yml` is read-only through the mount, regardless of any user rule. The dashboard's mutating endpoints (save config, reload rules) require the per-mount bearer token and are operator tools — they act as the trusted user, not through the agent's mount. The dashboard never serves raw source bytes.
 - **Fail-closed under all faults.** Parser errors, cache corruption, redactor panics → paths read as Hidden (`EACCES`), never raw.
 - **No content on disk.** Redacted bytes live only in RAM; the history DB stores per-path counters and coverage snapshots, **never** file contents.

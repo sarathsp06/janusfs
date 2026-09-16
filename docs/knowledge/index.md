@@ -22,8 +22,8 @@ okf_version: "0.2"
 
 # Isolation (the current design frontier)
 
-* [Exec and path parity](exec-and-path-parity.md) - what `janusfs exec` does on each platform, and why macOS is advisory-only.
-* [Platform isolation models](platform-isolation.md) - Linux mount namespaces (enforced, CI-verified) versus the rejected macOS enforcement track.
+* [Exec and path parity](exec-and-path-parity.md) - what `janusfs exec` does on Linux, and why it refuses off Linux.
+* [Platform isolation models](platform-isolation.md) - Linux mount namespaces (enforced, CI-verified), and why macOS is unsupported.
 
 # Also in this repo
 

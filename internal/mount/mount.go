@@ -8,11 +8,10 @@
 // Everything else (Lookup, Getattr, Statfs, …) is inherited passthrough
 // behaviour.
 //
-// The Adapter, its Mount/Unmount lifecycle, and OpEvent are identical across
-// platforms and live here; the only real platform difference — a handful of
-// macFUSE-specific mount options — is isolated behind applyPlatformOptions
-// (mount_darwin.go / mount_linux.go). One narrow seam, two real adapters, no
-// duplicated lifecycle.
+// The Adapter, its Mount/Unmount lifecycle, and OpEvent live here.
+// applyPlatformOptions (mount_options.go) is the one platform seam and is now a
+// no-op: mounting is Linux-only and needs no per-platform options. One narrow
+// seam, one real adapter, no duplicated lifecycle.
 package mount
 
 import (
@@ -108,8 +107,8 @@ func (a *Adapter) Mount(ctx context.Context, src, mountpoint string) error {
 	opts.FsName = "janusfs" // shown as the source in `df -T`
 	opts.Name = "janusfs"   // the "fuse.<name>" suffix in `df -T`
 
-	// The one real platform difference: macFUSE needs NullPermissions and the
-	// nobrowse/noappledouble options; Linux needs neither.
+	// Platform seam, now a no-op: mounting is Linux-only and needs no
+	// per-platform mount options.
 	applyPlatformOptions(opts)
 
 	// Zero attribute, entry, and negative-lookup timeouts: a policy reload

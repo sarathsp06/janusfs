@@ -13,7 +13,7 @@ sources:
     resource: /internal/rules/glob.go
     title: gitignore matcher
   - id: runner
-    resource: /internal/execrunner/runner.go
+    resource: /internal/execrunner/runner_linux.go
     title: exec source discovery
   - id: daemon
     resource: /cmd/janusfs/daemon.go
@@ -50,26 +50,10 @@ explains the motivation clearly.
 stable inode identity across a remount — `find -samefile`, hardlink detection in
 `tar`/`rsync`, or `du` deduplication. Worth one test before treating it as free.
 
-# 2. `TestVirtualDir` fails on at least one real macFUSE setup
+# 2. macOS / non-Linux is unsupported by design (not a gap)
 
-Found while validating [PRP 01](/PRPs/01-correctness-fixes.md), and confirmed
-**pre-existing** (reproduces identically against a clean checkout of HEAD, with
-no PRP 01 changes applied): on this development machine (darwin/arm64),
-`internal/mount/integration_test.go`'s `TestVirtualDir` fails —
-`.janusfs was not found in root directory listing` — while every other
-`fuseintegration`-tagged test in the same run, including a fresh mount-and-read
-test added by PRP 01, passes. The failure is deterministic, not a timing flake
-(reproduces identically across repeated runs).
-
-Not yet root-caused. Candidates: a macFUSE version/config quirk on this specific
-machine, or an ordering-dependent readdir buffering issue specific to this test's
-sequence of operations. Needs investigation on a second macFUSE installation
-before deciding whether this is environment-specific or a real, currently
-unnoticed regression somewhere in the readdir path.
-
-A related, definitely-real, now-fixed bug found in the same file:
-`TestListxattrGating` called `syscall.Listxattr`, which is not defined in Go's
-`syscall` package on darwin (only on linux) — a build break on any darwin
-machine attempting `make integration` or `make leak-oracle`. Fixed by PRP 01 as
-a drive-by, switching to `golang.org/x/sys/unix.Listxattr`, which is defined
-identically on both platforms.
+JanusFS enforces only on Linux (FUSE plus mount/user/network namespaces). The
+binary still compiles and unit-tests on a macOS dev machine, but `janusfs mount`
+and `janusfs exec` refuse at runtime off Linux. This is deliberate (SPEC §20),
+not a defect to close: the former advisory macOS path was removed precisely
+because it could never be a real boundary.

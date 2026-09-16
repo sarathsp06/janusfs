@@ -377,8 +377,8 @@ func (n *JanusNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, f
 
 var _ = (fs.NodeIoctler)((*JanusNode)(nil))
 
-// Ioctl returns ENOSYS for all ioctl calls. macOS tools (e.g. make) issue
-// ioctls on regular files; the default go-fuse LoopbackFile.Ioctl panics on
+// Ioctl returns ENOSYS for all ioctl calls. Tools (e.g. make) issue ioctls on
+// regular files; the default go-fuse LoopbackFile.Ioctl panics on
 // empty input buffers (OPCODE-60). Returning ENOSYS tells the kernel this
 // filesystem does not support ioctls, which is the correct fail-closed answer.
 func (n *JanusNode) Ioctl(ctx context.Context, f fs.FileHandle, cmd uint32, arg uint64, input []byte, output []byte) (int32, syscall.Errno) {

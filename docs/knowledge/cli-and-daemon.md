@@ -168,8 +168,8 @@ The client side, `runUmount` (`cmd/janusfs/umount.go:32`), has three paths:
   there, clean it directly.
 
 `isMountpoint` (`umount.go:85`) compares a path's device number with its
-parent's — a cheap check that avoids invoking `diskutil` where nothing is
-mounted.
+parent's — a cheap check that avoids invoking the unmount ladder where nothing
+is mounted.
 
 `directUnmount` (`umount.go:99`) force-unmounts, then `SIGTERM`s the pidfile
 owner if there is one, removes the pidfile, and clears the registry entry.
@@ -180,12 +180,11 @@ owner if there is one, removes the pidfile, and clears the registry entry.
 `runtime.GOOS` through package-level variables (`unmountCommand`,
 `runtimeGOOS`, `mountpointMounted`, `umount.go:116`) that tests override.
 
-- **darwin** (`:133`): `diskutil unmount` → `umount` → and with force,
-  `diskutil unmount force`.
-- **linux** (`:160`): `fusermount3 -u` → `fusermount -u` → `umount` → and with
-  force, `fusermount3 -uz` → `fusermount -uz` → `umount -l`. The lazy variants
-  are what detach a stale mountpoint reporting "Transport endpoint is not
-  connected" without needing `diskutil`.
+- **linux**: `fusermount3 -u` → `fusermount -u` → `umount` → and with force,
+  `fusermount3 -uz` → `fusermount -uz` → `umount -l`. The lazy variants are what
+  detach a stale mountpoint reporting "Transport endpoint is not connected".
+- **any other OS** (dev builds only; mounting is refused off Linux): a
+  best-effort plain `umount`.
 
 Every attempt runs under a 5-second timeout with the process killed on expiry
 (`tryUnmount`, `umount.go:186`). All failures are collected and joined, so the

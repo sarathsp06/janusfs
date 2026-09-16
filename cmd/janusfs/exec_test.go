@@ -37,8 +37,8 @@ func TestExecFlagParsing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(out, "advisory only") {
-			t.Fatalf("help text should state macOS is advisory only, got: %s", out)
+		if !strings.Contains(out, "Linux only") {
+			t.Fatalf("help text should state JanusFS runs on Linux only, got: %s", out)
 		}
 	})
 
@@ -78,4 +78,34 @@ func TestExecFlagParsing(t *testing.T) {
 			t.Fatalf("expected 'unrecognized flag' before --, got: %v", err)
 		}
 	})
+}
+
+func TestParseExecOwnArgs(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		defaultMode string
+		wantDN      bool
+		wantErr     bool
+	}{
+		{"no flags uses host default", nil, "host", false, false},
+		{"no flags honors none default from config", nil, "none", true, false},
+		{"flag overrides none default with host", []string{"--net=host"}, "none", false, false},
+		{"flag overrides host default with none", []string{"--net=none"}, "host", true, false},
+		{"invalid config default rejected", nil, "bridge", false, true},
+		{"unknown net value", []string{"--net=bridge"}, "host", false, true},
+		{"unknown flag", []string{"--sandbox"}, "host", false, true},
+		{"space form is not accepted", []string{"--net", "none"}, "host", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dn, err := parseExecOwnArgs(tc.args, tc.defaultMode)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if err == nil && dn != tc.wantDN {
+				t.Fatalf("denyNetwork = %v, want %v", dn, tc.wantDN)
+			}
+		})
+	}
 }

@@ -37,6 +37,7 @@ in `ApplyEnv`.
 | `NoHistory` | `--no-history` | `JANUSFS_NO_HISTORY` | false |
 | `RedactBufferMax` | `--redact-buffer-max` | `JANUSFS_REDACT_BUFFER_MAX` | 512 MB |
 | `MountRoot` | `install --root` | `JANUSFS_MOUNT_ROOT` | `~/.janusfs/mounts` (also from `settings.json`) |
+| `ExecNet` | `exec --net=host\|none` | `JANUSFS_EXEC_NET` | `host` (also from `settings.json`; `none` denies all network for `janusfs exec`, Linux-enforced) |
 
 Constants are at `config.go:27`. `Src` and `Mountpoint` are positional only and
 have no env equivalent.
@@ -45,8 +46,8 @@ have no env equivalent.
 
 `Default()` → `ApplyFile()` → `ApplyEnv()` → flags. The daemon applies exactly
 that order (`cmd/janusfs/daemon.go:127`). `ApplyFile` reads
-`~/.janusfs/settings.json`, which currently carries one key, `mount_root`
-(`config.go:164`). A missing file is not an error; the built-in
+`~/.janusfs/settings.json`, which carries `mount_root` and `exec_net`
+(`config.go` `fileSettings`). A missing file is not an error; the built-in
 `~/.janusfs/mounts` default remains in effect. A malformed settings file is an
 error.
 
@@ -101,9 +102,10 @@ path when `EvalSymlinks` fails, since existence is the caller's check.
 
 **Note**: rule 4 makes a path-preserving overmount (`Mountpoint == Src`)
 impossible, deliberately. The macOS path-preserving mode that would have needed
-to relax it was rejected (SPEC §20, [PRP 12](/PRPs/12-delete-macos-enforcement-track.md));
-Linux's namespace exec overmounts the source only inside a private namespace,
-backed by a shadow bind mount, without going through this validation.
+to relax it was rejected, and macOS support was later removed entirely (SPEC
+§20). Linux's namespace exec still overmounts the source, but only inside a
+private mount namespace backed by a shadow bind mount, without going through
+this validation.
 
 # The mounts registry
 
@@ -122,7 +124,7 @@ Directory mode `0700`, file mode `0600`, everywhere.
 | Path | Written by | Contents |
 |---|---|---|
 | `daemon.sock` | daemon | control socket (`cmd/janusfs/daemon.go:605`) |
-| `settings.json` | `install` | `{"mount_root": "..."}` (`config.go:156`) |
+| `settings.json` | `install` (mount root); hand-edited for `exec_net` | `{"mount_root": "...", "exec_net": "host\|none"}` |
 | `mounts.json` | daemon on mount/unmount | resume registry (`config.go:210`) |
 | `config/` | `init --global` | machine-wide `.janusfs.yml` (`internal/rules/rules.go`) |
 | `run/<sha256-of-mountpoint>.pid` | daemon per mount | owning PID (`cmd/janusfs/pidfile.go:18`) |

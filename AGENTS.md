@@ -50,9 +50,11 @@ Prefix with `rtk` for token-reduced output.
   `(path, mtime, size, inode, generation)` is the authoritative change detector.
 - Entrypoint `cmd/janusfs/main.go`, manual explicit dependency injection, no DI
   framework. `startMount` in `runtime.go` is the whole dependency graph.
-- Both macOS (macFUSE) and Linux (FUSE) are supported. Their isolation models
-  differ fundamentally — see
-  [`platform-isolation.md`](docs/knowledge/platform-isolation.md).
+- JanusFS is **Linux-only**. `janusfs mount` and `janusfs exec` enforce with
+  FUSE plus mount/user/network namespaces and refuse at runtime off Linux. The
+  binary still compiles and unit-tests on a macOS dev machine (the engine —
+  rules, masking, cache — is platform-independent); only enforcement is Linux.
+  See [`platform-isolation.md`](docs/knowledge/platform-isolation.md).
 
 ## Packages
 
@@ -82,8 +84,9 @@ Prefix with `rtk` for token-reduced output.
 
 `internal/watch` and `internal/platform` do not exist and are not planned.
 `internal/procid` no longer exists: the macOS enforcement track (process
-identity, path-preserving overmount, Seatbelt `--sandbox`) was deleted and is
-recorded as rejected — see [SPEC.md §20](SPEC.md#20-risks-and-rejected-designs).
+identity, path-preserving overmount, Seatbelt `--sandbox`) was deleted, and
+macOS support was then removed entirely — both recorded as rejected in
+[SPEC.md §20](SPEC.md#20-risks-and-rejected-designs).
 
 ## Code conventions
 
@@ -136,8 +139,8 @@ rejected:
 
 ## Release
 
-- GoReleaser (`.goreleaser.yml`) builds and packages releases; universal binary
-  on darwin, tarballs, sha256 checksums, and a changelog grouped by Conventional
+- GoReleaser (`.goreleaser.yml`) builds and packages releases: Linux `amd64`
+  and `arm64` tarballs, sha256 checksums, and a changelog grouped by Conventional
   Commits.
 - `.github/workflows/release.yml` runs on any `vX.Y.Z` tag and creates **draft**
   releases, so nothing publishes without a human reading the notes.

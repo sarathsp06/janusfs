@@ -1,6 +1,6 @@
-// Package health collects runtime diagnostics: macFUSE status,
-// active mount discovery via pidfiles, and Go runtime stats. It is the
-// single package all diagnostic commands consult.
+// Package health collects runtime diagnostics: FUSE availability, active mount
+// discovery via pidfiles, and Go runtime stats. It is the single package all
+// diagnostic commands consult.
 package health
 
 import (
@@ -15,7 +15,7 @@ import (
 
 // Report is a full diagnostic report.
 type Report struct {
-	MacFUSE  MacFUSEStatus  `json:"macfuse"`
+	FUSE     FUSEStatus     `json:"fuse"`
 	Mounts   []MountInfo    `json:"mounts"`
 	Watchdog WatchdogStatus `json:"watchdog"`
 	Runtime  RuntimeInfo    `json:"runtime"`
@@ -35,8 +35,8 @@ type WatchdogStatus struct {
 	Alive   bool `json:"alive"`
 }
 
-// MacFUSEStatus reports whether the macFUSE kext is loaded.
-type MacFUSEStatus struct {
+// FUSEStatus reports whether FUSE is available (/dev/fuse present).
+type FUSEStatus struct {
 	Installed bool   `json:"installed"`
 	Loaded    bool   `json:"loaded"`
 	Version   string `json:"version,omitempty"`
@@ -75,7 +75,7 @@ type RuntimeInfo struct {
 func Run(pidfileDir, watchdogPidfile string) *Report {
 	r := &Report{}
 
-	r.MacFUSE = checkMacFUSE()
+	r.FUSE = checkFUSE()
 	r.Runtime = RuntimeInfo{
 		GoVersion:    runtime.Version(),
 		OS:           runtime.GOOS,
@@ -130,12 +130,8 @@ func Run(pidfileDir, watchdogPidfile string) *Report {
 		}
 	}
 
-	if !r.MacFUSE.Installed {
-		if runtime.GOOS == "darwin" {
-			r.Warnings = append(r.Warnings, "macFUSE is not installed; mounts require macFUSE (brew install --cask macfuse)")
-		} else {
-			r.Warnings = append(r.Warnings, "FUSE is not installed or /dev/fuse is missing; mounts require FUSE")
-		}
+	if !r.FUSE.Installed {
+		r.Warnings = append(r.Warnings, "FUSE is not installed or /dev/fuse is missing; mounts require FUSE (install the fuse3 package and load the fuse kernel module)")
 	}
 
 	if watchdogPidfile != "" {
