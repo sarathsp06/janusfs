@@ -20,6 +20,9 @@ func WriteBanner(w io.Writer, plan Plan, opts Options) {
 	}
 	fmt.Fprintf(w, "janusfs exec: boundary up — %s (policy %s)\n", plan.Src, policy)
 	fmt.Fprintf(w, "  network: %s · preview with `janusfs exec --dry-run`\n", NetDescription(opts.DenyNetwork, opts.NetSource))
+	if opts.Nested {
+		fmt.Fprintln(w, "  nested: already inside a janusfs exec boundary; this adds a second layer over it")
+	}
 }
 
 // NetDescription renders a network mode for humans: what it means and where

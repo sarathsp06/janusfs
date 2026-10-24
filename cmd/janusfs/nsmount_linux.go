@@ -214,7 +214,7 @@ func runNSMount(ctx context.Context, src string, denyNetwork, quiet bool, target
 
 	if err := targetCmd.Start(); err != nil {
 		cancelMount()
-		return 125, fmt.Errorf("nsmount: failed to start target process: %w", err)
+		return startFailureExitCode(err), fmt.Errorf("janusfs exec: cannot run %q: %w", targetArgs[0], err)
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -262,6 +262,21 @@ func runNSMount(ctx context.Context, src string, denyNetwork, quiet bool, target
 		fmt.Fprintf(os.Stderr, "janusfs exec: session over (exit %d) — %s\n", exitCode, stats.Summary())
 	}
 	return exitCode, nil
+}
+
+// startFailureExitCode follows the chroot/docker/podman/timeout convention so
+// a caller can tell "the wrapper failed" (125) from "the command could not be
+// executed" (126) from "the command was not found" (127) by exit code alone,
+// without parsing stderr.
+func startFailureExitCode(err error) int {
+	switch {
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, os.ErrNotExist):
+		return 127
+	case errors.Is(err, os.ErrPermission), errors.Is(err, syscall.ENOEXEC):
+		return 126
+	default:
+		return 125
+	}
 }
 
 // nsmountLogWriter adapts an *slog.Logger to io.Writer for go-fuse's

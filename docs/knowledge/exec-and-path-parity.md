@@ -151,8 +151,13 @@ boundary. `janusfs shell` (`cmd/janusfs/shell.go`) is the same path with
 `$SHELL` (or `/bin/sh`) as the command.
 
 Signals `SIGINT`, `SIGTERM`, `SIGHUP` are forwarded to the child, and the
-child's exit code is propagated. A failure to start returns `125`, matching
-`env`/`timeout` convention.
+child's exit code is propagated. A wrapper failure returns `125`; a command
+that cannot be executed `126`; one that is not found `127`
+(`startFailureExitCode`, `cmd/janusfs/nsmount_linux.go`), matching the
+`chroot`/`docker run`/`timeout` convention. A nested `exec` (launched with
+`JANUSFS_EXEC=1` already in the environment) is allowed and named in the
+banner; verified in a container: the inner view mounts over the outer, and an
+inner `--net=none` blocks egress the outer session allowed.
 
 # The argv rewriter (removed)
 

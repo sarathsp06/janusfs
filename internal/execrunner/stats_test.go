@@ -49,6 +49,24 @@ func TestSessionStatsSummary(t *testing.T) {
 	})
 }
 
+func TestWriteBanner(t *testing.T) {
+	plan := Plan{Src: "/home/me/app", PolicyPath: "/home/me/app/.janusfs.yml"}
+	var buf strings.Builder
+	WriteBanner(&buf, plan, Options{DenyNetwork: true, NetSource: ".janusfs.yml exec.net"})
+	got := buf.String()
+	if !strings.HasPrefix(got, "janusfs exec: boundary up — /home/me/app (policy .janusfs.yml)\n") {
+		t.Errorf("first line: %q", got)
+	}
+	if strings.Contains(got, "nested") {
+		t.Errorf("non-nested banner must not mention nesting: %q", got)
+	}
+	buf.Reset()
+	WriteBanner(&buf, plan, Options{Nested: true})
+	if !strings.Contains(buf.String(), "nested: already inside a janusfs exec boundary") {
+		t.Errorf("nested banner: %q", buf.String())
+	}
+}
+
 func TestNetDescription(t *testing.T) {
 	if got := NetDescription(true, ".janusfs.yml exec.net"); got != "none (loopback only) · from .janusfs.yml exec.net" {
 		t.Errorf("got %q", got)

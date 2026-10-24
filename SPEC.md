@@ -357,7 +357,13 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
   filtered view of the project tree containing the current directory. It is the
   only sanctioned way to launch an agent, because it is where an agent session is
   established. It forwards `SIGINT`, `SIGTERM`, and `SIGHUP`, propagates the
-  child's exit code, and exits `125` when it cannot start the child.
+  child's exit code, and otherwise follows the `chroot`/`docker run`/`timeout`
+  convention so a caller can tell the failures apart by code alone: `125`
+  when the wrapper itself fails (no policy, no namespace, mount failure),
+  `126` when the command exists but cannot be executed, `127` when it is not
+  found. Nesting (an `exec` launched inside another `exec` session) is
+  allowed — the inner view mounts over the outer one, and an inner
+  `--net=none` adds the network cut — and is named in the start banner.
 
 - **FR-26** `exec` **refuses to guess**. If neither an active mount nor a
   directory containing `.janusfs.yml` is found at or above the

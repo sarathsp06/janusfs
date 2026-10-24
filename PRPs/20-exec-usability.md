@@ -55,6 +55,36 @@ invalid value from any source is refused in `resolveNetMode`, in one place.
 - **A richer "why was this denied" inside the view.** The kernel returns
   `EACCES`; the agent-facing answer is `janusfs explain <path>` from outside.
 
+## Conventions checked against the field
+
+A survey of comparable tools (bubblewrap, firejail, nsjail, systemd-run,
+docker/podman, nix-shell, direnv, toolbox/distrobox, venv, tmux, git,
+Claude Code and Codex settings precedence) informed the final shape:
+
+- **Inside marker as an env var** — `VIRTUAL_ENV`, `IN_NIX_SHELL`, `TMUX`,
+  distrobox's `CONTAINER_ID`; `nix shell`'s lack of one is a standing
+  complaint. Hence `JANUSFS_EXEC=1`, and no PS1 rewriting (Nix found that
+  overwriting the prompt destroys user config).
+- **No command → `$SHELL`** — firejail, unshare, chroot, `distrobox enter`.
+  Kept as an explicit `shell` subcommand, like `systemd-run --shell`, since
+  `exec` with no command refusing is the safer default for scripts.
+- **Silent on success, diagnostics on stderr only** — bwrap, docker, landrun;
+  firejail's "Reading profile…" banner and stdout pollution are the
+  anti-patterns people file issues about. Hence two lines on stderr, a
+  `--quiet` that never hides security warnings, and the Stage 2 `mounted`
+  log line demoted to debug.
+- **`--dry-run` prints the real plan** — `distrobox enter --dry-run` prints
+  the generated podman command; bwrap grew `--json-status-fd` because callers
+  could not otherwise tell what happened. Hence `--dry-run --json`.
+- **Exit codes 125/126/127** — chroot, docker/podman, timeout. Added.
+- **Project config can only tighten** — git honours `safe.directory` only
+  from system/global config, never the repo; Codex's `requirements.toml`
+  and Claude Code's managed settings cannot be lowered by a project. Hence
+  `exec.net` is tighten-only, so a cloned repo needs no trust prompt.
+- **Nesting named, not refused** — tmux warns via `$TMUX`. Nested exec is
+  useful here (inner `--net=none`), so the banner says "nested".
+- **Doctor: one line per check, ✓/✗ plus a remedy** — `flutter doctor`.
+
 ## Validation
 
 ```bash

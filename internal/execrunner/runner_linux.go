@@ -48,6 +48,10 @@ func Run(ctx context.Context, plan Plan, targetArgs []string, opts Options) (int
 	cwd := plan.Cwd
 	src := plan.Src
 
+	// Launched from inside another session? Read before the scrub below
+	// removes the marker. Allowed, and said so in the banner.
+	opts.Nested = os.Getenv("JANUSFS_EXEC") == "1"
+
 	// The banner precedes any warning so the warning reads in context ("the
 	// boundary is up; here is the one thing it cannot protect you from").
 	if !opts.Quiet {
