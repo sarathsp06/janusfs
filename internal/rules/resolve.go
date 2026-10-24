@@ -1,8 +1,9 @@
 package rules
 
 import (
+	"cmp"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -70,9 +71,7 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 
 	poisonedMask := false
 	poisonedRef := ""
-	seenNames := map[string]bool{}
-	patByName := map[string]*patterns.Pattern{}
-	var patternNames []string
+	var pats []*patterns.Pattern
 	maskRef := ""
 
 	for i := range rs.MaskLevels {
@@ -104,10 +103,8 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 				Line: entry.Glob, Matched: true,
 			})
 			for _, p := range entry.Patterns {
-				if !seenNames[p.Name] {
-					seenNames[p.Name] = true
-					patternNames = append(patternNames, p.Name)
-					patByName[p.Name] = p
+				if !slices.ContainsFunc(pats, func(existing *patterns.Pattern) bool { return existing.Name == p.Name }) {
+					pats = append(pats, p)
 				}
 			}
 		}
@@ -117,11 +114,13 @@ func (rs *RuleSet) Resolve(relPath string, isDir bool) Resolution {
 		return Resolution{Decision: Hidden, Poisoned: true, RuleRef: poisonedRef, Trace: trace}
 	}
 
-	if len(patternNames) > 0 {
-		sort.Strings(patternNames)
-		pats := make([]*patterns.Pattern, len(patternNames))
-		for i, n := range patternNames {
-			pats[i] = patByName[n]
+	if len(pats) > 0 {
+		slices.SortFunc(pats, func(a, b *patterns.Pattern) int {
+			return cmp.Compare(a.Name, b.Name)
+		})
+		patternNames := make([]string, len(pats))
+		for i, p := range pats {
+			patternNames[i] = p.Name
 		}
 		return Resolution{Decision: Masked, RuleRef: maskRef, PatternNames: patternNames, Patterns: pats, Trace: trace}
 	}

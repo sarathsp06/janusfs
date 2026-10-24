@@ -65,3 +65,10 @@ By expanding the stack-allocated backing array to `[32]string` and using a light
 
 **Action:**
 Expanded stack array backing capacity from `[8]string` to `[32]string` in both `patternSignature` and `matchesPatternSig`. Implemented `sortStrings` for small string slice sorting. Reduced `BenchmarkPatternSignature16` latency from 1077 ns/op to ~890 ns/op (~17% speedup) and cut memory allocation from 480 B/op (2 allocs) down to 224 B/op (1 alloc, 50% allocation reduction). Decreased `BenchmarkPatternSignature4` latency by ~10.5%.
+## 2026-09-02 - Map Allocation Removal in RuleSet.Resolve
+
+**Learning:**
+Allocating map headers (`map[string]bool` and `map[string]*Pattern`) on every decision engine resolution call introduces unnecessary heap allocations and GC pressure. For small pattern sets (typically 1-5 patterns per mask rule), linear scan deduplication in a slice and in-place sorting via `slices.SortFunc` and `cmp.Compare` is faster, simpler, and eliminates map allocations.
+
+**Action:**
+Replaced `seenNames` and `patByName` maps in `internal/rules/resolve.go` with linear `slices.ContainsFunc` checks and in-place `slices.SortFunc` sorting.
