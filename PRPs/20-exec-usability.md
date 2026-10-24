@@ -57,6 +57,10 @@ invalid value from any source is refused in `resolveNetMode`, in one place.
 
 ## Conventions checked against the field
 
+The full outside-in survey — who else keeps secrets from agents, the
+complaints people file, and which of them this PR answers — is
+[`docs/LANDSCAPE.md`](../docs/LANDSCAPE.md).
+
 A survey of comparable tools (bubblewrap, firejail, nsjail, systemd-run,
 docker/podman, nix-shell, direnv, toolbox/distrobox, venv, tmux, git,
 Claude Code and Codex settings precedence) informed the final shape:
