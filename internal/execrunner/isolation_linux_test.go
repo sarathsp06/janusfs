@@ -303,3 +303,94 @@ sys.exit(0)`
 		t.Fatalf("--net=none failed but not with a network error:\n%s", out)
 	}
 }
+
+// TestExecFeedback covers the operator-facing surface added for usability:
+// the start banner and end-of-session summary on stderr (never stdout, so a
+// piped command's output stays byte-faithful), the JANUSFS_EXEC=1 marker in
+// the confined child's environment, and --quiet silencing both lines.
+func TestExecFeedback(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only: private mount namespaces are a Linux kernel feature")
+	}
+
+	bin := buildJanusfsBinary(t)
+
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, ".env"), []byte("API_KEY=feedback-test-sentinel-1a2b3c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "id_rsa"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\nhide: [id_rsa]\nmask:\n  - paths: ['.env']\n    patterns: [env-value]\nexec:\n  net: none\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(args ...string) (stdout, stderr string, err error) {
+		cmd := exec.Command(bin, append([]string{"exec"}, args...)...)
+		cmd.Dir = src
+		var out, errb bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errb
+		err = cmd.Run()
+		return out.String(), errb.String(), err
+	}
+
+	script := "echo marker=$JANUSFS_EXEC; cat .env; cat id_rsa 2>/dev/null; exit 0"
+	stdout, stderr, err := run("--", "sh", "-c", script)
+	skipIfUnsupportedPrivateMount(t, err, stderr)
+	if err != nil {
+		t.Fatalf("janusfs exec failed: %v\nstderr: %s", err, stderr)
+	}
+
+	// stdout is the child's alone: the marker, the masked bytes, nothing of ours.
+	if !strings.Contains(stdout, "marker=1") {
+		t.Errorf("child should see JANUSFS_EXEC=1, stdout: %q", stdout)
+	}
+	if strings.Contains(stdout, "feedback-test-sentinel") {
+		t.Fatalf("child saw the real secret: %q", stdout)
+	}
+	if strings.Contains(stdout, "janusfs exec:") {
+		t.Errorf("banner/summary leaked into stdout: %q", stdout)
+	}
+
+	// stderr carries the banner (naming the tree and the repo-chosen network
+	// mode) and the summary (paths and counts, never bytes).
+	for _, want := range []string{
+		"janusfs exec: boundary up — " + src,
+		"none (loopback only) · from .janusfs.yml exec.net",
+		"janusfs exec: session over (exit 0)",
+		"masked file(s) read (.env)",
+		"hidden path(s) denied (id_rsa)",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "feedback-test-sentinel") {
+		t.Fatalf("summary leaked secret bytes: %q", stderr)
+	}
+
+	// --quiet: no banner, no summary; the child is unaffected.
+	stdout, stderr, err = run("--quiet", "--", "sh", "-c", "echo marker=$JANUSFS_EXEC")
+	skipIfUnsupportedPrivateMount(t, err, stderr)
+	if err != nil {
+		t.Fatalf("janusfs exec --quiet failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "marker=1") {
+		t.Errorf("--quiet must not change the child's environment, stdout: %q", stdout)
+	}
+	if strings.Contains(stderr, "boundary up") || strings.Contains(stderr, "session over") {
+		t.Errorf("--quiet should silence the banner and summary, stderr: %q", stderr)
+	}
+
+	// A flag that loosens the repo's exec.net is honoured but noted.
+	_, stderr, err = run("--net=host", "--", "true")
+	skipIfUnsupportedPrivateMount(t, err, stderr)
+	if err != nil {
+		t.Fatalf("janusfs exec --net=host failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stderr, "--net=host overrides it") {
+		t.Errorf("expected a note that --net=host overrode exec.net: none, stderr: %q", stderr)
+	}
+}

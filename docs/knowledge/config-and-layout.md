@@ -37,7 +37,7 @@ in `ApplyEnv`.
 | `NoHistory` | `--no-history` | `JANUSFS_NO_HISTORY` | false |
 | `RedactBufferMax` | `--redact-buffer-max` | `JANUSFS_REDACT_BUFFER_MAX` | 512 MB |
 | `MountRoot` | `install --root` | `JANUSFS_MOUNT_ROOT` | `~/.janusfs/mounts` (also from `settings.json`) |
-| `ExecNet` | `exec --net=host\|none` | `JANUSFS_EXEC_NET` | `host` (also from `settings.json`; `none` denies all network for `janusfs exec`, Linux-enforced) |
+| `ExecNet` | `exec --net=host\|none` | `JANUSFS_EXEC_NET` | `host` (also from `settings.json`; `none` denies all network for `janusfs exec`, Linux-enforced). A project's `.janusfs.yml` `exec.net` sits between this and the flag and can only tighten — see `resolveNetMode` in `cmd/janusfs/exec.go` |
 
 Constants are at `config.go:27`. `Src` and `Mountpoint` are positional only and
 have no env equivalent.

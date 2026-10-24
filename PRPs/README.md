@@ -65,6 +65,7 @@ later blocks anything earlier.
 | 17 | [README repositioning](17-reposition-readme.md) | 10, 12–15 | M | done (recipes pending 11) |
 | 18 | [git add masked-bytes hazard warning](18-git-staging-hazard.md) | — | M | done |
 | 19 | [doctor container/FUSE checks](19-doctor-container-checks.md) | — | S | done |
+| 20 | [exec usability: banner, summary, --dry-run, shell, exec.net](20-exec-usability.md) | 04, 18, 19 | M | done |
 
 PRPs 10–19 are the 2026 repositioning: prove the Linux claim, delete the
 obsolete macOS enforcement track (harness-native Seatbelt/Landlock/srt made a

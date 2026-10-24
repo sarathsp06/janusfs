@@ -18,6 +18,7 @@ import (
 
 	"github.com/sarathsp06/janusfs/internal/config"
 	"github.com/sarathsp06/janusfs/internal/engine"
+	"github.com/sarathsp06/janusfs/internal/execrunner"
 	"github.com/sarathsp06/janusfs/internal/logging"
 	"github.com/sarathsp06/janusfs/internal/mount"
 	"github.com/sarathsp06/janusfs/internal/provider"
@@ -43,12 +44,12 @@ func registerPlatformCommands(root *cobra.Command) {
 // always calls it as `__nsmount --src <path> -- <command> [args...]`.
 func newNSMountCmd() *cobra.Command {
 	var src string
-	var denyNetwork bool
+	var denyNetwork, quiet bool
 	cmd := &cobra.Command{
-		Use:    "__nsmount --src <path> [--deny-network] -- <command> [args...]",
+		Use:    "__nsmount --src <path> [--deny-network] [--quiet] -- <command> [args...]",
 		Hidden: true, // Stage 2 of janusfs exec; never invoked by hand
 		RunE: func(cmd *cobra.Command, args []string) error {
-			exitCode, err := runNSMount(cmd.Context(), src, denyNetwork, args)
+			exitCode, err := runNSMount(cmd.Context(), src, denyNetwork, quiet, args)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 			}
@@ -58,13 +59,14 @@ func newNSMountCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&src, "src", "", "source tree to mount over itself inside this namespace (required)")
 	cmd.Flags().BoolVar(&denyNetwork, "deny-network", false, "bring up loopback in the empty network namespace created by the launcher (see execrunner --net=none)")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "skip the end-of-session summary on stderr")
 	return cmd
 }
 
 // runNSMount performs, in order, the three things that must happen exactly
 // once and in this sequence inside the fresh namespace: make the mount tree
 // private, establish the filtered view, then run the target command.
-func runNSMount(ctx context.Context, src string, denyNetwork bool, targetArgs []string) (int, error) {
+func runNSMount(ctx context.Context, src string, denyNetwork, quiet bool, targetArgs []string) (int, error) {
 	if src == "" {
 		return 125, errors.New("nsmount: --src is required")
 	}
@@ -144,10 +146,18 @@ func runNSMount(ctx context.Context, src string, denyNetwork bool, targetArgs []
 	mountCtx, cancelMount := context.WithCancel(ctx)
 	defer cancelMount()
 
+	// Session feedback: the adapter reports every operation; only paths and
+	// counts are kept, and they surface as one stderr line when the command
+	// exits (see SessionStats). Observe runs on the FUSE data path, so the
+	// recorder is a mutex and a map write, nothing that can block.
+	var stats execrunner.SessionStats
 	adapter := &mount.Adapter{
 		Engine:      eng,
 		Provider:    prov,
 		ErrorLogger: errLog,
+		Observe: func(ev mount.OpEvent) {
+			stats.Record(ev.Op, ev.Path, ev.Decision, ev.Bytes)
+		},
 		Reload: func() error {
 			if err := eng.Reload(shadow); err != nil {
 				return err
@@ -188,7 +198,13 @@ func runNSMount(ctx context.Context, src string, denyNetwork bool, targetArgs []
 
 	targetCmd := exec.CommandContext(ctx, targetArgs[0], targetArgs[1:]...)
 	targetCmd.Dir = cwd
-	targetCmd.Env = os.Environ() // already scrubbed of JANUSFS_* by Stage 1
+	// The environment was scrubbed of every JANUSFS_* variable by Stage 1,
+	// so the child cannot read or influence configuration. JANUSFS_EXEC=1 is
+	// the one deliberate addition: a marker, not a setting — it grants
+	// nothing, configures nothing, and lets a shell prompt or a script tell
+	// it is inside the boundary. A nested `janusfs exec` scrubs it again and
+	// its own Stage 2 re-adds it, so it is always exactly "1" or absent.
+	targetCmd.Env = append(os.Environ(), "JANUSFS_EXEC=1")
 	targetCmd.Stdin = os.Stdin
 	targetCmd.Stdout = os.Stdout
 	targetCmd.Stderr = os.Stderr
@@ -230,14 +246,19 @@ func runNSMount(ctx context.Context, src string, denyNetwork bool, targetArgs []
 	cancelMount()
 	<-mountDone
 
+	exitCode := 0
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
-			return exitErr.ExitCode(), nil
+			exitCode = exitErr.ExitCode()
+		} else {
+			return 1, waitErr
 		}
-		return 1, waitErr
 	}
-	return 0, nil
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "janusfs exec: session over (exit %d) — %s\n", exitCode, stats.Summary())
+	}
+	return exitCode, nil
 }
 
 // nsmountLogWriter adapts an *slog.Logger to io.Writer for go-fuse's

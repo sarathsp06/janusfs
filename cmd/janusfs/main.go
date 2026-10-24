@@ -70,6 +70,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newExplainCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newExecCmd())
+	root.AddCommand(newShellCmd())
 	root.AddCommand(newWatchdogCmd())
 	registerPlatformCommands(root)
 	return root

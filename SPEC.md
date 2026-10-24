@@ -368,9 +368,32 @@ in [`docs/knowledge/known-gaps.md`](docs/knowledge/known-gaps.md).
 
 - **FR-27** `exec` strips every `JANUSFS_*` variable from the child's
   environment, so the child cannot read or influence JanusFS configuration. The
-  agent-session token (FR-32) is the single deliberate exception; it is an
-  identifier that grants nothing and whose possession results in *more*
-  restriction, not less.
+  single deliberate exception is the marker `JANUSFS_EXEC=1`, set by Stage 2
+  on the confined command: it is not a setting — it grants nothing, configures
+  nothing, and is never read back by JanusFS — and exists so a prompt or a
+  script can tell it is inside the boundary. (The former exception, the
+  agent-session token of the removed FR-32, is gone with it.)
+
+- **FR-27a** **Operator feedback.** `exec` is silent to stdout and
+  byte-faithful on both streams, but it is not silent *about itself*: it
+  prints a start banner on stderr naming the protected tree and the network
+  mode (with its source), and one end-of-session line counting masked files
+  read and hidden paths denied — paths and counts only, never bytes. `--quiet`
+  suppresses both; the git-staging warning of FR-31a is never suppressed.
+  `exec --dry-run` prints the plan (tree, policy, network mode, whether this
+  host can enforce, every Hidden/Masked file, git-stageable masked files) and
+  runs nothing; it works on every OS so a policy can be previewed where the
+  agent will not run. `janusfs shell` is `exec` with the operator's login
+  shell as the command.
+
+- **FR-27b** **Per-project exec defaults.** A project root's `.janusfs.yml`
+  may carry an `exec:` section (`net: host|none`). It sets the default for
+  every `exec` in that tree and may only *tighten*: `none` enables network
+  isolation by default; `host` never loosens a `none` from settings or the
+  environment. An explicit `--net` flag wins over all of it — the operator at
+  the keyboard is trusted — and `exec` prints a one-line note when a flag
+  loosens what the project asked for. An invalid value fails closed: `exec`
+  refuses rather than running with the defaults.
 
 - **FR-28** **Linux: private mount namespace.** `exec` creates a new mount and
   user namespace for the child process tree and mounts the filtered view over the
@@ -1107,6 +1130,25 @@ everything else stands alone.
   this decision: it needs a usermode network stack (slirp4netns/pasta) or host
   root plus an nftables generator, i.e. a forbidden dependency (§20.4)
   reimplementing what the agent's container already provides.
+
+- **Exec usability: banner, session summary, `--dry-run`, `shell`,
+  `JANUSFS_EXEC=1`, per-project `exec.net`** (2026-10 decision). The boundary
+  was correct but invisible: nothing told an operator it was on, what it
+  covered, or what it had done, and the only way to preview a policy was to
+  read it. Everything added is feedback or defaults, nothing is enforcement:
+  the start banner and end-of-session summary carry paths and counts only
+  (never bytes, so the operator's terminal does not become the leak channel);
+  `--dry-run` reuses the `check` linter and runs no namespace at all;
+  `shell` is `exec` with `$SHELL`; the `JANUSFS_EXEC=1` marker is the single
+  deliberate exception to the env scrub (FR-27) because it is an identifier,
+  not a setting; and `exec.net` in `.janusfs.yml` can only tighten (FR-27b),
+  so a repository can never widen what an operator's machine-wide setting
+  denies. Rejected within this decision: a shell-prompt integration shipped
+  by JanusFS (every shell differs; a one-variable marker lets users do it
+  in one line), a persistent session log (the daemon's history store already
+  exists for persistent mounts; exec is ephemeral by design), and reading
+  `exec.net` from subdirectory or global policy files (exec has one boundary
+  per run, the root).
 
 ### Rejected designs
 

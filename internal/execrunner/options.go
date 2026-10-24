@@ -11,4 +11,14 @@ type Options struct {
 	// It is Linux-only, like the whole exec path; off Linux, Run refuses before
 	// any of these fields would be consulted.
 	DenyNetwork bool
+
+	// NetSource names where DenyNetwork's value came from ("--net flag",
+	// ".janusfs.yml exec.net", "settings/env", "default"); display only, for
+	// the start banner.
+	NetSource string
+
+	// Quiet suppresses the operator-facing start banner and the end-of-session
+	// summary on stderr. Security warnings (git staging hazards) still print:
+	// quiet is about noise, not about hiding a hazard.
+	Quiet bool
 }

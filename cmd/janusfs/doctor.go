@@ -59,6 +59,16 @@ func printDoctorReport(r *health.Report) {
 		fmt.Printf("%s FUSE: %s (install with `apt-get install fuse3` or your package manager)\n", symBad(), cBad("NOT installed"))
 	}
 
+	// Exec: the one answer a new user came for.
+	if r.Exec.Available {
+		fmt.Printf("%s Exec sandbox: %s %s\n", symGood(), cGood("ready"), cDim("(`janusfs exec -- <cmd>` confines the command; `janusfs shell` to try it)"))
+	} else {
+		fmt.Printf("%s Exec sandbox: %s — %s\n", symBad(), cBad("unavailable"), firstLine(r.Exec.Reason))
+		for _, l := range remedyLines(r.Exec.Reason) {
+			fmt.Printf("    %s\n", cDim(l))
+		}
+	}
+
 	// Runtime.
 	fmt.Printf("%s Runtime: %s %s/%s, %d CPU(s), %d goroutine(s)\n", symGood(),
 		r.Runtime.GoVersion, r.Runtime.OS, r.Runtime.Arch,

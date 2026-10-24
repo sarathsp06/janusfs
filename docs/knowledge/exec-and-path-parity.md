@@ -8,7 +8,19 @@ generated: { by: claude-code/claude-fable-5, at: 2026-07-26T00:00:00Z }
 sources:
   - id: runner
     resource: /internal/execrunner/runner_linux.go
-    title: Run, discoverSourceRoot, env scrub, namespace re-exec
+    title: Run, banner, env scrub, namespace re-exec
+  - id: discover
+    resource: /internal/execrunner/discover.go
+    title: Discover, Plan, discoverSourceRoot
+  - id: inspect
+    resource: /internal/execrunner/inspect.go
+    title: Inspect (the --dry-run report)
+  - id: stats
+    resource: /internal/execrunner/stats.go
+    title: SessionStats (end-of-session summary)
+  - id: execpolicy
+    resource: /internal/rules/execpolicy.go
+    title: ReadExecPolicy (per-project exec.net)
   - id: hazard
     resource: /internal/execrunner/hazard.go
     title: warnGitStagingHazards
@@ -85,17 +97,31 @@ agent's container already does. See [SPEC.md §20](/SPEC.md)'s decision entry.
 `execrunner.Run`. If no `--` is present, all arguments are treated as the
 command.
 
+The CLI first builds a **Plan** on every platform — `execrunner.Discover`
+(`internal/execrunner/discover.go`) walks up from cwd for a directory
+containing `.janusfs.yml` and *refuses* rather than defaulting to cwd
+(defaulting would provision an unpoliced view over whatever directory happens
+to be current), then reads that file's optional `exec:` section
+(`rules.ReadExecPolicy`, `internal/rules/execpolicy.go`). It never talks to
+the daemon: `janusfs exec` needs no daemon and works with none running. From
+the Plan, `resolveNetMode` (`cmd/janusfs/exec.go`) picks the network mode:
+settings/env default, then the project's `exec.net` (which can only tighten),
+then an explicit `--net` flag, which wins and is noted when it loosens the
+project's request. `--dry-run` stops here: `execrunner.Inspect`
+(`inspect.go`) adds `nsexec.Supported()`, the `check` linter's Hidden/Masked
+match list, and the git-stageable masked files, and the CLI prints it
+(`cmd/janusfs/dryrun.go`; `--json` for scripts) without creating any
+namespace — so it works on a Mac too.
+
 `execrunner.Run` (`internal/execrunner/runner_linux.go`, `//go:build linux`)
 then does the following:
 
 1. **Preflight** (`nsexec.Supported()`). Refuse early if the kernel cannot give
    an unprivileged process the mount/user namespaces this depends on.
-2. **Discover the source root.** `discoverSourceRoot` walks up from cwd for a
-   directory containing `.janusfs.yml` and *refuses* rather than defaulting to
-   cwd — defaulting would provision an unpoliced view over whatever directory
-   happens to be current. Unlike the historical macOS path, this never talks to
-   the daemon: on Linux `janusfs exec` needs no daemon and works with none
-   running.
+2. **Banner.** Unless `--quiet`, two lines on stderr: the protected tree and
+   policy file, and the network mode with its source (`WriteBanner`,
+   `banner.go`). It precedes the hazard warning so the warning reads in
+   context.
 3. **Warn about git staging hazards.** `warnGitStagingHazards`
    (`internal/execrunner/hazard.go`) calls `check.GitStagingHazards` and prints
    a loud stderr warning when Masked files under the source are stageable by
@@ -112,6 +138,17 @@ then does the following:
    unchanged — the same absolute path is valid on both sides — and stdout/stderr
    inherit the real descriptors, because paths already match and need no
    rewriting.
+
+Inside Stage 2 the FUSE adapter's `Observe` callback feeds a
+`SessionStats` (`stats.go`): a mutex, a count of operations, the set of
+paths whose masked bytes were read, and the set of paths denied as Hidden —
+paths and counts, never content. When the command exits, unless `--quiet`,
+one line goes to stderr: `janusfs exec: session over (exit 0) — 2 masked
+file(s) read (.env, config/app.yml), 1 hidden path(s) denied (id_rsa) · 1204
+fs op(s)`. The child's environment is the scrubbed one plus `JANUSFS_EXEC=1`,
+a marker (not a setting) so a prompt or script can tell it is inside the
+boundary. `janusfs shell` (`cmd/janusfs/shell.go`) is the same path with
+`$SHELL` (or `/bin/sh`) as the command.
 
 Signals `SIGINT`, `SIGTERM`, `SIGHUP` are forwarded to the child, and the
 child's exit code is propagated. A failure to start returns `125`, matching
