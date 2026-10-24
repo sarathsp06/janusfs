@@ -43,11 +43,12 @@ func registerPlatformCommands(root *cobra.Command) {
 // always calls it as `__nsmount --src <path> -- <command> [args...]`.
 func newNSMountCmd() *cobra.Command {
 	var src string
+	var denyNetwork bool
 	cmd := &cobra.Command{
-		Use:    "__nsmount --src <path> -- <command> [args...]",
+		Use:    "__nsmount --src <path> [--deny-network] -- <command> [args...]",
 		Hidden: true, // Stage 2 of janusfs exec; never invoked by hand
 		RunE: func(cmd *cobra.Command, args []string) error {
-			exitCode, err := runNSMount(cmd.Context(), src, args)
+			exitCode, err := runNSMount(cmd.Context(), src, denyNetwork, args)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 			}
@@ -56,18 +57,31 @@ func newNSMountCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&src, "src", "", "source tree to mount over itself inside this namespace (required)")
+	cmd.Flags().BoolVar(&denyNetwork, "deny-network", false, "bring up loopback in the empty network namespace created by the launcher (see execrunner --net=none)")
 	return cmd
 }
 
 // runNSMount performs, in order, the three things that must happen exactly
 // once and in this sequence inside the fresh namespace: make the mount tree
 // private, establish the filtered view, then run the target command.
-func runNSMount(ctx context.Context, src string, targetArgs []string) (int, error) {
+func runNSMount(ctx context.Context, src string, denyNetwork bool, targetArgs []string) (int, error) {
 	if src == "" {
 		return 125, errors.New("nsmount: --src is required")
 	}
 	if len(targetArgs) == 0 {
 		return 125, errors.New("nsmount: no command specified to execute")
+	}
+
+	if denyNetwork {
+		// The launcher (execrunner.Run) created this network namespace with
+		// CLONE_NEWNET, so it already has no route to any external host — that
+		// is the whole enforcement. All that remains is to bring loopback up,
+		// which starts down in a fresh netns, so tools that talk to 127.0.0.1
+		// (local sockets, some test harnesses) keep working. Failing to raise
+		// loopback is not a leak, so it is a warning, not a fatal error.
+		if err := bringLoopbackUp(); err != nil {
+			logging.New("nsmount").Warn("could not bring up loopback in the isolated network namespace", "error", err)
+		}
 	}
 
 	logger := logging.New("nsmount")
@@ -237,4 +251,29 @@ type nsmountLogWriter struct {
 func (w nsmountLogWriter) Write(p []byte) (int, error) {
 	w.logger.Log(nil, w.level, string(p))
 	return len(p), nil
+}
+
+// bringLoopbackUp raises the loopback interface inside this network namespace.
+// A namespace created by CLONE_NEWNET starts with only "lo", and down. Inside
+// the launcher's user namespace this process is uid 0 and owns the netns, so it
+// holds CAP_NET_ADMIN there and this ioctl is permitted without host privilege.
+func bringLoopbackUp() error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("opening control socket: %w", err)
+	}
+	defer unix.Close(fd)
+
+	ifr, err := unix.NewIfreq("lo")
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("reading loopback flags: %w", err)
+	}
+	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("setting loopback up: %w", err)
+	}
+	return nil
 }

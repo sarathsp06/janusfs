@@ -12,9 +12,9 @@ sources:
   - id: runtime
     resource: /cmd/janusfs/runtime.go
     title: mountRuntime, startMount, stop
-  - id: mount-darwin
-    resource: /internal/mount/mount_darwin.go
-    title: Adapter.Mount (darwin)
+  - id: mount
+    resource: /internal/mount/mount.go
+    title: Adapter.Mount
   - id: agents
     resource: /AGENTS.md
     title: AGENTS.md package table
@@ -129,10 +129,10 @@ continues without persistence (`runtime.go:112`).
 1. cancel the context, which makes `Adapter.Mount`'s goroutine call
    `server.Unmount()` (`mount.go`, the shared adapter);
 2. wait `shutdownGrace` for the serve loop to exit;
-3. if it drags, `unmountKernel(mountpoint, force=true)` — on darwin a
-   `diskutil unmount` → `umount` → `diskutil unmount force` ladder, on Linux
-   `fusermount3 -u` → `fusermount -u` → `umount` → the lazy `-uz`/`-l`
-   variants (`cmd/janusfs/umount.go:133` and `:160`);
+3. if it drags, `unmountKernel(mountpoint, force=true)` — on Linux a
+   `fusermount3 -u` → `fusermount -u` → `umount` → lazy `-uz`/`-l` ladder; on
+   any other OS (dev builds that never really mount) a best-effort plain
+   `umount` (`cmd/janusfs/umount.go`);
 4. close the recorder and the history store.
 
 `stop` is nil-safe throughout so it doubles as the cleanup path for a mount that

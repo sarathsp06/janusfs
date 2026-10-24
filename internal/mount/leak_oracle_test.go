@@ -1,17 +1,16 @@
 //go:build fuseintegration
 
 // TestLeakOracle is the leak oracle: sentinel secrets are
-// planted in a real fixture tree, mounted through a real macFUSE mount via
+// planted in a real fixture tree, mounted through a real FUSE mount via
 // the actual Adapter, and every byte successfully read through the mount
 // is scanned for them. It is the security assertion layer for Phase 2 and
 // on: a new masking feature adds new sentinels here, not a
 // parallel test mechanism.
 //
-// Requires macFUSE installed and approved (`make leak-oracle` /
-// `make integration`, both behind the fuseintegration build tag). Skips, rather
-// than fails, if mounting doesn't
-// come up within the timeout, so this suite doesn't block CI/dev machines
-// without macFUSE approved.
+// Requires FUSE installed (`make leak-oracle` / `make integration`, both behind
+// the fuseintegration build tag, Linux-only). Skips, rather than fails, if
+// mounting doesn't come up within the timeout, so this suite doesn't block
+// CI/dev machines without FUSE available.
 package mount
 
 import (
@@ -64,10 +63,10 @@ func mountForTest(t *testing.T, src, mountpoint string) (*Adapter, func()) {
 	select {
 	case <-mounted:
 	case err := <-done:
-		t.Skipf("mount did not come up (macFUSE not installed/approved?): %v", err)
+		t.Skipf("mount did not come up (FUSE not installed?): %v", err)
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Skip("mount did not come up within 5s (macFUSE not installed/approved?)")
+		t.Skip("mount did not come up within 5s (FUSE not installed?)")
 	}
 
 	cleanup := func() {

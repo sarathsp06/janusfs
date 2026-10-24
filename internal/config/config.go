@@ -43,6 +43,11 @@ const (
 	// buffering cap in bytes, applied when a pattern set contains an
 	// unbounded regex that cannot be matched chunk by chunk.
 	DefaultRedactBufferMax int64 = 512 * 1024 * 1024
+
+	// DefaultExecNet is the default network mode for `janusfs exec`: "host"
+	// shares the host network (no isolation), "none" denies all network. Only
+	// deny-all is offered; an egress allowlist is out of scope (SPEC §20).
+	DefaultExecNet = "host"
 )
 
 // Config holds every JanusFS tunable, plus the positional mount arguments.
@@ -89,6 +94,13 @@ type Config struct {
 	// disables derivation, making <mountpoint> required; the default is
 	// ~/.janusfs/mounts so first-run mounting does not require install.
 	MountRoot string
+
+	// ExecNet is the default network mode for `janusfs exec` when the command
+	// line does not pass --net: "host" (share host network) or "none" (no
+	// network — the command runs with only loopback). Kernel-enforced (Linux
+	// only). Settings file: "exec_net". Env: JANUSFS_EXEC_NET. The --net
+	// flag overrides it.
+	ExecNet string
 }
 
 // Default returns a Config populated with every tunable's documented default
@@ -103,6 +115,7 @@ func Default() Config {
 		NoHistory:            false,
 		RedactBufferMax:      DefaultRedactBufferMax,
 		MountRoot:            DefaultMountRoot(),
+		ExecNet:              DefaultExecNet,
 	}
 }
 
@@ -133,6 +146,9 @@ func ApplyEnv(cfg *Config) error {
 	if s, ok := os.LookupEnv("JANUSFS_MOUNT_ROOT"); ok && s != "" {
 		cfg.MountRoot = s
 	}
+	if s, ok := os.LookupEnv("JANUSFS_EXEC_NET"); ok && s != "" {
+		cfg.ExecNet = s
+	}
 	return nil
 }
 
@@ -159,6 +175,7 @@ func SettingsPath() (string, error) {
 
 type fileSettings struct {
 	MountRoot string `json:"mount_root"`
+	ExecNet   string `json:"exec_net"`
 }
 
 // ApplyFile overlays ~/.janusfs/settings.json onto cfg (Default -> File -> Env -> Flag).
@@ -181,6 +198,9 @@ func ApplyFile(cfg *Config) error {
 	}
 	if fsettings.MountRoot != "" {
 		cfg.MountRoot = fsettings.MountRoot
+	}
+	if fsettings.ExecNet != "" {
+		cfg.ExecNet = fsettings.ExecNet
 	}
 	return nil
 }

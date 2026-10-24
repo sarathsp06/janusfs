@@ -50,9 +50,11 @@ Prefix with `rtk` for token-reduced output.
   `(path, mtime, size, inode, generation)` is the authoritative change detector.
 - Entrypoint `cmd/janusfs/main.go`, manual explicit dependency injection, no DI
   framework. `startMount` in `runtime.go` is the whole dependency graph.
-- Both macOS (macFUSE) and Linux (FUSE) are supported. Their isolation models
-  differ fundamentally — see
-  [`platform-isolation.md`](docs/knowledge/platform-isolation.md).
+- JanusFS is **Linux-only**. `janusfs mount` and `janusfs exec` enforce with
+  FUSE plus mount/user/network namespaces and refuse at runtime off Linux. The
+  binary still compiles and unit-tests on a macOS dev machine (the engine —
+  rules, masking, cache — is platform-independent); only enforcement is Linux.
+  See [`platform-isolation.md`](docs/knowledge/platform-isolation.md).
 
 ## Packages
 
@@ -63,6 +65,7 @@ Prefix with `rtk` for token-reduced output.
 | `internal/logging/` | `slog` wrapper, one handler, per-component loggers |
 | `internal/apperrors/` | sentinel errors and the single `ToErrno` translation |
 | `internal/rules/` | discovery, parse, compile, resolve; in-house gitignore matcher |
+| `internal/backing/` | dirfd-relative access to the source root (`openat` family behind `validRel`) |
 | `internal/engine/` | atomic rule-set snapshot, generations |
 | `internal/patterns/` | builtin and custom pattern library |
 | `internal/redact/` | length-preserving redaction, streaming modes |
@@ -70,6 +73,7 @@ Prefix with `rtk` for token-reduced output.
 | `internal/mount/` | FUSE adapter — thin, no business logic |
 | `internal/execrunner/` | `janusfs exec` orchestration |
 | `internal/control/` | daemon control-socket protocol types and dial helper, shared by `cmd/janusfs` and `internal/execrunner` |
+| `internal/nsexec/` | Linux namespace-exec capability preflight (`Supported()`, kernel version) |
 | `internal/obs/` | event bus, metrics, ring buffer, top-N |
 | `internal/history/` | SQLite `Store` — rollups, sessions, coverage |
 | `internal/health/` | diagnostics for `doctor` |
@@ -79,8 +83,10 @@ Prefix with `rtk` for token-reduced output.
 | `internal/vfsmeta/` | `.janusfs` virtual file contents |
 
 `internal/watch` and `internal/platform` do not exist and are not planned.
-`internal/backing`, `internal/procid`, and `internal/nsexec` are planned but not
-yet written — see [SPEC.md §18](SPEC.md#18-sequencing).
+`internal/procid` no longer exists: the macOS enforcement track (process
+identity, path-preserving overmount, Seatbelt `--sandbox`) was deleted, and
+macOS support was then removed entirely — both recorded as rejected in
+[SPEC.md §20](SPEC.md#20-risks-and-rejected-designs).
 
 ## Code conventions
 
@@ -133,8 +139,8 @@ rejected:
 
 ## Release
 
-- GoReleaser (`.goreleaser.yml`) builds and packages releases; universal binary
-  on darwin, tarballs, sha256 checksums, and a changelog grouped by Conventional
+- GoReleaser (`.goreleaser.yml`) builds and packages releases: Linux `amd64`
+  and `arm64` tarballs, sha256 checksums, and a changelog grouped by Conventional
   Commits.
 - `.github/workflows/release.yml` runs on any `vX.Y.Z` tag and creates **draft**
   releases, so nothing publishes without a human reading the notes.

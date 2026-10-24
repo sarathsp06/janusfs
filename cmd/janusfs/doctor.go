@@ -15,7 +15,7 @@ func newDoctorCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Report macFUSE status, active mounts, and runtime health",
+		Short: "Report FUSE status, active mounts, and runtime health",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home, err := os.UserHomeDir()
@@ -45,30 +45,18 @@ func newDoctorCmd() *cobra.Command {
 func printDoctorReport(r *health.Report) {
 	fmt.Printf("%s %s\n\n", cBold("JanusFS Doctor —"), r.Version)
 
-	// FUSE/macFUSE status.
-	fuseLabel := "FUSE"
-	if r.Runtime.OS == "darwin" {
-		fuseLabel = "macFUSE"
-	}
+	// FUSE status.
 	switch {
-	case r.MacFUSE.Installed && r.MacFUSE.Loaded:
+	case r.FUSE.Installed && r.FUSE.Loaded:
 		msg := "installed, loaded"
-		if r.MacFUSE.Version != "" {
-			msg += fmt.Sprintf(" (version %s)", r.MacFUSE.Version)
+		if r.FUSE.Version != "" {
+			msg += fmt.Sprintf(" (version %s)", r.FUSE.Version)
 		}
-		fmt.Printf("%s %s: %s\n", symGood(), fuseLabel, msg)
-	case r.MacFUSE.Installed:
-		hint := ""
-		if r.Runtime.OS == "darwin" {
-			hint = " (run `sudo kextload` or approve in System Settings)"
-		}
-		fmt.Printf("%s %s: installed, %s%s\n", symWarn(), fuseLabel, cWarn("NOT loaded"), hint)
+		fmt.Printf("%s FUSE: %s\n", symGood(), msg)
+	case r.FUSE.Installed:
+		fmt.Printf("%s FUSE: installed, %s\n", symWarn(), cWarn("NOT loaded"))
 	default:
-		hint := "install with `apt-get install fuse3` or your package manager"
-		if r.Runtime.OS == "darwin" {
-			hint = "install with `brew install --cask macfuse`"
-		}
-		fmt.Printf("%s %s: %s (%s)\n", symBad(), fuseLabel, cBad("NOT installed"), hint)
+		fmt.Printf("%s FUSE: %s (install with `apt-get install fuse3` or your package manager)\n", symBad(), cBad("NOT installed"))
 	}
 
 	// Runtime.

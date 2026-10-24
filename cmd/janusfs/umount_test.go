@@ -52,35 +52,6 @@ func TestRunUmount_RemovesStalePidfile(t *testing.T) {
 	}
 }
 
-func TestUnmountKernel_ForceFallbackAfterGracefulFailures(t *testing.T) {
-	old := unmountCommand
-	oldGOOS := runtimeGOOS
-	t.Cleanup(func() { unmountCommand = old; runtimeGOOS = oldGOOS })
-	runtimeGOOS = "darwin"
-
-	var calls []string
-	unmountCommand = func(name string, args []string, timeoutSec int) error {
-		calls = append(calls, name+" "+strings.Join(args, " "))
-		if name == "diskutil" && reflect.DeepEqual(args, []string{"unmount", "force", "/mnt/busy"}) {
-			return nil
-		}
-		return fmt.Errorf("busy")
-	}
-
-	if err := unmountKernel("/mnt/busy", true); err != nil {
-		t.Fatalf("unmountKernel() error = %v, want nil after force fallback", err)
-	}
-
-	want := []string{
-		"diskutil unmount /mnt/busy",
-		"umount /mnt/busy",
-		"diskutil unmount force /mnt/busy",
-	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("unmount attempts = %v, want %v", calls, want)
-	}
-}
-
 func TestUnmountKernel_LinuxUsesFuseAndLazyUnmount(t *testing.T) {
 	old := unmountCommand
 	oldGOOS := runtimeGOOS
@@ -163,13 +134,13 @@ func TestMountRuntimeStop_ForceUnmountsWhenServeLoopDoesNotExit(t *testing.T) {
 		unmountCommand = oldCommand
 		runtimeGOOS = oldGOOS
 	})
-	runtimeGOOS = "darwin"
+	runtimeGOOS = "linux"
 	shutdownGrace = time.Millisecond
 	forceUnmountSettle = time.Millisecond
 
 	var forceCalled bool
 	unmountCommand = func(name string, args []string, timeoutSec int) error {
-		if name == "diskutil" && reflect.DeepEqual(args, []string{"unmount", "force", "/mnt/stuck"}) {
+		if name == "umount" && reflect.DeepEqual(args, []string{"-l", "/mnt/stuck"}) {
 			forceCalled = true
 			return nil
 		}

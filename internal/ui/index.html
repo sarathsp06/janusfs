@@ -384,7 +384,7 @@
     var fullPath = prefix + path;
     if (!token) return base + fullPath;
 
-    // Use & when the path already carries a query (e.g. reveal?path=...),
+    // Use & when the path already carries a query,
     // otherwise the token lands inside the path param and auth fails.
     var sep = fullPath.indexOf('?') >= 0 ? '&' : '?';
     return base + fullPath + sep + 'token=' + encodeURIComponent(token);
@@ -489,7 +489,6 @@
       html += '<span class="badge ' + kind + '">' + kind.charAt(0) + '</span>';
       html += '<span class="path mono-code">' + esc(e.path) + '</span>';
       html += patStr;
-      html += '<span class="toggle" onclick="event.stopPropagation();revealFile(this,\'' + escJS(e.path) + '\')">view / edit</span>';
       html += '</div>';
       html += ruleStr;
       html += '<div class="content" data-path="' + escAttr(e.path) + '"></div>';
@@ -497,35 +496,6 @@
     }
     html += '</div>';
     el.innerHTML = html;
-  }
-
-  window.revealFile = function(btn, path) {
-    var entry = btn.closest('.file-entry');
-    var content = entry.querySelector('.content');
-    if (content.classList.contains('open')) {
-      content.classList.remove('open', 'has-editor');
-      content.innerHTML = '';
-      btn.textContent = 'view / edit';
-      return;
-    }
-    content.classList.add('open');
-    content.textContent = 'Loading...';
-    btn.textContent = 'hide';
-    fetch(apiURL('/api/v1/reveal?path=' + encodeURIComponent(path)))
-      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-      .then(function(text) {
-        content.classList.add('has-editor');
-        mountEditor(content, text, path, function(newValue, statusEl, done) { saveFile(path, newValue, statusEl, done); });
-      })
-      .catch(function() { content.textContent = '(error loading file)'; });
-  };
-
-  function saveFile(path, content, statusEl, done) {
-    fetch(apiURL('/api/v1/reveal?path=' + encodeURIComponent(path)), { method: 'POST', headers: {'Content-Type': 'text/plain'}, body: content })
-      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function() { statusEl.textContent = 'Saved'; if (done) done();
-        setTimeout(function() { if (statusEl.textContent === 'Saved') statusEl.textContent = ''; }, 2000); })
-      .catch(function() { statusEl.textContent = 'Save failed'; });
   }
 
   function fetchConfig() {

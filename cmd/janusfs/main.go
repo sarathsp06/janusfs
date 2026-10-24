@@ -48,8 +48,8 @@ func main() {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "janusfs",
-		Short:         "A sanitized filesystem view for AI agents",
-		Long:          "JanusFS mounts a sanitized view of a directory: every file is Allowed, Masked, or Hidden, per .janusfs.yml policy.",
+		Short:         "Secret-masking filesystem boundary for AI agents",
+		Long:          "JanusFS mounts a masked view of a directory: every file is Allowed, Masked (secrets read as ****, byte-length preserved), or Hidden, per .janusfs.yml policy. Sandboxes decide allow/deny; JanusFS adds the third answer. On Linux, `janusfs exec` makes the boundary kernel-enforced.",
 		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		SilenceErrors: true,
 		SilenceUsage:  true,

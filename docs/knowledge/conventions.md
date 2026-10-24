@@ -56,10 +56,14 @@ reason is stated rather than just the rule.
 # Style
 
 - Packages are lowercase single words; files are `snake_case.go`.
-- Platform variants use build tags in separate files: `mount_darwin.go` /
-  `mount_linux.go`, `doctor_darwin.go` / `doctor_other.go`,
-  `stat_darwin.go` / `stat_linux.go`. Note that `janus_node.go` and
-  `janus_virtual.go` carry `//go:build darwin || linux` since they are shared.
+- Platform variants use build tags in separate files. Because a `_linux.go` /
+  `_darwin.go` suffix forces that GOOS regardless of any `//go:build` line, the
+  non-Linux fallbacks use an `_other.go` suffix with an explicit `//go:build
+  !linux` tag: `doctor_linux.go` / `doctor_other.go`, `backing_linux.go` /
+  `backing_other.go`, `runner_linux.go` / `runner_other.go`. Files shared by the
+  dev-machine build carry `//go:build darwin || linux` (`mount.go`,
+  `janus_node.go`, `janus_virtual.go`, `mount_options.go`) so the engine still
+  compiles and unit-tests on macOS even though mounting is Linux-only.
 - **Code comments never cite SPEC.md.** No `FR-`/`NFR-` numbers, no `§`
   references, no amendment dates. A comment states the constraint or the reason
   the code cannot show for itself; a document coordinate is provenance, and it
@@ -115,7 +119,7 @@ token-reduced output: `rtk make test`, `rtk git status`.
   stated non-functional requirement.
 - Unit tests need no external services. History uses `:memory:`.
 - Mounted integration tests are behind the `fuseintegration` tag and are not
-  part of `make test`, because they need macFUSE and mount for real.
+  part of `make test`, because they need FUSE and mount for real (Linux).
 - **The leak oracle is a tripwire, not a test.** Sentinel secrets in
   `testdata/` must never appear in any byte read through a mount, in any test,
   ever. A failure there blocks the change.
@@ -128,9 +132,10 @@ token-reduced output: `rtk make test`, `rtk git status`.
 
 # Release
 
-GoReleaser (`.goreleaser.yml`) builds darwin `amd64` and `arm64`, combines them
-into a universal binary, and produces tarballs, checksums, and a changelog
-grouped by Conventional Commits. `.github/workflows/release.yml` runs on any
+GoReleaser (`.goreleaser.yml`) builds Linux `amd64` and `arm64` and produces
+tarballs, checksums, and a changelog grouped by Conventional Commits (JanusFS is
+Linux-only, so there are no macOS artifacts). `.github/workflows/release.yml`
+runs on any
 `vX.Y.Z` tag and creates **draft** releases, so nothing publishes without a
 human reading the notes.
 

@@ -37,7 +37,7 @@ obs.Recorder.Emit()          ├─▶ prometheus counters/histograms (synchrono
 ```
 
 There are two vocabularies on purpose. `mount.OpEvent`
-(`internal/mount/mount_darwin.go:29`) uses plain strings so
+(`internal/mount/mount.go`) uses plain strings so
 `internal/mount` needs no dependency on `internal/obs`. `makeObserver`
 (`cmd/janusfs/runtime.go:211`) translates: `"ALLOWED"`/`"MASKED"`/`"HIDDEN"`
 map to the `obs.Decision` enum, while `"PANIC"` and `"CONFIG_READONLY"` both map
@@ -113,7 +113,6 @@ per-mount bearer token generated at `startMount` (`runtime.go:88`).
 |---|---|
 | `/api/v1/summary` | live snapshot: counts, states, generation, uptime |
 | `/api/v1/coverage` | current masked and hidden paths with the matching rule |
-| `/api/v1/reveal` | resolve one path and return its derivation |
 | `/api/v1/config` | read and write the config files through the dashboard editor |
 | `/api/v1/reload` | trigger `mountRuntime.reload` |
 | `/api/v1/history` | rollup series |
