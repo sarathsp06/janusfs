@@ -168,7 +168,10 @@ func runNSMount(ctx context.Context, src string, denyNetwork, quiet bool, target
 	}
 	ready := make(chan error, 1)
 	adapter.OnMounted = func() {
-		logger.Info("mounted", "src", src, "shadow", shadow)
+		// Debug, not Info: the operator already got the banner from Stage 1,
+		// and a JSON log line on every session's stderr — one that --quiet
+		// could not silence — was the single noisiest thing about exec.
+		logger.Debug("mounted", "src", src, "shadow", shadow)
 		ready <- nil
 	}
 
