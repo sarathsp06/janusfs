@@ -57,3 +57,11 @@ Additionally, pre-allocating slice capacity with `slices.Grow(spans, len(matches
 
 **Action:**
 Updated `FindSpans` to select `FindAllIndex` when `GroupIndex == 0` and used `slices.Grow` for span slice allocations. Rewrote byte masking in `Redact` to operate on sub-slices.
+## 2026-08-30 - Expanded Stack Allocation & Inline Sorting for Pattern Signatures
+
+**Learning:**
+Stack-allocating small array buffers (`[8]string`) in signature helpers works well for typical sets, but defaults to heap allocations (`make([]string, n)`) as pattern sets grow past 8 elements. In addition, invoking standard library generic `slices.Sort` on small string slices (2 to 4 items) introduces pdqsort and compare function overhead.
+By expanding the stack-allocated backing array to `[32]string` and using a lightweight inline string sort helper (`sortStrings`) for small slices (<= 4 elements), slice allocations for larger pattern sets are eliminated and sorting overhead for small pattern sets is significantly reduced.
+
+**Action:**
+Expanded stack array backing capacity from `[8]string` to `[32]string` in both `patternSignature` and `matchesPatternSig`. Implemented `sortStrings` for small string slice sorting. Reduced `BenchmarkPatternSignature16` latency from 1077 ns/op to ~890 ns/op (~17% speedup) and cut memory allocation from 480 B/op (2 allocs) down to 224 B/op (1 alloc, 50% allocation reduction). Decreased `BenchmarkPatternSignature4` latency by ~10.5%.
