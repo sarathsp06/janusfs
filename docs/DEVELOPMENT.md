@@ -27,14 +27,13 @@ Refer to **[`SPEC.md`](../SPEC.md)** for the detailed engineering contract and *
 - `internal/engine/`: Pure decision resolution logic.
 - `internal/redact/`: Size-preserving `*` redaction pipeline.
 - `internal/provider/`: Content cache and memory-management layers.
-- `internal/mount/`: Go-FUSE filesystems adapter for macOS (macFUSE) and Linux.
+- `internal/mount/`: Go-FUSE filesystems adapter. Mounting is Linux-only; the adapter compiles on macOS for unit tests but refuses to mount.
 
 ## Build Requirements
 
 - Go 1.26 or higher
-- FUSE runtimes installed locally:
-  - **macOS:** macFUSE system extension approved
-  - **Linux:** `fuse3` and `libfuse3-dev` libraries installed
+- FUSE runtime — **Linux only**: `fuse3` and `libfuse3-dev` (Debian/Ubuntu) or `fuse3` and `fuse3-devel` (RHEL/Fedora). JanusFS mounts and enforces on Linux only.
+- macOS/Windows are **development-only**: the binary compiles and the unit tests run (the engine is platform-independent), but `janusfs mount` and `janusfs exec` refuse at runtime. To use JanusFS there, run it inside a Linux container or VM. See [`platform-isolation.md`](knowledge/platform-isolation.md).
 
 ### Building Locally
 

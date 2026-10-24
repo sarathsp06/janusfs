@@ -133,10 +133,10 @@ func TestStalePolicyAutoReloadUsesAdapterReload(t *testing.T) {
 	select {
 	case <-mounted:
 	case err := <-done:
-		t.Skipf("mount did not come up (macFUSE/FUSE not installed/approved?): %v", err)
+		t.Skipf("mount did not come up (FUSE not installed?): %v", err)
 	case <-time.After(5 * time.Second):
 		cancel()
-		t.Skip("mount did not come up within 5s (macFUSE/FUSE not installed/approved?)")
+		t.Skip("mount did not come up within 5s (FUSE not installed?)")
 	}
 	defer func() {
 		cancel()

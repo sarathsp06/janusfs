@@ -20,6 +20,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/sarathsp06/janusfs/internal/history"
 	"github.com/sarathsp06/janusfs/internal/vfsmeta"
 )
@@ -102,7 +103,6 @@ func (s *Server) SetMountInfo(source, mountpoint string) {
 func (s *Server) register() {
 	s.mux.HandleFunc("/api/v1/summary", s.withToken(s.handleSummary))
 	s.mux.HandleFunc("/api/v1/coverage", s.withToken(s.handleCoverage))
-	s.mux.HandleFunc("/api/v1/reveal", s.withToken(s.handleReveal))
 	s.mux.HandleFunc("/api/v1/config", s.withToken(s.handleConfig))
 	s.mux.HandleFunc("/api/v1/reload", s.withToken(s.handleReload))
 	s.mux.Handle("/metrics", promhttp.HandlerFor(s.promReg, promhttp.HandlerOpts{}))
@@ -284,55 +284,6 @@ func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
 		"masked": masked,
 		"hidden": hidden,
 	})
-}
-
-// maxRevealWrite caps the body of an edit-save (10 MiB).
-const maxRevealWrite = 10 << 20
-
-// handleReveal serves (GET) and saves (POST) the real source file behind a
-// masked/hidden entry. Reads/writes the source tree directly, bypassing the
-// mount decision — this is the token-authenticated operator view.
-func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
-	if s.root == "" {
-		http.Error(w, "not configured", http.StatusNotFound)
-		return
-	}
-	rel := r.URL.Query().Get("path")
-	if rel == "" {
-		http.Error(w, "missing path", http.StatusBadRequest)
-		return
-	}
-	realPath := filepath.Join(s.root, filepath.FromSlash(rel))
-	if realPath != s.root && !strings.HasPrefix(realPath, s.root+string(os.PathSeparator)) {
-		http.Error(w, "path escape", http.StatusForbidden)
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		http.ServeFile(w, r, realPath)
-	case http.MethodPost:
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRevealWrite))
-		if err != nil {
-			http.Error(w, "read error (file too large?)", http.StatusBadRequest)
-			return
-		}
-		info, err := os.Stat(realPath)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		if info.IsDir() {
-			http.Error(w, "cannot write a directory", http.StatusBadRequest)
-			return
-		}
-		if err := os.WriteFile(realPath, body, info.Mode().Perm()); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, map[string]any{"saved": true, "path": rel})
-	default:
-		http.Error(w, "use GET or POST", http.StatusMethodNotAllowed)
-	}
 }
 
 // handleHistory returns aggregated history rollups.

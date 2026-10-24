@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/sarathsp06/janusfs/internal/ui"
 )
 
@@ -197,55 +198,7 @@ func TestHeaders(t *testing.T) {
 	}
 }
 
-func TestRevealViewAndEdit(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "secret.env"), []byte("KEY=1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	s := testServer()
-	s.SetVFSMeta(root, nil, nil, nil)
-
-	get := func() string {
-		req := httptest.NewRequest("GET", "/api/v1/reveal?path=secret.env&token=test-token", nil)
-		w := httptest.NewRecorder()
-		s.mux.ServeHTTP(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GET reveal: got %d, body %q", w.Code, w.Body.String())
-		}
-		return w.Body.String()
-	}
-	if got := get(); got != "KEY=1" {
-		t.Fatalf("GET reveal content = %q, want %q", got, "KEY=1")
-	}
-
-	req := httptest.NewRequest("POST", "/api/v1/reveal?path=secret.env&token=test-token", strings.NewReader("KEY=2"))
-	w := httptest.NewRecorder()
-	s.mux.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("POST reveal: got %d, body %q", w.Code, w.Body.String())
-	}
-	if got := get(); got != "KEY=2" {
-		t.Fatalf("after edit, GET reveal content = %q, want %q", got, "KEY=2")
-	}
-
-	info, err := os.Stat(filepath.Join(root, "secret.env"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("file mode after save = %o, want unchanged 0644", info.Mode().Perm())
-	}
-
-	escReq := httptest.NewRequest("GET", "/api/v1/reveal?path=../outside&token=test-token", nil)
-	escW := httptest.NewRecorder()
-	s.mux.ServeHTTP(escW, escReq)
-	if escW.Code != http.StatusForbidden {
-		t.Errorf("path escape: got %d, want 403", escW.Code)
-	}
-}
-
-func TestReloadEndpoint(t *testing.T) {
+func TestReload(t *testing.T) {
 	s := testServer()
 	called := 0
 	s.SetReload(func() error { called++; return nil })

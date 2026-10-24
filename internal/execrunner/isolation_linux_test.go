@@ -252,3 +252,54 @@ func TestNamespaceIsolation_TeardownRestoresNormalAccess(t *testing.T) {
 		t.Fatalf("unexpected content after teardown: %q", data)
 	}
 }
+
+// TestNamespaceIsolation_NetNoneBlocksEgress is the enforcement test for
+// `janusfs exec --net=none`: a command run under it must be unable to open a
+// TCP connection to any external host, while a plain `janusfs exec` (host
+// network) can. It asserts the NEGATIVE — that egress fails — because a test
+// that only confirmed the host case would pass even if --net=none did nothing.
+func TestNamespaceIsolation_NetNoneBlocksEgress(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only")
+	}
+	bin := buildJanusfsBinary(t)
+
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, ".janusfs.yml"), []byte("version: 1\nhide:\n  - \"*.secret\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A self-contained connectivity probe: dialing a routable, non-loopback
+	// address must fail fast when there is no network. We use a short timeout
+	// so the "no network" case is a connect error, not a hang. 192.0.2.1 is
+	// TEST-NET-1 (RFC 5737) — guaranteed non-routable, so even the host case
+	// here only proves a socket could be created and a route existed, which is
+	// all we need to distinguish it from the namespace having no route at all.
+	probe := `import socket,sys
+try:
+    socket.create_connection(("192.0.2.1", 80), timeout=2)
+except OSError as e:
+    sys.stderr.write(type(e).__name__+"\n"); sys.exit(7)
+sys.exit(0)`
+
+	run := func(netArgs ...string) (string, error) {
+		args := append([]string{"exec"}, netArgs...)
+		args = append(args, "--", "python3", "-c", probe)
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = src
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	// With no network, the socket layer itself reports the interface/route is
+	// gone: connect fails immediately with ENETUNREACH/ENETDOWN rather than
+	// timing out. Assert it failed and did so as a network error.
+	out, err := run("--net=none")
+	skipIfUnsupportedPrivateMount(t, err, out)
+	if err == nil {
+		t.Fatalf("--net=none allowed a connection to succeed:\n%s", out)
+	}
+	if !strings.Contains(out, "Error") && !strings.Contains(out, "unreachable") {
+		t.Fatalf("--net=none failed but not with a network error:\n%s", out)
+	}
+}

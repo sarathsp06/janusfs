@@ -1,17 +1,17 @@
 ---
 type: Architecture
 title: Platform isolation models
-description: Why Linux can enforce path parity with a private mount namespace and macOS cannot, and what each model can actually guarantee.
-tags: [linux, namespaces, macos, macfuse, isolation, design]
+description: Why Linux can enforce path parity with a private mount namespace, why no other OS can, and why that asymmetry is the reason JanusFS is Linux-only.
+tags: [linux, namespaces, isolation, design]
 status: stable
 generated: { by: claude-code/claude-fable-5, at: 2026-07-26T00:00:00Z }
 sources:
   - id: parity
     resource: exec-and-path-parity.md
     title: the path-parity problem
-  - id: darwin
-    resource: /internal/mount/mount_darwin.go
-    title: macFUSE mount options
+  - id: options
+    resource: /internal/mount/mount_options.go
+    title: applyPlatformOptions (no-op)
   - id: linux
     resource: /internal/mount/mount_linux.go
     title: Linux mount, no DirectMount today
@@ -20,14 +20,14 @@ sources:
     title: path-based backing access via LoopbackNode
 ---
 
-# The asymmetry
+# The asymmetry that made JanusFS Linux-only
 
 Path parity means the sanitized view lives at the *same absolute path* as the
 real source. Achieving it requires mounting over the source directory. What
-happens next differs fundamentally between the two platforms, and that
-difference determines almost every design decision in this area.
+happens next differs fundamentally between Linux and everything else, and that
+difference is why JanusFS enforces only on Linux.
 
-| | Linux | macOS |
+| | Linux | macOS / other |
 |---|---|---|
 | Per-process mount views | yes, `CLONE_NEWNS` | **no such mechanism** |
 | Who sees the FUSE mount | only the agent's process tree | every process on the machine |
@@ -36,12 +36,15 @@ difference determines almost every design decision in this area.
 | Blast radius of a daemon crash | the namespace dies with the process tree | the whole project directory hangs |
 | Can a determined local process evade it | no | yes, in principle |
 
-Everything below follows from that table.
+Only the left column is a real security boundary. JanusFS ships that column and
+refuses the right one: `janusfs mount` and `janusfs exec` error at runtime off
+Linux. The rest of this document is the Linux mechanism, then the record of why
+the non-Linux alternatives were rejected.
 
 # Linux: private mount namespace
 
 A process in a new mount namespace sees mounts that no other process sees. Mount
-the sanitized view over `/Users/me/projects/app` inside that namespace and the
+the sanitized view over `/home/me/projects/app` inside that namespace and the
 agent gets path parity, while `git`, the editor, and every other host tool
 continue reading `ext4` at full native speed and never observe the FUSE mount at
 all.
@@ -137,119 +140,62 @@ regardless of what ends up mounted at `src`, there is no path through which the
 server's own backing I/O can re-enter its own mount.
 
 This is a strictly safer default than the PRP's literal pseudocode, has no
-known downside, and does not depend on PRP 05 landing first. It is also,
-consequently, **unverified**: it has not been exercised against a real kernel.
-`internal/execrunner/isolation_linux_test.go` and
-`isolation_linux_bench_test.go` were written to the best ability of someone
-who has read the relevant kernel documentation carefully, gated behind
-`//go:build linux && fuseintegration`, and are ready to run — but they have not
-actually been run. **Run them on a real Linux machine (`make integration`
-under a Linux CI runner, or directly with FUSE available) before treating
-either PRP 04 or this section as validated.** If the shadow-mount approach
-turns out to be unnecessary (a direct `adapter.Mount(ctx, src, src)` proves
-safe after all), it can be simplified later — that would be a welcome finding,
-not a required one.
+known downside, and does not depend on PRP 05 landing first. It is now
+**verified per-PR by the `fuseintegration` CI job**: Linux CI (ubuntu-latest)
+runs `make integration` on every PR ([PRP 10](/PRPs/10-linux-ci-verification.md)),
+which exercises `internal/execrunner/isolation_linux_test.go`,
+`isolation_linux_bench_test.go`, and the overmount spike test
+`internal/mount/overmount_linux_test.go` against a real kernel. If the
+shadow-mount approach turns out to be unnecessary (a direct
+`adapter.Mount(ctx, src, src)` proves safe after all), it can be simplified
+later — that would be a welcome finding, not a required one.
 
 ## What this buys
 
 Kernel-enforced isolation. There is no identity check to spoof, no registry to
 race, no PID to recycle: a process either is in the namespace or is not, and the
-kernel decides. `internal/execrunner`'s path rewriting becomes dead code on
-Linux. Host tool overhead is exactly zero, not "reduced".
+kernel decides. There is no path rewriting anywhere — the source is mounted at
+its own path — so the argv/stream shims the old macOS path needed never exist.
+Host tool overhead is exactly zero, not "reduced".
 
-# macOS: no per-process mount views
+# Why macOS (and every non-Linux OS) is unsupported
 
-macOS has no mount namespace equivalent. A macFUSE mount is global. This gives
-three genuinely different options, and the trade-off is not close.
+macOS has no mount-namespace equivalent: a macFUSE mount is global, visible to
+every process on the machine. That single fact rules out kernel-enforced path
+parity, and JanusFS support for the platform was removed because none of the
+alternatives is a real boundary. They are recorded here so they are not
+re-proposed — all four are rejected in [SPEC.md §20](/SPEC.md):
 
-## Option A: disjoint mountpoint (what ships today)
+- **A: disjoint mountpoint.** The view lives at a *different* path, so host
+  tools never touch FUSE and nothing is misclassified — but the agent's tools
+  see a path that does not match the source, and the only ways to paper over
+  that (argv/stream rewriting) provably cannot cover every channel a path leaks
+  through (see [exec and path parity](exec-and-path-parity.md)).
+- **B: path-preserving overmount, one policy for everyone.** Path parity, but
+  now the *user's own* tools read the sanitized view — `git add` stages `****`
+  over a real secret, `sed -i`/formatters fail mid-write or truncate, Spotlight
+  and Time Machine back up the redacted bytes. A data-loss hazard, not viable as
+  a default.
+- **C: path-preserving overmount plus caller identity** (`internal/procid`, PRPs
+  06/07, all deleted). The only design that could deliver macOS path parity
+  without B's hazards, but enforcement moves from the kernel to a heuristic in
+  our daemon: a process that double-forks, `setsid`s, or scrubs its environment
+  reaches the unfiltered view. Kernel-shaped guarantees cannot be simulated by a
+  daemon-side identity guess, and calling the two equivalent would be false.
+- **D: Seatbelt `--sandbox` confinement** (PRP 09, deleted by PRP 14). A
+  `sandbox-exec` profile denying the real source subtree while re-allowing the
+  mountpoint. It closed A's direct-`open()` gap for plain CLI children, but
+  Seatbelt can only allow or deny (never rewrite, so no path parity), rests on
+  an API Apple has deprecated, and was never validated against signed/Electron
+  bundles and TCC.
 
-The view lives at a different path. Host tools never touch FUSE. Nothing can be
-misclassified. The cost is the entire path-parity problem and the fragile
-rewriting described in [exec and path parity](exec-and-path-parity.md).
-
-## Option B: path-preserving overmount, one policy for everyone
-
-Mount over `~/projects/app`. Path parity achieved. But now the *user's own
-tools* read the sanitized view, and that is not merely inconvenient — it is a
-data-loss hazard:
-
-- `git add .` on a masked file stages a buffer of asterisks. A commit later, the
-  real secret is gone and the repository contains `****`.
-- `sed -i`, `prettier --write`, and every formatter read the redacted bytes and
-  write them back — except that a write-intent open on a masked file returns
-  `EACCES`, so instead they fail mid-operation, which for tools that truncate
-  first can leave a file empty.
-- Spotlight and Time Machine index and back up the sanitized bytes.
-
-Option B is not viable as a default. It should not be offered without identity
-enforcement.
-
-## Option C: path-preserving overmount plus caller identity
-
-Mount over the source, and use the calling process's identity to decide which
-face to show: registered agent processes get the filtered view, everything else
-passes through unfiltered. This is the only design that delivers path parity on
-macOS without the hazards of Option B, and it is the reason
-[process identity](process-identity.md) exists as a subsystem at all.
-
-Its cost is honest and must be stated plainly: **enforcement moves from the
-kernel to a heuristic in our daemon.** A local process that deliberately evades
-identification — double-fork, `setsid`, scrub its own environment — reaches the
-unfiltered view. Linux namespaces cannot be evaded; this can.
-
-That is acceptable for the actual threat model, where the agent is an LLM that is
-untrusted but not an adversary purpose-built to escape, and where a hostile local
-process could simply read the source directory directly anyway. It is not
-acceptable to describe it as equivalent to the Linux guarantee.
-
-## Option D: Seatbelt confinement of the exec process tree (`--sandbox`, PRP 09)
-
-Orthogonal to A/B/C above — it does not touch where the mountpoint lives, only
-what a confined process tree can reach. `janusfs exec --sandbox` wraps the
-already-disjoint-mounted child (Option A) in a `sandbox-exec` profile that
-denies read **and** write of the real source subtree at the kernel level,
-while leaving the mountpoint itself untouched (`internal/execrunner/sandbox_darwin.go`).
-
-This is the one macOS mechanism, other than a signed system extension, that
-confines an entire subprocess tree — not one process, one channel, or one
-tool — without cgo. It closes the specific gap Option A leaves open (the child
-can still `open()` the real path directly): with `--sandbox`, it cannot,
-verified against a dynamically-discovered real path reaching the child through
-an environment variable (a channel argv-rewriting cannot touch) rather than a
-literal command-line string.
-
-It does not close the Option B/C gap. Seatbelt can only allow or deny; it
-cannot rewrite bytes. So `--sandbox` gives macOS a real **Hidden** (deny), but
-**Masked** is still served by FUSE through the mountpoint exactly as before —
-`--sandbox` constrains the agent to the masked view, it does not change how
-masking works. It is also opt-in and additive, not a replacement for path
-parity: an agent still sees the disjoint mountpoint path, not the source's own
-path, so Option A's argv-rewriting fragility (see
-[exec and path parity](exec-and-path-parity.md)) is unchanged.
-
-Two correctness properties that were **not** obvious until tested end-to-end
-against a real daemon and mount, both now covered by regression tests
-(`internal/execrunner/sandbox_darwin_integration_test.go`):
-
-- **Deny targets must be canonical, including the APFS firmlink form**
-  (`/Users/...` vs `/System/Volumes/Data/Users/...`), not just symlink-resolved
-  (`/var` vs `/private/var`) — Seatbelt matches the resolved path, and a deny
-  naming only one form is a silent, fail-open bypass.
-- **The mountpoint must be explicitly re-allowed last**, after every deny rule,
-  not merely left unnamed. The default mount root is `~/.janusfs/mounts/...`,
-  so a defense-in-depth deny of `~/.janusfs` (to keep a confined child from
-  reading JanusFS's own config/state) also denies the mountpoint whenever the
-  user hasn't customized `--root` — breaking the one thing `--sandbox`
-  promises to leave alone. Asserting the mountpoint last means it wins
-  regardless of which earlier deny rule happens to be its ancestor, including
-  ones added later.
-
-Untested: wrapping a signed/Electron harness (Cursor.app, the Claude Code app)
-rather than a plain CLI — TCC and hardened-runtime interactions are unknown.
-See [`docs/SEATBELT_SPIKE.md`](../SEATBELT_SPIKE.md) for the feasibility spike
-this was built from, and [PRP 09](/PRPs/09-macos-seatbelt-exec.md) for the
-as-built task list.
+`internal/procid`, the argv rewriter, and `sandbox_darwin*.go` were deleted with
+the enforcement track; macFUSE mount options, the macFUSE `doctor` probe, and
+`diskutil` unmount went with macOS support itself. The hard-won operational
+lessons (canonicalize deny targets including the APFS firmlink twin; re-allow
+the mountpoint last) survive in [PRP 09](/PRPs/09-macos-seatbelt-exec.md) for
+anyone re-proposing kernel confinement on macOS — but that is out of scope, not
+queued.
 
 ## The overmount recursion trap
 
@@ -261,43 +207,44 @@ The fix is that the server must hold a directory file descriptor to the real
 directory, opened **before** the mount is established, and perform all backing
 access relative to it with `openat`, `fstatat`, `readlinkat`, `unlinkat`,
 `renameat`, and so on. On Linux the handle is `open(src, O_PATH|O_DIRECTORY)`;
-macOS has no `O_PATH`, so `open(src, O_RDONLY|O_DIRECTORY)` serves as the
-`openat` base.
+non-Linux builds have no `O_PATH`, so `backing_other.go` opens
+`open(src, O_RDONLY|O_DIRECTORY)` as the `openat` base purely so the package
+compiles on a dev machine (mounting is refused there anyway).
 
-This is not an optimisation. Path-preserving mode is impossible without it.
+This is not an optimisation. Any overmount is impossible without it — which is
+why the Linux namespace exec bind-mounts a shadow path (above), and why the
+rejected macOS path-preserving mode would have required it too.
 
-And it is expensive, because `fs.LoopbackNode` — which the current adapter
-embeds and inherits almost everything from
-(`internal/mount/janus_node.go:47`) — resolves backing files by joining the root
-path with the node's relative path (`absPath()`, `:114`). A dirfd-relative
-backend means replacing `LoopbackNode` with a hand-written backing layer.
+[PRP 05](/PRPs/05-dirfd-backing-layer.md) landed exactly this for the read
+path: `internal/backing` retains a directory descriptor for the source root
+and the security-relevant reads go through `openat`-family calls with
+`O_NOFOLLOW`, which also closed the read-path TOCTOU window (the path used to
+be re-resolved by the kernel after the policy decision was made). The
+remaining path-based mutation surface is tracked by
+[PRP 16](/PRPs/16-prp05-ceiling.md).
 
-The consolation is that the same change fixes a second problem independently
-worth fixing: today every path-based backing access is a TOCTOU window, because
-the path is re-resolved by the kernel after the policy decision was made. A
-retained dirfd plus `openat` with `O_NOFOLLOW` closes it.
+# Sequencing, as it played out
 
-# Recommended sequencing
+The two platforms had very different cost-to-value ratios, and the 2026
+repositioning resolved the split decisively toward Linux:
 
-The two platforms have very different cost-to-value ratios, so they should not
-be built together.
-
-1. **Linux namespace exec.** Self-contained, no changes to the FUSE adapter, no
-   identity subsystem, and it deletes code. Highest value per unit of risk.
-   **Done** — [PRP 04](/PRPs/04-linux-namespace-exec.md), with the shadow-mount
-   caveat above still needing verification on real Linux hardware.
+1. **Linux namespace exec.** **Done** —
+   [PRP 04](/PRPs/04-linux-namespace-exec.md), with the shadow-mount design
+   now verified per-PR by the `fuseintegration` CI job on real Linux
+   ([PRP 10](/PRPs/10-linux-ci-verification.md)).
 2. **Crash recovery and the correctness fixes** in
-   [known gaps](known-gaps.md). Cheap, and they benefit every platform. **Done**
+   [known gaps](known-gaps.md). **Done**
    — [PRP 01](/PRPs/01-correctness-fixes.md), [PRP 02](/PRPs/02-crash-recovery-watchdog.md),
    [PRP 03](/PRPs/03-decision-cache.md).
-3. **The dirfd backing layer.** Large, mechanical, independently valuable for
-   TOCTOU, and a hard prerequisite for anything below it.
-4. **Process identity**, verified against the real cost of a lookup per
-   operation.
-5. **macOS path-preserving mode**, off by default, refusing to enable until 3
-   and 4 are in place.
-
-Nothing in steps 3 to 5 should block shipping step 1.
+3. **The dirfd backing layer.** **Done** for the read path —
+   [PRP 05](/PRPs/05-dirfd-backing-layer.md); its remaining ceiling is
+   tracked by [PRP 16](/PRPs/16-prp05-ceiling.md).
+4. **Process identity, macOS path-preserving mode, and macOS support itself** —
+   **rejected, not pending**. The entire macOS enforcement track (procid,
+   path-preserving overmount, `--sandbox`) was deleted, then macOS support was
+   removed entirely; see [SPEC.md §20](/SPEC.md) and
+   [PRP 12](/PRPs/12-delete-macos-enforcement-track.md). JanusFS enforces on
+   Linux only.
 
 # What was deliberately not adopted
 
@@ -310,11 +257,10 @@ are recorded here so they are not re-proposed:
   code. What remains after removing it — identity lookup, then policy
   resolution, with canonicalization only where the path can differ — is not a
   router, it is the existing call sequence with one step added.
-- **Global `$HOME` overmounting on macOS.** Never do this. But note that the
-  current implementation already mounts strictly per project source
-  (`ResolveMountpoint`, `internal/config/config.go:345`), so "shift from a
-  global overlay to scoped project roots" describes work that is already done.
-  The remaining macOS work is parity, not scoping.
+- **Global `$HOME` overmounting.** Never do this. The implementation mounts
+  strictly per project source (`ResolveMountpoint`,
+  `internal/config/config.go:345`), so "shift from a global overlay to scoped
+  project roots" describes work that is already done.
 - **Per-caller kernel cache policy** — serving cached pages to host tools and
   uncached pages to agents from one mount. The FUSE page cache and dentry cache
   are keyed by inode in the kernel, with no notion of which process caused the

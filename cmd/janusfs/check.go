@@ -89,6 +89,21 @@ func runCheck(dir string, jsonOut bool, secrets bool, matches bool) error {
 		return fmt.Errorf("check: %w", err)
 	}
 
+	// Masked files git would stage as-is: `git add` inside a mounted view
+	// stages the masked bytes, silently corrupting the real object store.
+	hazards, err := check.GitStagingHazards(dir)
+	if err != nil {
+		return fmt.Errorf("check: %w", err)
+	}
+	for _, rel := range hazards {
+		report.Findings = append(report.Findings, check.Finding{
+			Severity:   check.SeverityWarn,
+			File:       rel,
+			Message:    "masked file is tracked (or stageable) by git: `git add` through a JanusFS view stages the masked bytes, not the real content",
+			Suggestion: "add it to .gitignore, or never run git commands for this file through the mounted view",
+		})
+	}
+
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

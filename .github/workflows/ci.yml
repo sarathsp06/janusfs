@@ -7,11 +7,11 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, ubuntu-latest]
+    runs-on: ubuntu-latest
+    # Safety net: the mounted-FUSE step can wedge a runner if a mount fails to
+    # release; cap the whole job so a wedge fails in minutes, never at the 6h
+    # ceiling.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -19,8 +19,7 @@ jobs:
         with:
           go-version: '1.26'
 
-      - name: Install FUSE on Linux
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install FUSE
         run: |
           sudo apt-get update
           sudo apt-get install -y fuse3 libfuse3-dev
@@ -32,15 +31,39 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: go vet (fuseintegration tag)
+        # The mounted-integration tests only compile under this tag; without
+        # this step a refactor can silently break them for weeks (it did).
+        run: go vet -tags fuseintegration ./...
+
       - name: build
         run: make build
 
       - name: unit tests
         run: make test
 
-      - name: FUSE integration tests (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: make integration
+      # The mounted-FUSE tests wedge on the bare hosted runner: the execrunner
+      # namespace/overmount tests and the mount-adapter FUSE tests share one
+      # kernel mount namespace and deadlock when they run together. Give each
+      # package its own container (hence its own mount namespace) with an
+      # explicit /dev/fuse device + SYS_ADMIN, where they mount and lazy-unmount
+      # cleanly. -buildvcs=false avoids a git dubious-ownership stamp failure on
+      # the bind mount; -timeout bounds any single hang; the shared module-cache
+      # volume keeps the second container from re-downloading.
+      - name: FUSE integration tests
+        run: |
+          docker volume create janusfs-ci-gomod >/dev/null
+          for pkg in ./internal/execrunner/ ./internal/mount/; do
+            docker run --rm \
+              --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+              -v "$PWD:/src" -w /src -e HOME=/root \
+              -v janusfs-ci-gomod:/go/pkg/mod \
+              golang:1.26 bash -euc "
+                git config --global --add safe.directory /src
+                apt-get update -qq >/dev/null && apt-get install -y -qq fuse3 iproute2 >/dev/null
+                go test -tags fuseintegration -buildvcs=false -timeout 300s $pkg
+              "
+          done
 
   release-smoke-test:
     name: GoReleaser snapshot

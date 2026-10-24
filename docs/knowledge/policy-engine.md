@@ -64,8 +64,9 @@ a library. The rationale is recorded at `rules.go:1`.
 ## Case folding
 
 `RuleSet.FoldCase` (`rules.go`) records whether the source root's backing
-volume treats two spellings of a name as the same file — the APFS/HFS+ default
-on macOS. `Discover` probes this once via `caseInsensitiveVolume` in
+volume treats two spellings of a name as the same file — as a case-insensitive
+mount (`vfat`, `ciopfs`, a `ntfs-3g` volume) does. `Discover` probes this once
+via `caseInsensitiveVolume` in
 `internal/rules/casefold.go` (a cheap case-flip-and-`os.SameFile` check, no
 write access needed) and every pattern in the rule set is compiled against that
 one setting via `compilePatternFold`, which prepends `(?i)` to the compiled

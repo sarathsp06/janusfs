@@ -115,8 +115,8 @@ func runUmount(mountpoint string) error {
 }
 
 // isMountpoint reports whether path is a mount point, by comparing its device
-// number with its parent's — a cheap check that avoids running diskutil
-// against a path where nothing is actually mounted.
+// number with its parent's — a cheap check that avoids running the unmount
+// ladder against a path where nothing is actually mounted.
 func isMountpoint(path string) bool {
 	var st, parent syscall.Stat_t
 	if err := syscall.Lstat(path, &st); err != nil {
@@ -128,9 +128,9 @@ func isMountpoint(path string) bool {
 	return st.Dev != parent.Dev
 }
 
-// directUnmount performs an OS-level unmount without the daemon: macFUSE's
-// native tools first, then force, then signals any pidfile owner and clears
-// the mounts registry.
+// directUnmount performs an OS-level unmount without the daemon: FUSE's native
+// tools first, then force, then signals any pidfile owner and clears the
+// mounts registry.
 func directUnmount(mountpoint string) error {
 	err := unmountKernel(mountpoint, true)
 
@@ -154,37 +154,23 @@ var (
 	mountpointMounted = isMountpoint
 )
 
-// unmountKernel tries the stable unmount sequence for the current OS. Darwin
-// uses diskutil/macFUSE fallbacks; Linux uses fusermount before lazy umount so
-// stale FUSE mountpoints with "Transport endpoint is not connected" can be
-// detached without diskutil.
+// unmountKernel tries the stable unmount sequence for the current OS. Linux
+// uses fusermount before lazy umount so stale FUSE mountpoints with "Transport
+// endpoint is not connected" can be detached. JanusFS mounts are only
+// supported on Linux; other platforms get a best-effort plain `umount` so the
+// client still compiles and does something sane if a mount somehow exists.
 func unmountKernel(mountpoint string, force bool) error {
 	if runtimeGOOS == "linux" {
 		return unmountKernelLinux(mountpoint, force)
 	}
-	return unmountKernelDarwin(mountpoint, force)
+	return unmountKernelOther(mountpoint)
 }
 
-func unmountKernelDarwin(mountpoint string, force bool) error {
-	var errs []string
-	if err := unmountCommand("diskutil", []string{"unmount", mountpoint}, 5); err == nil {
-		return nil
-	} else {
-		errs = append(errs, fmt.Sprintf("diskutil unmount failed: %v", err))
+func unmountKernelOther(mountpoint string) error {
+	if err := unmountCommand("umount", []string{mountpoint}, 5); err != nil {
+		return fmt.Errorf("umount failed: %w", err)
 	}
-	if err := unmountCommand("umount", []string{mountpoint}, 5); err == nil {
-		return nil
-	} else {
-		errs = append(errs, fmt.Sprintf("umount failed: %v", err))
-	}
-	if force {
-		if err := unmountCommand("diskutil", []string{"unmount", "force", mountpoint}, 5); err == nil {
-			return nil
-		} else {
-			errs = append(errs, fmt.Sprintf("diskutil unmount force failed: %v", err))
-		}
-	}
-	return fmt.Errorf("%s", strings.Join(errs, "\n  "))
+	return nil
 }
 
 type unmountAttempt struct {
