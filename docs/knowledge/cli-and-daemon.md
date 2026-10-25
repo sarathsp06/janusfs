@@ -42,8 +42,9 @@ Registered in `newRootCmd` (`cmd/janusfs/main.go:48`). Every command except
 | `check [path]` | static config linter; optional heuristic scan and Hidden/Masked match preview | `--json`, `--secrets`, `--matches` |
 | `patterns` | list built-in `.janusfs.yml` mask pattern names and exact regexes | `--json` |
 | `explain <path>` | show the derivation of one path's decision | — |
-| `doctor` | runtime diagnostics | `--verbose` |
-| `exec -- <cmd>` | run a command against a sanitized view | flag parsing disabled |
+| `doctor` | runtime diagnostics; first lines say whether `exec` can enforce here and the remedy if not | `--json` |
+| `exec [flags] -- <cmd>` | run a command inside the kernel-enforced view; banner + end-of-session summary on stderr | flag parsing disabled; own flags parsed by hand: `--net=host\|none`, `--quiet`/`-q`, `--dry-run`, `--json` (the `--` is optional when the own flags lead) |
+| `shell [flags]` | `exec` with `$SHELL` as the command | same flags as `exec` |
 | `watchdog` | supervise a daemon PID, force-unmount its mounts if it dies | `--pid`, `--interval` — hidden, spawned by `daemon`, not for manual use |
 
 `main` sets `SilenceErrors` and `SilenceUsage` and prints a single

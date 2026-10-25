@@ -11,6 +11,8 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+
+	"github.com/sarathsp06/janusfs/internal/nsexec"
 )
 
 // Report is a full diagnostic report.
@@ -18,6 +20,7 @@ type Report struct {
 	FUSE     FUSEStatus     `json:"fuse"`
 	Mounts   []MountInfo    `json:"mounts"`
 	Watchdog WatchdogStatus `json:"watchdog"`
+	Exec     ExecStatus     `json:"exec"`
 	Runtime  RuntimeInfo    `json:"runtime"`
 	Version  string         `json:"version"`
 	Warnings []string       `json:"warnings,omitempty"`
@@ -33,6 +36,15 @@ type WatchdogStatus struct {
 	Present bool `json:"present"`
 	PID     int  `json:"pid,omitempty"`
 	Alive   bool `json:"alive"`
+}
+
+// ExecStatus reports whether `janusfs exec` — the kernel-enforced boundary —
+// can run on this host, and if not, the cause and remedy in the same words
+// exec itself would refuse with. Available is the one line a new user needs
+// from doctor: "can I sandbox an agent here, yes or no".
+type ExecStatus struct {
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // FUSEStatus reports whether FUSE is available (/dev/fuse present).
@@ -76,6 +88,11 @@ func Run(pidfileDir, watchdogPidfile string) *Report {
 	r := &Report{}
 
 	r.FUSE = checkFUSE()
+	if err := nsexec.Supported(); err != nil {
+		r.Exec = ExecStatus{Reason: err.Error()}
+	} else {
+		r.Exec = ExecStatus{Available: true}
+	}
 	r.Runtime = RuntimeInfo{
 		GoVersion:    runtime.Version(),
 		OS:           runtime.GOOS,

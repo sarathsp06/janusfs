@@ -36,6 +36,12 @@ mask:
     patterns:
       - generic-secret
       - db-uri
+
+# Defaults for ` + "`janusfs exec`" + ` and ` + "`janusfs shell`" + ` in this project. A project can
+# only tighten: "net: none" makes every exec here network-isolated (loopback
+# only, kernel-enforced) unless --net=host is passed explicitly.
+# exec:
+#   net: none
 `
 
 func newInitCmd() *cobra.Command {

@@ -24,33 +24,39 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/sarathsp06/janusfs/internal/nsexec"
 )
 
-// Run is the Linux entry point for `janusfs exec [--net=none] -- <command> [args...]`.
-func Run(ctx context.Context, targetArgs []string, opts Options) (int, error) {
+// Run is the Linux entry point for `janusfs exec [--net=none] -- <command>
+// [args...]`. plan comes from Discover, which the CLI has already run so it
+// could resolve the network mode and show the banner's facts.
+func Run(ctx context.Context, plan Plan, targetArgs []string, opts Options) (int, error) {
 	if len(targetArgs) == 0 {
 		return 125, errors.New("exec: no command specified to execute")
+	}
+	if plan.Src == "" {
+		return 125, errors.New("exec: no source root discovered")
 	}
 
 	if err := nsexec.Supported(); err != nil {
 		return 125, fmt.Errorf("exec: %w", err)
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return 125, fmt.Errorf("exec: failed to get current working directory: %w", err)
-	}
+	cwd := plan.Cwd
+	src := plan.Src
 
-	src, err := discoverSourceRoot(cwd)
-	if err != nil {
-		return 125, err
-	}
+	// Launched from inside another session? Read before the scrub below
+	// removes the marker. Allowed, and said so in the banner.
+	opts.Nested = os.Getenv("JANUSFS_EXEC") == "1"
 
+	// The banner precedes any warning so the warning reads in context ("the
+	// boundary is up; here is the one thing it cannot protect you from").
+	if !opts.Quiet {
+		WriteBanner(os.Stderr, plan, opts)
+	}
 	warnGitStagingHazards(src)
 
 	self, err := os.Executable()
@@ -71,6 +77,9 @@ func Run(ctx context.Context, targetArgs []string, opts Options) (int, error) {
 	nsArgs := []string{"__nsmount", "--src", src}
 	if opts.DenyNetwork {
 		nsArgs = append(nsArgs, "--deny-network")
+	}
+	if opts.Quiet {
+		nsArgs = append(nsArgs, "--quiet")
 	}
 	nsArgs = append(nsArgs, "--")
 	nsArgs = append(nsArgs, targetArgs...)
@@ -144,30 +153,4 @@ func Run(ctx context.Context, targetArgs []string, opts Options) (int, error) {
 		return 1, waitErr
 	}
 	return 0, nil
-}
-
-// discoverSourceRoot walks up from cwd looking for a directory containing
-// .janusfs.yml, and refuses rather than defaulting to cwd when
-// it finds neither — defaulting would provision an unpoliced view over
-// whatever directory happens to be current (a user's entire home directory,
-// in the worst case), which is the opposite of what this tool exists to
-// prevent. This never talks to a daemon: on Linux
-// `janusfs exec` needs no daemon and must work with none running.
-func discoverSourceRoot(cwd string) (string, error) {
-	curr := cwd
-	for {
-		currAbs, err := filepath.Abs(curr)
-		if err != nil {
-			break
-		}
-		if _, err := os.Stat(filepath.Join(currAbs, ".janusfs.yml")); err == nil {
-			return currAbs, nil
-		}
-		parent := filepath.Dir(currAbs)
-		if parent == currAbs {
-			break
-		}
-		curr = parent
-	}
-	return "", fmt.Errorf("exec: no JanusFS policy found for %s — refusing to mount an unpoliced tree\nRemedy: run `janusfs init` here, or in the project root above this directory", cwd)
 }

